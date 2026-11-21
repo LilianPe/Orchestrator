@@ -2,7 +2,7 @@ import { REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import { mdCode } from '../checks/markdown.js';
 import type { JobSpec, ReviewLens, Workflow } from './workflow.js';
 import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMatrix, type Channel } from './authz.js';
-import { beforeInProgress, blockingFix, delegatedJob, hasHumanRounds, hasReviewLoop, humanRoundJob, jobEntering, nextOf, publishesReview, reactionJob, specStep, type ReactionLink } from './chain.js';
+import { beforeInProgress, blockingFix, delegatedJob, hasHumanRounds, hasReviewLoop, humanRoundJob, jobEntering, nextOf, publishesReview, reactionJob, specStep, statusReached, type ReactionLink } from './chain.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput, ConflictCase } from './agent-output.js';
 import { blockFacts } from './block-comment.js';
@@ -18,7 +18,7 @@ import { heldByOther, isOwnMoveEcho, pendingOf, reduce } from './reduce.js';
 import { blockingTotal, isBlocking } from './review.js';
 import { holds, isNoRepo, isUnrouted, repoLabel, unroutedReason } from './routing.js';
 import { guardFindings } from './intake-checks.js';
-import { CHANGES, formatSpec, publishedSpec, REJECT, SPEC_COMMANDS, specCheck, type SpecVersion } from './spec.js';
+import { CHANGES, formatSpec, REJECT, SPEC_COMMANDS, specCheck, type SpecVersion } from './spec.js';
 import { higherRisk, type Blocker, type ClarifyQuestion, type DecidedEvent, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type InputKind, type LogicalState, type MessageKind, type PendingJob, type RunOutcome, type Taint, type TicketState, type VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
@@ -58,6 +58,13 @@ function stop(out: Decision, reason = STOPPED, body = `Stopped. ${RELAUNCH}`, ki
 }
 
 /**
+ * Whether the ticket moves to `to`, the status of the step the chain reaches (ORC-382): not to the status it is in, nor back to the
+ * spec's from a later one (a ticket delegated again In Progress keeps it through its intake and its spec, ORC-422).
+ */
+const movesTo = (ticket: TicketState | undefined, to: LogicalState | undefined): to is LogicalState =>
+  !!to && to !== ticket?.logical && !(to === 'spec' && ticket && ticket.logical !== 'todo');
+
+/**
  * The end of the job's step (`nextOf`): the move to the status of the step it reaches, what the step posts, and the job of
  * that step (ORC-123: `tests` starts `dev`). Without a run that ended (the spec's gate passed, ORC-212), there is nothing to post.
  */
@@ -69,7 +76,7 @@ function success(out: Decision, at: { event: FactoryEvent; ticket: TicketState |
   if (idle) out.trace.push(`review: nothing new at the end of ${job.name} (${idle}), the ticket stays where it is`);
   const stays = !!idle;
   // A fix of the review loop ends in AI Review already (ORC-184): no move to the state the ticket is in.
-  if (!stays && end.move && end.move !== at.ticket?.logical) out.effects.push({ kind: 'move', to: end.move });
+  if (!stays && movesTo(at.ticket, end.move)) out.effects.push({ kind: 'move', to: end.move });
   // `review`: the findings, published by the `review` effect (`reviewEnd`); nothing of the lens's summary goes to Linear.
   if (end.post && end.post !== 'review' && runId) out.effects.push({ kind: 'post_output', style: end.post, runId, ...(output ? { output } : {}) });
   if (idle === NO_PR && at.event.type === 'publish.done' && at.event.payload.empty && !at.ticket?.blocked && !awaitsAgent(at.ticket?.humanInbox ?? [])) return nothingDone(out, at.workflow, job.name);
@@ -176,7 +183,7 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
     // Complete, but « blocked by » a ticket not done (ORC-363): what it would start waits for it.
     const { run: next, post } = nextOf(at.workflow, job);
     if (!next || !p.blockedBy?.length) return success(out, at, job, p.runId);
-    // Its assessment is posted now. What it starts has no status of its own in factory/default (the spec, ORC-395): no move waits.
+    // Its assessment is posted now. The status of what it starts (the spec's, when factory.yml names one, ORC-382) waits for its start.
     if (post && post !== 'review') out.effects.push({ kind: 'post_output', style: post, runId: p.runId, ...(p.output ? { output: p.output } : {}) });
     return waitFor(out, p.blockedBy, pendingOf({ job: next.name, input: next.input }));
   }
@@ -387,7 +394,7 @@ function specEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState |
     out.trace.push(`spec_review: version ${version} approved by ${FANTOME_APPROVER} (level rapide), ${written.spec.assumed!.length} assumption(s)`);
     return success(out, at, job, p.runId);
   }
-  out.effects.push({ kind: 'activity', type: 'response', body: publishedSpec(spec, { version, risk: ticket?.risk ?? undefined }) });
+  out.effects.push({ kind: 'publish_spec', version, spec, ...(ticket?.risk ? { risk: ticket.risk } : {}) });
   out.trace.push(`spec_review: version ${version} published, waiting for a validator`);
   return out;
 }
@@ -878,7 +885,7 @@ function blockersDone(out: Decision, event: FactoryEvent<'blockers.done'>, ticke
   const start = wait && (wait.lift ?? wait.start);
   const job = start && workflow.jobs[start.job];
   if (wait) out.events.push({ type: 'ticket.patched', patch: { waitingOn: null } });
-  const startable = ticket?.logical === 'todo' || ticket?.logical === 'dev';
+  const startable = !!ticket && STARTABLE.has(ticket.logical);
   if (!ticket || !start || !job || !startable || refusesDevWork(ticket, job) || (ticket.blocked && !lifting) || ticket.activeRunId || ticket.verifyingRunId) {
     out.trace.push('blockers.done: the ticket no longer waits, nothing started');
     // The ack of the relaunch said it would resume: the human hears it will not.
@@ -887,6 +894,9 @@ function blockersDone(out: Decision, event: FactoryEvent<'blockers.done'>, ticke
   }
   out.effects.push({ kind: 'activity', type: 'thought', body: `Nothing blocks this ticket any more (${event.payload.blockers.join(', ')} done or no longer linked): starting.` });
   if (lifting) out.events.push({ type: 'ticket.unblocked' });
+  // The status of the step it starts, which the end of intake left to this start (ORC-382).
+  const to = job.step !== undefined ? statusReached(workflow, job.step) : undefined;
+  if (movesTo(ticket, to)) out.effects.push({ kind: 'move', to });
   startAs(out, event, ticket, job, start);
   return out;
 }
@@ -1049,10 +1059,12 @@ function reaction(index: number, job: JobSpec, event: FactoryEvent, ticket: Tick
   return { index, job, debounceMs };
 }
 
-/** The delegation, on a ticket not blocked, in Todo or In Progress (any status at the Rapide level): the chain's entry job. */
+/** The statuses a delegation starts from, the end of a wait too: Todo, Spec and In Progress. */
+const STARTABLE: ReadonlySet<LogicalState> = new Set(['todo', 'spec', 'dev']);
+
+/** The delegation, on a ticket not blocked, in a status it starts from (any status at the Rapide level): the chain's entry job. */
 function onDelegated(event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): Reaction | undefined {
-  const state = ticket?.logical ?? 'todo';
-  if (ticket?.blocked || (!rapide(workflow) && state !== 'todo' && state !== 'dev')) return undefined;
+  if (ticket?.blocked || (!rapide(workflow) && !STARTABLE.has(ticket?.logical ?? 'todo'))) return undefined;
   const job = delegatedJob(workflow);
   return job ? reaction(0, job, event, ticket) : undefined;
 }
@@ -1996,7 +2008,7 @@ function noRepoBlock(out: Decision, state: TicketState | undefined, event: Facto
 export function decide(state: TicketState | undefined, event: FactoryEvent, workflow: Workflow, matrix: AuthzMatrix = DEFAULT_MATRIX): Decision {
   const out = decideEvent(state, event, workflow, matrix);
   // A dead notice or label means the tracker is down: nothing more is written to it (no loop, ORC-150).
-  const trackerDown = event.type === 'effect.failed' && ['activity', 'labels', 'block_comment'].includes(event.payload.kind);
+  const trackerDown = event.type === 'effect.failed' && ['activity', 'publish_spec', 'labels', 'block_comment'].includes(event.payload.kind);
   // An undelegation that lifts a repo choice while the issue's ticket in its repo is blocked leaves the label (ORC-291).
   const keepLabel = event.type === 'ticket.undelegated' && event.payload.keepLabel;
   if (!trackerDown && !keepLabel) blockedLabel(out, state, event);

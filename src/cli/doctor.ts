@@ -8,8 +8,12 @@ import {
 } from '../adapters/forge/github-app-api.js';
 import type { HttpClient } from '../adapters/forge/github-app.js';
 import { resolveGithubApp } from '../config/github-app.js';
-import { GITHUB_APP_SECRETS, loadSealedFactoryYml, serverSecretLines, serverSecretReport, type SecretReport } from '../config/server-secrets.js';
-import { effectiveInstance, samePath, validatorWarnings } from '../config/instance.js';
+import { GITHUB_APP_SECRETS, LINEAR_SECRETS, loadSealedFactoryYml, serverSecretLines, serverSecretReport, type SecretReport } from '../config/server-secrets.js';
+import { effectiveInstance, samePath, validatorWarnings, type ProjectConfig } from '../config/instance.js';
+import type { Workflow } from '../core/workflow.js';
+import { isFantome } from '../presets/fantome.js';
+import { missingStatusWarning, statesOf } from '../presets/workflow.js';
+import { cliLinearTracker } from './linear.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
 import { browserImage, containerCli, visualProofLine } from '../app/sandbox-wiring.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning, testCommandWarnings, type RepoConfig } from '../config/repo-config.js';
@@ -739,6 +743,39 @@ export interface DoctorCommandOptions {
   http?: HttpClient;
   exec?: Exec;
   now?: () => number;
+  /** The statuses of a Linear team (ORC-382); the daemon's Linear connection by default (`cliLinearTracker`). */
+  teamStatuses?: (teamKey: string) => Promise<string[]>;
+}
+
+/**
+ * The statuses factory.yml names that the Linear team of each project lacks (ORC-382): a warning, never the verdict. The daemon
+ * cannot refuse them at load, before it reads the team: `doctor` reads it, through the daemon's Linear connection.
+ */
+async function statusWarnings(projects: readonly Pick<ProjectConfig, 'id' | 'linearTeamKey' | 'preset'>[], o: { home: string; env: NodeJS.ProcessEnv; states: Workflow['states']; read?: ((teamKey: string) => Promise<string[]>) | undefined }): Promise<string[]> {
+  const mine = projects.filter((p) => !isFantome(p));
+  if (!mine.length) return [];
+  let teamStatuses = o.read;
+  if (!teamStatuses) {
+    let tracker;
+    try {
+      // Linear's secrets read apart from the GitHub App's: one that cannot be read leaves the other checks as they were.
+      tracker = cliLinearTracker(o.home, (await loadSealedFactoryYml(o.home, o.env, { only: LINEAR_SECRETS })).yml);
+    } catch (error) {
+      return [`Linear statuses not checked: ${errorMessage(error)}`];
+    }
+    if (typeof tracker === 'string') return [`Linear statuses not checked: ${tracker}`];
+    teamStatuses = (teamKey) => tracker.teamStatuses(teamKey);
+  }
+  const lines: string[] = [];
+  for (const p of mine) {
+    try {
+      const warning = missingStatusWarning({ id: p.id, teamKey: p.linearTeamKey }, o.states, await teamStatuses(p.linearTeamKey));
+      if (warning) lines.push(warning);
+    } catch (error) {
+      lines.push(`Linear statuses of ${p.id} not checked: ${errorMessage(error)}`);
+    }
+  }
+  return lines;
 }
 
 /**
@@ -762,16 +799,24 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   if (!options.json && serverSecrets) for (const line of serverSecretLines(serverSecrets)) out(line);
   let githubApp;
   let validators: string[];
+  let projects;
+  let states;
   try {
-    const instance = effectiveInstance(options.home, (await loadSealedFactoryYml(options.home, env, { only: GITHUB_APP_SECRETS })).yml);
+    const { yml } = await loadSealedFactoryYml(options.home, env, { only: GITHUB_APP_SECRETS });
+    const instance = effectiveInstance(options.home, yml);
+    projects = instance.projects.filter((p) => samePath(p.repoPath, options.repoPath));
     // The project of this repository whose spec gate no validator can pass (ORC-421): a warning, never the verdict.
-    validators = validatorWarnings(instance.projects.filter((p) => samePath(p.repoPath, options.repoPath)));
+    validators = validatorWarnings(projects);
     if (!options.json) for (const line of validators) out(line);
+    // factory.yml's statuses the daemon would refuse at load (ORC-382): refused here too.
+    states = statesOf(yml?.statuses);
     githubApp = resolveGithubApp(instance, env);
   } catch (error) {
     out(errorMessage(error));
     return 1;
   }
+  // Its Linear team's statuses against factory.yml's (ORC-382): a warning, never the verdict.
+  if (!options.json) for (const line of await statusWarnings(projects, { home: options.home, env, states, read: options.teamStatuses })) out(line);
   if (!githubApp) {
     out(
       'GitHub App not configured: `factory doctor` needs github.appId and github.privateKey (or GH_APP_ID and GH_APP_KEY) ' +

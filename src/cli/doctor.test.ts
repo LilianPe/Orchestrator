@@ -757,6 +757,46 @@ jobs:
     });
   });
 
+  describe("the statuses factory.yml names that the Linear team lacks (ORC-382)", () => {
+    const homeWith = (yml = '') => {
+      const home = tempHome();
+      writeFileSync(join(home, 'config.yaml'), 'projects:\n  - id: app\n    repoPath: /repo\n    linearTeamKey: APP\n');
+      if (yml) writeFileSync(join(home, 'factory.yml'), yml);
+      return home;
+    };
+    const ORC_170 = ['Todo', 'In Progress', 'AI Review', 'Human Review', 'Done', 'Canceled'];
+    const cli = async (home: string, team: string[] | Error = ORC_170) => {
+      const lines: string[] = [];
+      await runDoctorCommand({ repoPath: '/repo', home, env: {}, out: (line) => lines.push(line), teamStatuses: async () => (team instanceof Error ? Promise.reject(team) : team) });
+      return lines.filter((l) => /status/i.test(l));
+    };
+
+    it('criterion 4: warns of a status the team does not have, before it needs the GitHub App', async () => {
+      expect(await cli(homeWith('statuses:\n  spec_draft: Spec\n'))).toEqual([
+        'Warning: app: the Linear team APP has no status « Spec », which the factory moves tickets to (ORC-170\'s, or as `statuses` in factory.yml names them): a move to it fails. Connect Linear again to create it, or name a status the team has.',
+      ]);
+    });
+
+    it('refuses statuses the daemon would refuse at load, exit 1', async () => {
+      const lines: string[] = [];
+      const code = await runDoctorCommand({ repoPath: '/repo', home: homeWith('statuses:\n  build: Todo\n'), env: {}, out: (line) => lines.push(line), teamStatuses: async () => ORC_170 });
+      expect(code).toBe(1);
+      expect(lines).toContainEqual(expect.stringMatching(/« Todo » would name both todo and dev/));
+    });
+
+    it('says nothing when the team has every status, and that it could not read them otherwise', async () => {
+      expect(await cli(homeWith())).toEqual([]);
+      expect(await cli(homeWith('statuses:\n  spec_draft: Spec\n'), [...ORC_170, 'Spec'])).toEqual([]);
+      expect(await cli(homeWith(), new Error('Linear answered 401'))).toEqual(['Linear statuses of app not checked: Linear answered 401']);
+    });
+
+    it('without a Linear connection, says the statuses are not checked', async () => {
+      const lines: string[] = [];
+      await runDoctorCommand({ repoPath: '/repo', home: homeWith(), env: {}, out: (line) => lines.push(line) });
+      expect(lines).toContain('Linear statuses not checked: Linear not connected: run `factory up`, then connect Linear.');
+    });
+  });
+
   describe('a project whose spec gate no validator can pass (ORC-421)', () => {
     const homeWith = ({ validators, preset }: { validators?: string[]; preset?: string } = {}) => {
       const home = tempHome();

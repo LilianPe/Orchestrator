@@ -3,7 +3,7 @@ import { reduce } from '../../src/core/reduce.js';
 import type { EventType, FactoryEvent, LogicalState } from '../../src/core/types.js';
 import type { JobSpec, Limits, PickupCheck, Workflow } from '../../src/core/workflow.js';
 import { compilePreset, type Preset } from '../../src/presets/preset.js';
-import { defaultWorkflow, preset, presetWorkflow, workflowViolations } from '../../src/presets/workflow.js';
+import { defaultWorkflow, preset, presetWorkflow, workflowViolations, type StepSettings } from '../../src/presets/workflow.js';
 import type { ExportedJournal } from '../../src/runtime/replay.js';
 import type { DecisionPlan, DecisionRequest, Store } from '../../src/store/types.js';
 
@@ -135,4 +135,4 @@ const withoutAiReview: Preset = compilePreset({
 }).preset;
 
 /** The workflow of `withoutAiReview`, its chain starting at `entry`: `build` by default, as most scenarios start it (`loadTestWorkflow`). */
-export const workflowWithoutAiReview = (entry = 'build'): Workflow => presetWorkflow(withoutAiReview, {}, entry);
+export const workflowWithoutAiReview = (entry = 'build', settings: StepSettings = {}): Workflow => presetWorkflow(withoutAiReview, settings, entry);

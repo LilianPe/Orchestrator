@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { fakeSecretKind } from '../adapters/secrets/fake.js';
 import { SECRET_SOURCE_KINDS } from '../adapters/secrets/registry.js';
-import { activeClaudeToken, claudeAccountReader, claudeToken, disabledControls, FactoryYmlError, loadFactoryLimits, loadFactoryYml, parseFactoryYml, readCapsOf, stepSettings, ticketCapOf } from './factory-yml.js';
+import { activeClaudeToken, claudeAccountReader, claudeToken, disabledControls, FactoryYmlError, loadFactoryLimits, loadFactoryYml, parseFactoryYml, readCapsOf, SPEC_PUBLICATION, specPublicationOf, stepSettings, ticketCapOf } from './factory-yml.js';
 import { READ_CAPS } from '../network/reads.js';
 
 const PEM = '-----BEGIN RSA PRIVATE KEY-----\\nabc\\n-----END RSA PRIVATE KEY-----';
@@ -167,6 +167,20 @@ describe('factory.yml (ORC-209, part B)', () => {
     expect(parseFactoryYml('acknowledge: comment', ENV).acknowledge).toBe('comment');
     expect(parseFactoryYml('concurrency: 1', ENV).acknowledge).toBeUndefined();
     expect(violations('acknowledge: emoji')).toEqual(['acknowledge: `comment` or `reaction` expected']);
+  });
+
+  it('reads the Linear status of each step and where the spec is published, SPEC_PUBLICATION for what is unset (ORC-382)', () => {
+    expect(parseFactoryYml('statuses:\n  spec_draft: Spec\n  build: In Progress', ENV).statuses).toEqual({ spec_draft: 'Spec', build: 'In Progress' });
+    expect(stepSettings(parseFactoryYml('statuses:\n  spec_draft: Spec', ENV))).toMatchObject({ statuses: { spec_draft: 'Spec' } });
+    expect(violations('statuses:\n  spec_draft: ""')).toEqual(['statuses: `step: Linear status` expected']);
+    expect(parseFactoryYml('spec:\n  publish: doc', ENV).spec).toEqual({ mode: 'doc' });
+    expect(specPublicationOf(parseFactoryYml('spec:\n  threshold: 2000', ENV))).toEqual({ mode: 'comment+doc', threshold: 2000 });
+    expect(specPublicationOf(undefined)).toEqual(SPEC_PUBLICATION);
+    expect(violations('spec:\n  publish: page\n  threshold: 0\n  size: 1')).toEqual([
+      'spec.size: unknown key',
+      'spec.publish: `comment`, `comment+doc` or `doc` expected',
+      'spec.threshold: a positive integer is expected: characters',
+    ]);
   });
 
   it('hands the effort and the budgets to the agent steps, nothing without them (ORC-136)', () => {

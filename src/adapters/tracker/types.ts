@@ -107,6 +107,13 @@ export interface Tracker {
   /** The id of the ticket's comment written for `effectId`, if there is one. */
   findComment(identifier: string, effectId: string): Promise<string | undefined>;
   /**
+   * A document linked to the ticket (ORC-382), titled `title`: its link. With `effectId`, written under an id derived from it, for
+   * `findDocument` to find it. Undefined: this tracker keeps no document beside a ticket, and what it would hold goes in a comment.
+   */
+  document(identifier: string, title: string, body: string, effectId?: string): Promise<string | undefined>;
+  /** The link of the ticket's document written for `effectId`, if there is one. */
+  findDocument(identifier: string, effectId: string): Promise<string | undefined>;
+  /**
    * Puts `emoji`, by its name (`eyes`), on the comment `commentId` (ORC-380); with `effectId`, under an id derived from it, for `findReaction` to
    * find it. Rejects when the tracker refuses the reaction on that comment.
    */

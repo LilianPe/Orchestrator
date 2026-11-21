@@ -96,15 +96,43 @@ export function formatSpec(spec: Spec): string {
   ].join('\n\n');
 }
 
-const head = (risk: string, count: number, version: number) =>
-  `Spec published (risk: ${risk}). ${count} acceptance ${count === 1 ? 'criterion' : 'criteria'} → tests. Version ${version}, waiting for review.`;
+const criteria = (count: number) => `${count} acceptance ${count === 1 ? 'criterion' : 'criteria'}`;
+const head = (risk: string, count: number, version: number) => `Spec published (risk: ${risk}). ${criteria(count)} → tests. Version ${version}, waiting for review.`;
 const COMMANDS = `Reply \`${APPROVE}\` to approve this version, \`${CHANGES} <comment>\` to ask for a new one, or \`${REJECT}\`. Approval is reserved for the validators designated by the project, never the run's initiator.`;
 const NOT_ASSESSED = 'not assessed';
 
-/** The message that publishes a version of the spec in the ticket's session (ORC-212): its head, the spec, the commands. */
-export function publishedSpec(spec: Spec, at: { version: number; risk?: string | undefined }): string {
-  return [head(at.risk ?? NOT_ASSESSED, spec.criteria?.length ?? 0, at.version), formatSpec(spec), COMMANDS].join('\n\n');
+/** A version of the spec as it is published (ORC-382), with the risk of its ticket. */
+export interface PublishedVersion {
+  version: number;
+  risk?: string | undefined;
 }
 
-/** What the published message adds around the spec at its longest, kept out of the spec's own cap. */
-export const SPEC_FRAME = head(NOT_ASSESSED, OUTPUT_LIMITS.items, 99_999).length + COMMANDS.length + 4;
+/** The title of the document a version of the spec goes in (ORC-382), linked to its ticket. */
+export const specTitle = (ticketId: string, version: number): string => `${ticketId}: spec, version ${version}`;
+
+const commentHead = (version: number) => `**Spec, version ${version}**`;
+/** The commands are read in the factory's session alone (ORC-212): a reply under the comment is not one. */
+const REPLY_IN_SESSION = `To approve it, ask for changes or reject it, reply \`${APPROVE}\`, \`${CHANGES} <comment>\` or \`${REJECT}\` in the factory's session of this ticket, not under this comment.`;
+
+/** The comment that publishes a version of the spec in the ticket (ORC-382): the whole spec, and where to reply. */
+export function specComment(spec: Spec, at: PublishedVersion): string {
+  return [commentHead(at.version), formatSpec(spec), REPLY_IN_SESSION].join('\n\n');
+}
+
+/** The comment of a version of the spec published in a document (ORC-382): its goal, its criteria count, and the document's link. */
+export function specSummary(spec: Spec, at: PublishedVersion, doc: { title: string; url: string }): string {
+  const link = `${criteria(spec.criteria?.length ?? 0)}. The whole spec: [${doc.title}](${doc.url})`;
+  return [commentHead(at.version), ...(spec.goal ? [spec.goal] : []), link, REPLY_IN_SESSION].join('\n\n');
+}
+
+/**
+ * The message of the ticket's session that publishes a version of the spec (ORC-212): its head, where to read it (the ticket's
+ * comment, or the document `documentUrl`, ORC-382), the commands, replied in the session.
+ */
+export function publishedSpec(spec: Spec, at: PublishedVersion, documentUrl?: string): string {
+  const where = documentUrl ? `Read it in its document: ${documentUrl}` : `Read it in this ticket's comment « ${commentHead(at.version)} ».`;
+  return [head(at.risk ?? NOT_ASSESSED, spec.criteria?.length ?? 0, at.version), where, COMMANDS].join('\n\n');
+}
+
+/** What the comment adds around the spec at its longest (ORC-382), kept out of the spec's own cap: the spec fits one comment. */
+export const SPEC_FRAME = commentHead(99_999).length + REPLY_IN_SESSION.length + 4;
