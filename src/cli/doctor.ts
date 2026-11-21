@@ -10,10 +10,12 @@ import { UnreadableAnswerError, type HttpClient } from '../adapters/forge/github
 import { resolveGithubApp } from '../config/github-app.js';
 import { GITHUB_APP_OPTIONAL_PERMISSIONS, GITHUB_APP_PERMISSIONS } from './init.js';
 import { GITHUB_APP_SECRETS, LINEAR_SECRETS, loadSealedFactoryYml, serverSecretLines, serverSecretReport, type SecretReport } from '../config/server-secrets.js';
-import { effectiveInstance, relayWarnings, samePath, validatorWarnings, type ProjectConfig } from '../config/instance.js';
+import { effectiveInstance, samePath, validatorWarnings, type ProjectConfig } from '../config/instance.js';
 import type { Workflow } from '../core/workflow.js';
 import { isFantome } from '../presets/fantome.js';
-import { missingStatusWarning, statesOf } from '../presets/workflow.js';
+import { defaultWorkflow, missingStatusWarning } from '../presets/workflow.js';
+import { claudeAccountReader, stepSettings } from '../config/factory-yml.js';
+import { startRefusals } from '../config/start-refusals.js';
 import { cliLinearTracker } from './linear.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
 import { browserImage, containerCli, visualProofLine } from '../app/sandbox-wiring.js';
@@ -969,18 +971,21 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   let projects;
   let states;
   try {
-    const { yml } = await loadSealedFactoryYml(options.home, env, { only: GITHUB_APP_SECRETS });
+    const { yml, sealed } = await loadSealedFactoryYml(options.home, env, { only: GITHUB_APP_SECRETS });
+    // Each refusal of the daemon's start, in its order and by the function it calls, with its message (ORC-448): the exposed
+    // host's sign-in and secrets_key, the Smee relay (ORC-446), whose warning is said here.
     const instance = effectiveInstance(options.home, yml);
-    // The Smee relay as the daemon's start checks it (ORC-446): refused, as `factory up` refuses it, or a warning.
-    relay = relayWarnings(instance);
+    relay = startRefusals(instance, yml, env);
     if (!options.json) for (const line of relay) out(line);
     projects = instance.projects.filter((p) => samePath(p.repoPath, options.repoPath));
     // The project of this repository whose spec gate no validator can pass (ORC-421): a warning, never the verdict.
     validators = validatorWarnings(projects);
     if (!options.json) for (const line of validators) out(line);
-    // factory.yml's statuses the daemon would refuse at load (ORC-382): refused here too.
-    states = statesOf(yml?.statuses);
     githubApp = resolveGithubApp(instance, env);
+    // factory.yml's step settings and statuses (ORC-382) the daemon refuses at load.
+    states = defaultWorkflow(stepSettings(yml)).states;
+    // The Claude token (ORC-337): one of a source other than env, unread here, leaves the daemon's own CLAUDE_CODE_OAUTH_TOKEN checked.
+    claudeAccountReader(options.home, env, undefined, sealed)();
   } catch (error) {
     out(errorMessage(error));
     return 1;
