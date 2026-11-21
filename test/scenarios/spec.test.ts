@@ -118,7 +118,7 @@ describe('the spec in a comment of the ticket (ORC-382)', () => {
     const h = await delegated(SPEC, { ...SPEC, out_of_scope: ['XLSX', 'Archived audits'] });
     expect(specComments(h)).toEqual([expect.stringMatching(/^\*\*Spec, version 1\*\*[\s\S]*1\. Given 2 audits, when I click CSV[\s\S]*\*\*Assumed without verification\*\*\n- The browser saves/)]);
     // The session, where the commands are replied, says where to read it.
-    expect(said(h)).toContainEqual(expect.stringMatching(/^Spec published \(risk: low\)\. 1 acceptance criterion → tests\. Version 1, waiting for review\.\n\nRead it in the comment of this ticket[\s\S]*`\/approve`/));
+    expect(said(h)).toContainEqual(expect.stringMatching(/^Spec published \(risk: low\)\. 1 acceptance criterion → tests\. Version 1, waiting for review\.\n\nRead it in this ticket's comment « \*\*Spec, version 1\*\* »\.[\s\S]*`\/approve`/));
     expect(said(h).some((b) => b.includes('**Acceptance criteria**'))).toBe(false);
 
     await command(h, '/changes', VALIDATOR, 'Exclude archived audits.');

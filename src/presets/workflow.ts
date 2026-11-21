@@ -99,7 +99,7 @@ export function missingStatusWarning(p: { id: string; teamKey: string }, states:
   const missing = Object.values(states).filter((name) => !team.includes(name));
   if (!missing.length) return undefined;
   const names = missing.map((n) => `« ${n} »`).join(', ');
-  return `Warning: ${p.id}: the Linear team ${p.teamKey} has no status ${names} (statuses in factory.yml): a move to it fails. Connect Linear again to create it, or name a status the team has.`;
+  return `Warning: ${p.id}: the Linear team ${p.teamKey} has no status ${names}, which the factory moves tickets to (ORC-170's, or as \`statuses\` in factory.yml names them): a move to it fails. Connect Linear again to create it, or name a status the team has.`;
 }
 
 /**

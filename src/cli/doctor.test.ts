@@ -773,8 +773,15 @@ jobs:
 
     it('criterion 4: warns of a status the team does not have, before it needs the GitHub App', async () => {
       expect(await cli(homeWith('statuses:\n  spec_draft: Spec\n'))).toEqual([
-        'Warning: app: the Linear team APP has no status « Spec » (statuses in factory.yml): a move to it fails. Connect Linear again to create it, or name a status the team has.',
+        'Warning: app: the Linear team APP has no status « Spec », which the factory moves tickets to (ORC-170\'s, or as `statuses` in factory.yml names them): a move to it fails. Connect Linear again to create it, or name a status the team has.',
       ]);
+    });
+
+    it('refuses statuses the daemon would refuse at load, exit 1', async () => {
+      const lines: string[] = [];
+      const code = await runDoctorCommand({ repoPath: '/repo', home: homeWith('statuses:\n  build: Todo\n'), env: {}, out: (line) => lines.push(line), teamStatuses: async () => ORC_170 });
+      expect(code).toBe(1);
+      expect(lines).toContainEqual(expect.stringMatching(/« Todo » would name both todo and dev/));
     });
 
     it('says nothing when the team has every status, and that it could not read them otherwise', async () => {

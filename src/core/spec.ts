@@ -130,7 +130,7 @@ export function specSummary(spec: Spec, at: PublishedVersion, doc: { title: stri
  * comment, or the document `documentUrl`, ORC-382), the commands, replied in the session.
  */
 export function publishedSpec(spec: Spec, at: PublishedVersion, documentUrl?: string): string {
-  const where = documentUrl ? `Read it in its document: ${documentUrl}` : `Read it in the comment of this ticket that starts with « Spec, version ${at.version} ».`;
+  const where = documentUrl ? `Read it in its document: ${documentUrl}` : `Read it in this ticket's comment « ${commentHead(at.version)} ».`;
   return [head(at.risk ?? NOT_ASSESSED, spec.criteria?.length ?? 0, at.version), where, COMMANDS].join('\n\n');
 }
 

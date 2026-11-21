@@ -2,7 +2,7 @@ import { REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import { mdCode } from '../checks/markdown.js';
 import type { JobSpec, ReviewLens, Workflow } from './workflow.js';
 import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMatrix, type Channel } from './authz.js';
-import { beforeInProgress, blockingFix, delegatedJob, hasHumanRounds, hasReviewLoop, humanRoundJob, jobEntering, nextOf, publishesReview, reactionJob, specStep, type ReactionLink } from './chain.js';
+import { beforeInProgress, blockingFix, delegatedJob, hasHumanRounds, hasReviewLoop, humanRoundJob, jobEntering, nextOf, publishesReview, reactionJob, specStep, stepStatus, type ReactionLink } from './chain.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput, ConflictCase } from './agent-output.js';
 import { blockFacts } from './block-comment.js';
@@ -58,6 +58,13 @@ function stop(out: Decision, reason = STOPPED, body = `Stopped. ${RELAUNCH}`, ki
 }
 
 /**
+ * Whether the ticket moves to `to`, the status of the step the chain reaches (ORC-382): not to the status it is in, nor back to the
+ * spec's from a later one (a ticket delegated again In Progress keeps it through its intake and its spec, ORC-422).
+ */
+const movesTo = (ticket: TicketState | undefined, to: LogicalState | undefined): to is LogicalState =>
+  !!to && to !== ticket?.logical && !(to === 'spec' && ticket && ticket.logical !== 'todo');
+
+/**
  * The end of the job's step (`nextOf`): the move to the status of the step it reaches, what the step posts, and the job of
  * that step (ORC-123: `tests` starts `dev`). Without a run that ended (the spec's gate passed, ORC-212), there is nothing to post.
  */
@@ -69,7 +76,7 @@ function success(out: Decision, at: { event: FactoryEvent; ticket: TicketState |
   if (idle) out.trace.push(`review: nothing new at the end of ${job.name} (${idle}), the ticket stays where it is`);
   const stays = !!idle;
   // A fix of the review loop ends in AI Review already (ORC-184): no move to the state the ticket is in.
-  if (!stays && end.move && end.move !== at.ticket?.logical) out.effects.push({ kind: 'move', to: end.move });
+  if (!stays && movesTo(at.ticket, end.move)) out.effects.push({ kind: 'move', to: end.move });
   // `review`: the findings, published by the `review` effect (`reviewEnd`); nothing of the lens's summary goes to Linear.
   if (end.post && end.post !== 'review' && runId) out.effects.push({ kind: 'post_output', style: end.post, runId, ...(output ? { output } : {}) });
   if (idle === NO_PR && at.event.type === 'publish.done' && at.event.payload.empty && !at.ticket?.blocked && !awaitsAgent(at.ticket?.humanInbox ?? [])) return nothingDone(out, at.workflow, job.name);
@@ -176,7 +183,7 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
     // Complete, but « blocked by » a ticket not done (ORC-363): what it would start waits for it.
     const { run: next, post } = nextOf(at.workflow, job);
     if (!next || !p.blockedBy?.length) return success(out, at, job, p.runId);
-    // Its assessment is posted now. What it starts has no status of its own in factory/default (the spec, ORC-395): no move waits.
+    // Its assessment is posted now. The status of what it starts (the spec's, when factory.yml names one, ORC-382) waits for its start.
     if (post && post !== 'review') out.effects.push({ kind: 'post_output', style: post, runId: p.runId, ...(p.output ? { output: p.output } : {}) });
     return waitFor(out, p.blockedBy, pendingOf({ job: next.name, input: next.input }));
   }
@@ -876,6 +883,9 @@ function blockersDone(out: Decision, event: FactoryEvent<'blockers.done'>, ticke
     return out;
   }
   out.effects.push({ kind: 'activity', type: 'thought', body: `Nothing blocks this ticket any more (${event.payload.blockers.join(', ')} done or no longer linked): starting.` });
+  // The status of the step it starts, which the end of intake left to this start (ORC-382).
+  const to = job.step !== undefined && job.step !== workflow.entry ? stepStatus(workflow, job.step) : undefined;
+  if (movesTo(ticket, to)) out.effects.push({ kind: 'move', to });
   startAs(out, event, ticket, job, wait.start);
   return out;
 }
@@ -1972,7 +1982,7 @@ function noRepoBlock(out: Decision, state: TicketState | undefined, event: Facto
 export function decide(state: TicketState | undefined, event: FactoryEvent, workflow: Workflow, matrix: AuthzMatrix = DEFAULT_MATRIX): Decision {
   const out = decideEvent(state, event, workflow, matrix);
   // A dead notice or label means the tracker is down: nothing more is written to it (no loop, ORC-150).
-  const trackerDown = event.type === 'effect.failed' && ['activity', 'labels', 'block_comment'].includes(event.payload.kind);
+  const trackerDown = event.type === 'effect.failed' && ['activity', 'publish_spec', 'labels', 'block_comment'].includes(event.payload.kind);
   // An undelegation that lifts a repo choice while the issue's ticket in its repo is blocked leaves the label (ORC-291).
   const keepLabel = event.type === 'ticket.undelegated' && event.payload.keepLabel;
   if (!trackerDown && !keepLabel) blockedLabel(out, state, event);
