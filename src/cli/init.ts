@@ -178,6 +178,8 @@ export const NO_PUBLIC_URL = [
 
 /** The App's repository permissions, those of docs/github-app-manifest.json (checked by init.test.ts), by their name on GitHub's form. */
 export const GITHUB_APP_PERMISSIONS = { contents: 'write', pull_requests: 'write', checks: 'write', statuses: 'read', actions: 'read', metadata: 'read' };
+/** Not in the manifest, added by hand when `dashboard` in factory.yml names an `org` or a `team` (ORC-399, docs/github.md): GitHub answers a membership only then. */
+export const GITHUB_APP_OPTIONAL_PERMISSIONS = { members: 'read' };
 const PERMISSION_LABELS: Record<keyof typeof GITHUB_APP_PERMISSIONS, string> = {
   contents: 'Contents',
   pull_requests: 'Pull requests',
