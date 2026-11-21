@@ -1052,7 +1052,7 @@ describe("the default branch's protection (ORC-208, criterion 2)", () => {
   });
 });
 
-describe("the GitHub App's installation permissions (ORC-439, ORC-441)", () => {
+describe("the GitHub App's installation permissions (ORC-439, ORC-441, ORC-443)", () => {
   it.each([
     ['administration', 'write', 'Administration'],
     ['administration', 'read', 'Administration'],
@@ -1070,12 +1070,13 @@ describe("the GitHub App's installation permissions (ORC-439, ORC-441)", () => {
     expect(json).toMatchObject({ accepted: false, installation: { verdict: 'refused', permissions: { [permission]: level } } });
   });
 
-  it('accepts an installation holding what the manifest asks for, and no more', async () => {
+  it('accepts an installation holding what the manifest asks for, and no more, without a warning', async () => {
     const result = await doctor([], []);
     expect(result.code).toBe(0);
-    expect(result.text).toContain('GitHub App installation: accepted — installed without the Administration or Workflows permission');
+    expect(result.lines.some((l) => l.startsWith('  Warning: the App is installed'))).toBe(false);
+    expect(result.text).toContain('GitHub App installation: accepted — installed without the Administration, Workflows or Actions (write) permission');
     const json = JSON.parse((await doctor([], [], { json: true })).text) as { installation: object };
-    expect(json.installation).toEqual({ permissions: MANIFEST_PERMISSIONS, verdict: 'accepted', reasons: ['installed without the Administration or Workflows permission'] });
+    expect(json.installation).toEqual({ permissions: MANIFEST_PERMISSIONS, verdict: 'accepted', reasons: ['installed without the Administration, Workflows or Actions (write) permission'] });
   });
 
   it('warns, never refuses, when the installation cannot be read (network, authentication), and tells it unchecked', async () => {
@@ -1086,7 +1087,7 @@ describe("the GitHub App's installation permissions (ORC-439, ORC-441)", () => {
     expect(warning).toContain('getaddrinfo ENOTFOUND api.github.com');
     expect(warning).toContain('Administration');
     expect(result.text).toContain('Result: accepted');
-    expect(result.text).not.toContain('installed without the Administration or Workflows permission');
+    expect(result.text).not.toContain('installed without the Administration, Workflows or Actions (write) permission');
     const json = JSON.parse((await doctor([], [], { json: true, fake: { failInstallation: 'network' } })).text) as { accepted: boolean; installation: { verdict: string; warnings: string[] } };
     expect(json).toMatchObject({ accepted: true, installation: { verdict: 'unchecked', warnings: [warning?.trim()] } });
   });
@@ -1119,22 +1120,66 @@ describe("the GitHub App's installation permissions (ORC-439, ORC-441)", () => {
     expect(result.text).toContain('Result: refused — the GitHub App is installed with the Administration and Workflows permissions');
   });
 
-  it('accepts an installation holding actions: write with a warning, and the result line points to it (ORC-441)', async () => {
+  // With Actions at write, the daemon could dispatch a workflow with secrets on a branch it pushed (ORC-443).
+  it('refuses an installation holding actions: write, and says to set it back to read-only (ORC-443)', async () => {
     const permissions = { ...MANIFEST_PERMISSIONS, actions: 'write' };
+    const result = await doctor([], [], { fake: { permissions } });
+    expect(result.code).toBe(1);
+    const line = result.lines.find((l) => l.startsWith('GitHub App installation: refused'));
+    expect(line).toContain('actions (write)');
+    for (const named of ['dispatch', 'secrets', 'Repository permissions → Actions', 'Read-only', 'Installed GitHub Apps']) expect(line).toContain(named);
+    expect(line).not.toContain('No access');
+    expect(result.text).toContain('Result: refused — the GitHub App is installed with the Actions (write) permission');
+    const json = JSON.parse((await doctor([], [], { json: true, fake: { permissions } })).text) as { accepted: boolean; installation: object };
+    expect(json).toMatchObject({ accepted: false, installation: { verdict: 'refused', permissions: { actions: 'write' } } });
+    // Refused, not also warned.
+    expect(json.installation).not.toHaveProperty('warnings');
+  });
+
+  it('refuses Actions and Workflows together, and names both', async () => {
+    const result = await doctor([], [], { fake: { permissions: { ...MANIFEST_PERMISSIONS, actions: 'write', workflows: 'write' } } });
+    expect(result.code).toBe(1);
+    expect(result.text).toContain('Result: refused — the GitHub App is installed with the Workflows and Actions (write) permissions');
+  });
+
+  it.each([
+    ['secrets', 'write'],
+    ['environments', 'write'],
+    ['repository_hooks', 'read'],
+    // Above the manifest's level: as much in excess as a permission it leaves out.
+    ['statuses', 'write'],
+  ])('accepts an installation holding %s (%s), which the manifest does not ask for, with a warning naming it (ORC-443)', async (permission, level) => {
+    const permissions = { ...MANIFEST_PERMISSIONS, [permission]: level };
     const result = await doctor([], [], { fake: { permissions } });
     expect(result.code).toBe(0);
     expect(result.text).toContain('GitHub App installation: accepted');
-    const warning = result.lines.find((l) => l.startsWith('  Warning: the App is installed with actions (write)'));
-    for (const named of ['dispatch', 'secrets', 'Repository permissions → Actions', 'Read-only', 'Installed GitHub Apps']) expect(warning).toContain(named);
+    const warning = result.lines.find((l) => l.startsWith('  Warning: the App is installed with permissions the manifest does not ask for'));
+    expect(warning).toContain(`${permission} (${level})`);
+    for (const named of ['Permissions & events', 'docs/github-app-manifest.json', 'Installed GitHub Apps']) expect(warning).toContain(named);
     expect(result.text).toMatch(/Result: accepted — .*the one under the GitHub App installation/);
     const json = JSON.parse((await doctor([], [], { json: true, fake: { permissions } })).text) as { accepted: boolean };
     expect(json).toMatchObject({ accepted: true, installation: { verdict: 'accepted', warnings: [warning?.trim()] } });
   });
 
-  it('keeps the actions: write warning beside a refusal', async () => {
-    const result = await doctor([], [], { fake: { permissions: { ...MANIFEST_PERMISSIONS, actions: 'write', workflows: 'write' } } });
+  it('names every permission in excess in one warning', async () => {
+    const result = await doctor([], [], { fake: { permissions: { ...MANIFEST_PERMISSIONS, secrets: 'write', environments: 'read' } } });
+    const warnings = result.lines.filter((l) => l.startsWith('  Warning: the App is installed with permissions'));
+    expect(warnings).toHaveLength(1);
+    for (const named of ['secrets (write)', 'environments (read)']) expect(warnings[0]).toContain(named);
+  });
+
+  it('does not warn about a permission below the manifest, nor one the manifest asks at its level', async () => {
+    const result = await doctor([], [], { fake: { permissions: { ...MANIFEST_PERMISSIONS, contents: 'read' } } });
+    expect(result.code).toBe(0);
+    expect(result.lines.some((l) => l.startsWith('  Warning: the App is installed'))).toBe(false);
+  });
+
+  it('keeps the warning of a permission in excess beside a refusal, without naming the refused one in it', async () => {
+    const result = await doctor([], [], { fake: { permissions: { ...MANIFEST_PERMISSIONS, secrets: 'write', workflows: 'write' } } });
     expect(result.code).toBe(1);
-    expect(result.lines.some((l) => l.startsWith('  Warning: the App is installed with actions (write)'))).toBe(true);
+    const warning = result.lines.find((l) => l.startsWith('  Warning: the App is installed with permissions the manifest does not ask for'));
+    expect(warning).toContain('secrets (write)');
+    expect(warning).not.toContain('workflows');
   });
 
   it('tells the installation beside the other verdicts when the workflows cannot be read', async () => {
