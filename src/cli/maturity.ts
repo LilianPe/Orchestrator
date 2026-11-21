@@ -53,16 +53,19 @@ interface Manifests {
   problems: { file: string; problem?: string }[];
 }
 
-/** A manifest that exists but cannot be read (a directory, no read permission) is a problem of the cards, never a failure of init (ORC-454). */
-function readManifest(repo: string, file: 'package.json' | 'pyproject.toml'): { file: string; names: string[]; problem?: string } {
-  let text: string;
+/** The text of a file the cards read, or why it cannot be read (a directory, no read permission): a problem of the cards, never a failure of init (ORC-454). */
+function readText(path: string): { text: string } | { problem: string } {
   try {
-    text = readFileSync(join(repo, file), 'utf8');
+    return { text: readFileSync(path, 'utf8') };
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    return { file, names: [], problem: `cannot be read: ${code ?? (err instanceof Error ? err.message : String(err))}` };
+    return { problem: `cannot be read: ${code ?? (err instanceof Error ? err.message : String(err))}` };
   }
-  return { file, ...manifestDependencies(file, text) };
+}
+
+function readManifest(repo: string, file: 'package.json' | 'pyproject.toml'): { file: string; names: string[]; problem?: string } {
+  const read = readText(join(repo, file));
+  return 'problem' in read ? { file, names: [], problem: read.problem } : { file, ...manifestDependencies(file, read.text) };
 }
 
 function dependencies(repo: string): Manifests {
@@ -94,11 +97,16 @@ function commands({ setup, commands, preview }: DetectedChecks): string {
 const withUnread = (value: string, { problems }: Manifests) =>
   problems.length ? `${value}; ${problems.map((p) => p.file).join(' and ')} not fully read (see Stack): a dependency may be missing` : value;
 
+/** A compose file that cannot be read is read as running no Postgres, and named on the card (ORC-454). */
 function services(repo: string, manifests: Manifests): string {
-  const compose = COMPOSE_FILES.find((f) => existsSync(join(repo, f)) && runsPostgres(readFileSync(join(repo, f), 'utf8')));
-  if (compose) return `postgres (${compose})`;
+  const unread: string[] = [];
+  for (const file of COMPOSE_FILES.filter((f) => existsSync(join(repo, f)))) {
+    const read = readText(join(repo, file));
+    if ('problem' in read) unread.push(`${file} not read (${read.problem}): a Postgres it runs may be missing`);
+    else if (runsPostgres(read.text)) return `postgres (${file})`;
+  }
   const pkg = POSTGRES_PACKAGES.find((p) => manifests.deps.has(p));
-  return withUnread(pkg ? `postgres (dependency ${pkg})` : 'none', manifests);
+  return withUnread([pkg ? `postgres (dependency ${pkg})` : 'none', ...unread].join('; '), manifests);
 }
 
 function visualPaths(repo: string, manifests: Manifests): string {
