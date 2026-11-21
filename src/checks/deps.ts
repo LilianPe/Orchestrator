@@ -409,27 +409,28 @@ function readPyproject(m: Manifest, text: string): void {
   });
 }
 
-/** The names a pyproject.toml declares as dependencies, normalized (ORC-410): none when it does not parse. */
-export function pyprojectDependencies(text: string): string[] {
-  const m: Manifest = { path: 'pyproject.toml', deps: [], directives: [] };
-  try {
-    readPyproject(m, text);
-  } catch {
-    return [];
-  }
-  return m.deps.map((d) => d.name);
+/** The names a manifest declares as dependencies (ORC-410), and what kept it from being read in full (ORC-454): the names read before. */
+export interface ManifestNames {
+  names: string[];
+  problem?: string;
 }
 
-/** The names a package.json declares as dependencies, in every npm section (ORC-410): none when it does not parse. */
-export function packageJsonDependencies(text: string): string[] {
-  const m: Manifest = { path: 'package.json', deps: [], directives: [] };
+function namesOf(m: Manifest, read: (m: Manifest, text: string) => void, text: string, name: (d: Declared) => string): ManifestNames {
   try {
-    readPackageJson(m, text);
-  } catch {
-    return [];
+    read(m, text);
+  } catch (err) {
+    return { names: m.deps.map(name), problem: (err as Error).message };
   }
-  return m.deps.map((d) => d.declared);
+  return { names: m.deps.map(name) };
 }
+
+/** The names a pyproject.toml declares as dependencies, normalized. */
+export const pyprojectDependencies = (text: string): ManifestNames =>
+  namesOf({ path: 'pyproject.toml', deps: [], directives: [] }, readPyproject, text, (d) => d.name);
+
+/** The names a package.json declares as dependencies, in every npm section. */
+export const packageJsonDependencies = (text: string): ManifestNames =>
+  namesOf({ path: 'package.json', deps: [], directives: [] }, readPackageJson, text, (d) => d.declared);
 
 const READERS: Record<Exclude<ManifestKind, 'unsupported'>, (m: Manifest, text: string) => void> = {
   'package.json': readPackageJson,
