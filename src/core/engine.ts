@@ -18,7 +18,6 @@ import { heldByOther, isOwnMoveEcho, pendingOf, reduce, samePending } from './re
 import { blockingTotal, isBlocking } from './review.js';
 import { holds, isNoRepo, isUnrouted, repoLabel, unroutedReason } from './routing.js';
 import { guardFindings } from './intake-checks.js';
-import { completeTicketQuestion } from './pickup.js';
 import { CHANGES, formatSpec, REJECT, SPEC_COMMANDS, specCheck, type SpecVersion } from './spec.js';
 import { higherRisk, type Blocker, type ClarifyQuestion, type DecidedEvent, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type InputKind, type LogicalState, type MessageKind, type PendingJob, type RunOutcome, type Taint, type TicketState, type VerifyFailure } from './types.js';
 
@@ -190,7 +189,7 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
   }
   // Incomplete: the questions come first, blocked by a ticket or not; intake runs again after the last answer and comes back here.
   // A failed check is a fact, not a question: the ticket's to complete, answered freely, within the 3 questions.
-  const completeIt: ClarifyQuestion[] = checks.length ? [{ question: completeTicketQuestion(checks), options: [] }] : [];
+  const completeIt: ClarifyQuestion[] = checks.length ? [{ question: `${checks.join(' ')} Can you complete the ticket, then reply here?`, options: [] }] : [];
   // Intake's findings (ORC-207), one question: a human confirms or lifts them, and intake reads the ticket again with the answer.
   const confirm: ClarifyQuestion[] = findings.length ? [{ question: `${findings.join(' ')} Is this right? Answer here, or change the ticket and reply.`, options: [] }] : [];
   return clarify(out, at.event, job, [...completeIt, ...confirm, ...asked].slice(0, CLARIFY_MAX));

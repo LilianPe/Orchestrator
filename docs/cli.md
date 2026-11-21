@@ -84,13 +84,13 @@ Starts nothing. For each project, lists the tickets delegated to the agent in Li
 
 ```text
 REL-12  taken  Add the CSV export
-REL-15  clarify  Fix the login — intake, then clarify asks: The description is shorter than 30 characters. Can you complete the ticket, then reply here?
+REL-15  clarify  Fix the login — intake, then clarify asks to complete the ticket: The description is shorter than 30 characters.
 REL-9  already handled  Menu redesign (human_review)
 ```
 
-- `taken`: would pass the `tracker.pickup.checks` checks;
-- `clarify`: fails a check: the delegation starts at `intake`, then `clarify` asks to complete the ticket, the question shown (ORC-423);
-- `not taken`: followed by the reasons (repository to specify, invalid `.factory/config.yml`);
+- `taken`: would pass the `tracker.pickup.checks` checks; at the Rapide level, a failed check follows as `assumed`, written in the spec;
+- `clarify`: fails a check: the delegation starts at `intake`, then `clarify` asks to complete the ticket, for the reasons that follow (ORC-423);
+- `not taken`: followed by the reasons: repository to specify, invalid `.factory/config.yml`, or a failed check when the chain does not start at `intake` (its launch refuses the ticket);
 - `already handled`: already tracked by Relais (with its logical state).
 
 Requires Linear to be connected (`Linear not connected: run `factory up`, then connect Linear.` otherwise).
