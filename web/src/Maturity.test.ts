@@ -35,9 +35,10 @@ describe('the maturity cards page (ORC-410)', () => {
     expect(html).toContain('factory dry-run p');
   });
 
-  it('names, after an approval, who holds it and since when: an earlier one by someone else stands (ORC-454)', () => {
-    const notice = approvalNotice(card({ approvedBy: 'github:armand', approvedAt: Date.UTC(2026, 10, 2, 9) }));
-    expect(notice).toMatch(/^Stack approved by github:armand on .*2026/);
-    expect(approvalNotice(card())).toBe('Stack approved.');
+  it('says, after an approval, that the card was approved already, by whom and when: that first approval stands (ORC-454)', () => {
+    const notice = approvalNotice({ already: true, card: card({ approvedBy: 'github:armand', approvedAt: Date.UTC(2026, 10, 2, 9) }) }, card());
+    expect(notice).toMatch(/^Stack was already approved by github:armand on .*2026.*: that approval stands\.$/);
+    expect(approvalNotice({ card: card({ approvedBy: 'dashboard:local', approvedAt: 5 }) }, card())).toBe('Stack approved.');
+    expect(approvalNotice({}, card())).toBe('Stack approved.');
   });
 });

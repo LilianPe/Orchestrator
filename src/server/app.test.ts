@@ -409,6 +409,16 @@ describe('server', () => {
       expect(cards.map((c: { approvedBy?: string }) => c.approvedBy)).toEqual(['dashboard:local', undefined, undefined]);
     });
 
+    it('says when a card was approved already, by someone else: that first approval stands (ORC-454)', async () => {
+      const { app, store } = await setup();
+      await store.putMaturityCards('p', points, 4);
+      await store.approveMaturityCard('p', 'stack', points[0]!.value, 'github:armand', 7);
+      const res = await approve(app, '/api/maturity/p/stack/approve');
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true, already: true, card: { projectId: 'p', ...points[0], detectedAt: 4, approvedBy: 'github:armand', approvedAt: 7 } });
+      expect((await (await approve(app, '/api/maturity/p/stack/approve')).json()).already).toBe(true);
+    });
+
     it('refuses an unknown card, one from another origin, and asks for the GitHub sign-in as the other routes', async () => {
       const { app, store } = await setup();
       await store.putMaturityCards('p', points, 4);

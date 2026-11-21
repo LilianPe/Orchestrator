@@ -527,10 +527,12 @@ export function createApp(d: ServerDeps): Hono {
     const parsed = approvalEntry.safeParse(await c.req.json().catch(() => undefined));
     if (!parsed.success) return c.json({ error: 'expected { value }: the value approved' }, 400);
     const { value } = parsed.data;
-    const card = await d.store.approveMaturityCard(c.req.param('projectId'), c.req.param('key'), value, operator(c).actor!, d.clock.now());
+    const at = d.clock.now();
+    const card = await d.store.approveMaturityCard(c.req.param('projectId'), c.req.param('key'), value, operator(c).actor!, at);
     if (card === 'changed') return c.json({ error: 'the card changed since it was shown: read it again' }, 409);
     if (card === 'unchecked') return c.json({ error: `main is not checked yet: run factory dry-run ${c.req.param('projectId')}, then approve its result` }, 409);
-    return card ? c.json({ ok: true, card }) : c.json({ error: 'no such card' }, 404);
+    // A card approved already keeps its first approval (ORC-454): `already` lets the page say whose it is.
+    return card ? c.json({ ok: true, ...(card.approvedAt === at ? {} : { already: true }), card }) : c.json({ error: 'no such card' }, 404);
   });
 
   // The security log (ORC-300), read-only, from the logs the factory read off the proxy and the hook (ORC-296): hosts,
