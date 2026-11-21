@@ -346,14 +346,14 @@ export async function runDryRun(req: DryRunRequest): Promise<DryRun> {
       await runSealedSetup(sandboxes, { runId: `${req.runId}-run`, ticketId: req.projectId, workspacePath: cloneDir, mounts: [], commands: setup, argv: verifyCommand, env, secrets: {}, services: config.services, now: new Date(req.now()) });
     } catch (err) {
       if (!(err instanceof SetupFailure)) throw err;
-      // A registry or the proxy that did not answer says nothing of the repository, whatever the installer printed after it
-      // (pip's `No matching distribution` past a `ProxyError`), and whether the setup failed or ran over its cap: no dry run,
-      // as for the forge or the engine.
-      const down = unreachable(err.output);
-      if (down) throw new Error(`${err.command}: a registry or the egress proxy did not answer, no dry run recorded: ${down}`, { cause: err });
       const broke: DryRunBreak = err.exitCode === null
         ? { kind: 'failure', step: 'setup', command: err.command, detail: err.message, output: logExcerpt(err.output, OUTPUT_MAX) }
         : breakOf('setup', err.command, err.output, vars);
+      // A registry or the proxy that did not answer says nothing of the repository: no dry run, as for the forge or the engine,
+      // whether the setup failed or ran over its cap. A dependency it then says is missing was not reached; a variable or a
+      // service of the repository's own is its own, past an installer's retry warning (pip's `Retrying … ProxyError`).
+      const down = broke.kind === 'failure' || broke.kind === 'dependency' ? unreachable(err.output) : undefined;
+      if (down) throw new Error(`${err.command}: a registry or the egress proxy did not answer, no dry run recorded: ${down}`, { cause: err });
       return dryRun([broke], setup, []);
     }
   }

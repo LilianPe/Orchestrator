@@ -194,6 +194,13 @@ describe('runDryRun (ORC-408)', () => {
     await expect(runDryRun(req)).rejects.toThrow('no dry run recorded');
   });
 
+  it('a variable the setup asks for is the repository\'s, past a retry an installer warned of: recorded red, as a variable', async () => {
+    const { req, sandboxes } = forge();
+    const stderr = "WARNING: Retrying (Retry(total=4)) after connection broken by 'ProxyError('Cannot connect to proxy.')'\nError: STRIPE_KEY is not set\n";
+    sandboxes.answer = (command) => (command === 'npm ci' ? { stdout: '', stderr, code: 1 } : undefined);
+    expect((await runDryRun(req)).breaks).toEqual([expect.objectContaining({ kind: 'variable', step: 'setup' })]);
+  });
+
   it('a setup over its cap on a registry that no longer answers rejects too', async () => {
     const { req, sandboxes } = forge();
     let now = Date.now();
