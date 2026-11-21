@@ -186,7 +186,8 @@ export function readConventions(dir: string): string | undefined {
   return more ? `${all}\n[… truncated: ${more} more bytes]` : all;
 }
 
-function utc(ts: number): string {
+/** A time as the factory prints it to a person: to the minute, in UTC. */
+export function utc(ts: number): string {
   return new Date(ts).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
 }
 

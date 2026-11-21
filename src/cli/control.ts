@@ -16,22 +16,34 @@ export interface ControlDeps {
   out: (line: string) => void;
   /** The global `fetch`, for `api`; a test hands the server's own. */
   fetch?: (url: string, init?: RequestInit) => Promise<Response> | Response;
+  /** How long a command waits for the daemon's answer (ORC-434): `ANSWER_TIMEOUT_MS`, `DRY_RUN_TIMEOUT_MS` for a dry run. */
+  timeoutMs?: number;
 }
 
+/** The wait for the daemon's answer, past which the CLI gives up (ORC-434): it answers its commands at once. */
+export const ANSWER_TIMEOUT_MS = 60_000;
 /**
- * The socket's errors before any byte is sent: nothing reached the daemon, HTTP may be tried instead. A path past the
- * OS's limit is refused as EINVAL on Linux, ENAMETOOLONG on macOS (ORC-431).
+ * The wait for a dry run's (ORC-409), which the daemon answers once the run is recorded: each command of its setup, then of its
+ * checks, under `verify`'s 15 minutes (and its last minute); no cap on the whole, so a wide one, past seven commands at their cap.
  */
-const NOT_REACHED = new Set(['ENOENT', 'ECONNREFUSED', 'EACCES', 'EPERM', 'ENOTSOCK', 'EINVAL', 'ENAMETOOLONG']);
+export const DRY_RUN_TIMEOUT_MS = 2 * 60 * 60_000;
 
 /**
- * A request of the CLI's (its commands carry no body) with node's own client, which never gives up on a slow answer: through the
- * daemon's Unix socket, rejected when nothing listens there; or over HTTP, where `fetch` gives up after 5 minutes, before a dry run
- * ends (ORC-409).
+ * Whether a socket's error came before any byte was sent, so HTTP may be tried instead without sending a command twice: one of
+ * `connect`'s, whatever its code (ORC-434). No socket (ENOENT), a dead one (ECONNREFUSED), one this user may not open (EACCES), a
+ * path past the OS's limit (EINVAL on Linux, ENAMETOOLONG on macOS, ORC-431); the same codes from a later call may come once the
+ * daemon took the command.
+ */
+export const nothingReached = (err: unknown): boolean => (err as NodeJS.ErrnoException).syscall === 'connect';
+
+/**
+ * A request of the CLI's (its commands carry no body) with node's own client, which never gives up on a slow answer but at the
+ * request's `signal` (ORC-434): through the daemon's Unix socket, rejected when nothing listens there; or over HTTP, where `fetch`
+ * gives up after 5 minutes, before a dry run ends (ORC-409).
  */
 function nodeRequest(to: RequestOptions, init: RequestInit): Promise<Response> {
   return new Promise((resolve, reject) => {
-    const req = request({ ...to, method: init.method ?? 'GET' }, (res) => {
+    const req = request({ ...to, method: init.method ?? 'GET', signal: init.signal ?? undefined }, (res) => {
       const chunks: Buffer[] = [];
       res.on('data', (c: Buffer) => chunks.push(c));
       res.on('end', () => resolve(new Response(Buffer.concat(chunks), { status: res.statusCode ?? 500, headers: { 'content-type': res.headers['content-type'] ?? 'text/plain' } })));
@@ -62,6 +74,9 @@ interface State {
 
 const minutes = (ms: number) => Math.max(0, Math.round(ms / 60_000));
 
+/** A delay as the CLI tells it: in hours, minutes or seconds. */
+const delay = (ms: number) => (ms >= 3_600_000 ? `${ms / 3_600_000} h` : ms >= 60_000 ? `${ms / 60_000} min` : `${ms / 1000} s`);
+
 /** A run in one line: what it runs, since when, and whether the heartbeat still holds it (ORC-220). */
 function runLine(run: Omit<RunRecord, 'token'>, now: number): string {
   const lease = run.leaseUntil !== undefined && run.leaseUntil < now ? ', lease expired' : '';
@@ -86,14 +101,27 @@ function formatStatus(s: State, now: number): string[] {
  * cannot give: it sends no credential.
  */
 async function ask(d: ControlDeps, path: string, init: RequestInit = {}, o: { slow?: boolean } = {}): Promise<Response | undefined> {
+  // One delay for the whole command, socket and HTTP together, the answer's body included (ORC-434).
+  const timeoutMs = d.timeoutMs ?? (o.slow ? DRY_RUN_TIMEOUT_MS : ANSWER_TIMEOUT_MS);
+  const signal = AbortSignal.timeout(timeoutMs);
+  // Only the timer's own abort: an error that merely comes at its end keeps its meaning (a fallback to HTTP, say).
+  const expired = (err: unknown) => signal.aborted && (err === signal.reason || (err as Error).cause === signal.reason);
+  const taken = init.method === 'POST' ? 'the command may have been taken, check with `factory status`' : '';
+  const timedOut = (where: string) => {
+    // A dry run has no cap of its own: a long one is no stuck daemon, and a restart would lose it.
+    const why = o.slow ? 'the dry run may still be under way, and recorded once it ends' : `it may be stuck, check its log or restart it${taken && `; ${taken}`}`;
+    d.out(`${PRODUCT_NAME} did not answer ${where} within ${delay(timeoutMs)}: ${why}.`);
+    return undefined;
+  };
   if (d.socket) {
     try {
-      return await viaSocket(d.socket, path, init);
+      return await viaSocket(d.socket, path, { ...init, signal });
     } catch (err) {
+      if (expired(err)) return timedOut(`through ${d.socket}`);
       // A socket a daemon killed left, or one this user may not open: HTTP, as without one. Any later error may come after
       // the daemon took the command: never sent twice.
-      if (!NOT_REACHED.has((err as NodeJS.ErrnoException).code ?? '')) {
-        d.out(`${PRODUCT_NAME} did not answer through ${d.socket} (${(err as Error).message}): the command may have been taken, check with \`factory status\`.`);
+      if (!nothingReached(err)) {
+        d.out(`${PRODUCT_NAME} did not answer through ${d.socket} (${(err as Error).message})${taken && `: ${taken}`}.`);
         return undefined;
       }
     }
@@ -102,8 +130,12 @@ async function ask(d: ControlDeps, path: string, init: RequestInit = {}, o: { sl
   try {
     const url = `${d.api}${path}`;
     const send = d.fetch ?? (o.slow && url.startsWith('http:') ? slowFetch : fetch);
-    res = await send(url, init);
+    const answer = await send(url, { ...init, signal });
+    // Read whole here, under the same delay: a body that stalls after its headers ends as a silent daemon does.
+    const body = await answer.arrayBuffer();
+    res = new Response(body.byteLength ? body : null, { status: answer.status, headers: answer.headers });
   } catch (err) {
+    if (expired(err)) return timedOut(`on ${d.api}`);
     d.out(`${PRODUCT_NAME} does not answer on ${d.api} (${(err as Error).message}): run \`factory up\`, or check the port and FACTORY_HOME.`);
     return undefined;
   }

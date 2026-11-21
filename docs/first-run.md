@@ -64,6 +64,21 @@ commands:
   test: npm test
 ```
 
+With the proposal comes the maturity report (ORC-410), one card per point, stored in the instance's database for a person to approve on the dashboard's **Maturity** page once `factory up` runs:
+
+```text
+Maturity report, one card per point to approve on the dashboard: http://localhost:4100/#maturity
+  [to approve] Stack: Node (npm)
+  [to approve] Commands:
+    setup: npm ci
+    lint: npm run lint
+    test: npm test
+  [to approve] main green or red: not checked yet: the dry run (ORC-408) runs setup, build and tests on main
+  …
+```
+
+The **main** card says the project's last dry run when the database holds one; on a first setup it has none yet, and the card stays « not checked yet »: `factory dry-run` (step 4) runs it and prints its result.
+
 Commit that file on the default branch through a PR, merged: the daemon and `factory doctor` read it there (`origin/HEAD`, as the clone last fetched it), never in a working copy. Then `git pull` on the default branch in the clone: `factory validate` reads the working copy's file. If `init` warns that there is no `commands.test`, add one before going on.
 
 On a first setup (no Linear values yet, no `factory.yml`), it then prints the GitHub App's steps (item 4) and writes `FACTORY_HOME/factory.yml`:
@@ -253,8 +268,8 @@ What you should see, step by step ([`preset.md`](preset.md#sequence)):
 | Delegation | within 10 s, the comment « Got it. » and the session's plan | Nothing at all: a webhook that does not arrive (smee channel, `publicUrl`, the clock: Linear's signature is refused past 60 s of offset) or a refused signature; the log says `relay: webhook rejected with 401 (…)`. A refusal by the matrix (no `githubLogins` entry, no write access) is replied in the session and logged `authz: refused …`. |
 | `intake` | the session's live feed (« Reading the code »…); the ticket stays in Todo | An incomplete ticket goes to `clarify`. |
 | `clarify` (if needed) | up to 3 questions in the session, one at a time | Answer in the **session**, not in a ticket comment. Unanswered after 72 h, the ticket is blocked. |
-| Spec | « Spec published (risk: …). N acceptance criteria → tests. » then the spec in the session | A spec that fails `spec_check` twice blocks the ticket. |
-| `/approve` | a **validator who did not delegate** replies `/approve` in the ticket's session (`/changes <comment>` asks for a new version, `/reject` stops) | A refusal is answered in the session: the delegator approved, or the validator is not in `authz.validators`. A plain comment is not read as a command. |
+| Spec | the spec in a comment of the ticket, « **Spec, version N** »; past 5 000 characters, in a Linear document linked to the ticket (« <ID>: spec, version N »), the comment giving its summary and the link. Then the session says « Spec published (risk: …). N acceptance criteria → tests. Version N, waiting for review. » and where to read it. The ticket stays in Todo, unless `factory.yml` gives the step a status: `statuses: { spec_draft: Spec }`, then restart the daemon and click **Connect Linear** again to create it ([`configuration.md`](configuration.md)) | A spec that fails `spec_check` twice blocks the ticket. |
+| `/approve` | a **validator who did not delegate** reads the spec in that comment or document, then replies `/approve` in the factory's **session** on the ticket, not under the comment (`/changes <comment>` asks for a new version, `/reject` stops) | A refusal is answered in the session: the delegator approved, or the validator is not in `authz.validators`. A plain comment, or a reply under the spec's comment, is not read as a command. |
 | `tests` → red check → freeze | the tests are committed on the ticket's branch; the factory runs them with `commands.test`: they must fail for the right reason. For the first 20 tickets the red check only measures (it never blocks, the trace says what it would have blocked); the freeze always applies | `infra`: the check could not run (no `commands.test`, the sandbox); the ticket is blocked. |
 | `build` | the ticket moves to **In Progress** | |
 | `verify` | the commands of `.factory/config.yml` in a fresh clone, plus the factory's checks (frozen tests, forbidden paths, secrets, diff size) | 3 failures in a row block the ticket, with the blocking comment « 🔴 Blocked at step … ». |

@@ -382,6 +382,56 @@ describe('server', () => {
     });
   });
 
+  describe('the maturity cards (ORC-410)', () => {
+    const points = [
+      { key: 'stack', title: 'Stack', value: 'TypeScript (package.json)' },
+      { key: 'main', title: 'main', value: 'not checked yet: the dry run decides' },
+    ];
+    const approve = (app: Awaited<ReturnType<typeof setup>>['app'], path: string, headers: Record<string, string> = {}, value = path.includes('/main/') ? points[1]!.value : points[0]!.value) =>
+      app.request(path, { method: 'POST', body: JSON.stringify({ value }), headers: { 'content-type': 'application/json', ...headers } });
+
+    it('lists the cards of every project, and stores the approval of one with its operator, shown when read again', async () => {
+      const { app, store } = await setup();
+      await store.putMaturityCards('p', points, 4);
+      await store.putMaturityCards('q', [points[0]!], 5);
+      expect(await (await app.request('/api/maturity')).json()).toEqual({
+        cards: [
+          { projectId: 'p', ...points[0], detectedAt: 4 },
+          { projectId: 'p', ...points[1], detectedAt: 4 },
+          { projectId: 'q', ...points[0], detectedAt: 5 },
+        ],
+      });
+      const res = await approve(app, '/api/maturity/p/stack/approve');
+      expect(res.status).toBe(200);
+      expect((await res.json()).card).toEqual({ projectId: 'p', ...points[0], detectedAt: 4, approvedBy: 'dashboard:local', approvedAt: 10 });
+      const cards = (await (await app.request('/api/maturity')).json()).cards;
+      expect(cards.map((c: { approvedBy?: string }) => c.approvedBy)).toEqual(['dashboard:local', undefined, undefined]);
+    });
+
+    it('refuses an unknown card, one from another origin, and asks for the GitHub sign-in as the other routes', async () => {
+      const { app, store } = await setup();
+      await store.putMaturityCards('p', points, 4);
+      expect((await approve(app, '/api/maturity/p/nope/approve')).status).toBe(404);
+      expect((await approve(app, '/api/maturity/q/stack/approve')).status).toBe(404);
+      expect((await approve(app, '/api/maturity/p/stack/approve', { origin: 'https://evil.test' })).status).toBe(403);
+      // The value shown is no longer the one stored (init ran again meanwhile): nothing approved, the page reads it again.
+      expect((await approve(app, '/api/maturity/p/stack/approve', {}, 'Python (uv)')).status).toBe(409);
+      expect((await app.request('/api/maturity/p/stack/approve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status).toBe(400);
+      expect((await store.maturityCards('p')).every((c) => c.approvedBy === undefined)).toBe(true);
+      const signedOut = (await setup({ githubLogin: GITHUB })).app;
+      expect((await signedOut.request('/api/maturity')).status).toBe(401);
+      expect((await approve(signedOut, '/api/maturity/p/stack/approve')).status).toBe(401);
+    });
+
+    it('records whoever signed in with GitHub as github:<login>', async () => {
+      const { app, store } = await setup({ githubLogin: GITHUB });
+      await store.putMaturityCards('p', points, 4);
+      const { headers } = await signIn(app);
+      const res = await approve(app, '/api/maturity/p/main/approve', headers);
+      expect((await res.json()).card.approvedBy).toBe('github:armand');
+    });
+  });
+
   describe('the changelog (ORC-197)', () => {
     const DAY = 24 * 60 * 60 * 1000;
     const entry = (id: string, at: number): ChangelogEntry => ({

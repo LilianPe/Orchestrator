@@ -15,7 +15,7 @@ import { openStore } from '../store/open.js';
 import { join } from 'node:path';
 import { runBaselineCommand } from './baseline.js';
 import { runDryRunCommand, runQueueCommand, runStatusCommand, runStopCommand } from './control.js';
-import { runInit } from './init.js';
+import { instanceCards, runInit } from './init.js';
 import { cliLinearTracker } from './linear.js';
 import { runDoctorCommand } from './doctor.js';
 import { runFlakyCommand } from './flaky.js';
@@ -129,12 +129,14 @@ async function main(): Promise<number> {
 async function runInitCommand(args: string[]): Promise<number> {
   const { values } = parseArgs({ args, options: { dev: { type: 'boolean' } } });
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const home = factoryHome();
   await runInit({
-    home: factoryHome(),
+    home,
     cwd: process.cwd(),
     dev: values.dev,
     exec: execCmd,
     createSmee: () => createSmeeChannel(),
+    storeCards: instanceCards(home),
     io: {
       ask: async (q, def) => (await rl.question(`${q}${def ? ` [${def}]` : ''}: `)).trim() || def || '',
       print: (s) => console.log(s),

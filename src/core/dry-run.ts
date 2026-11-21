@@ -326,12 +326,15 @@ export async function runDryRun(req: DryRunRequest): Promise<DryRun> {
 export const dryRunHolds = (last: DryRun, now: { sha: string; fingerprint: DryRunFingerprint }): boolean =>
   last.fingerprint.hash === now.fingerprint.hash && (last.ok || last.sha === now.sha);
 
+/** What breaks a dry run, each kind in its command once (ORC-409, and the `main` maturity card of ORC-410). */
+export const dryRunBroke = (run: DryRun): string => [...new Set(run.breaks.map((b) => `${b.kind} in \`${b.command}\``))].join(', ');
+
 /**
  * What the block of a ticket a red dry run refuses says (ORC-409): what breaks, each break in its step, its command and the
  * line that names its cause; and how it runs again.
  */
 export function dryRunRefusal(run: DryRun): { reason: string; tried: string[]; question: string } {
-  const broke = [...new Set(run.breaks.map((b) => `${b.kind} in \`${b.command}\``))].join(', ');
+  const broke = dryRunBroke(run);
   return {
     reason: `The dry run of the repository is red on its default branch (${run.sha.slice(0, 12)}): ${broke}. No ticket of the repository starts until it is green.`,
     tried: run.breaks.map((b) => `The dry run's ${b.step}, \`${b.command}\`: ${b.kind}, ${b.detail}`),

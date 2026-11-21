@@ -4,7 +4,7 @@ import { newTicketState, TRUSTED, type FactoryEvent, type TicketState } from '..
 import type { Baseline, BaselineValue } from '../../src/core/baseline.js';
 import type { DryRun } from '../../src/core/dry-run.js';
 import type { GhostJudgment, GhostReplay, GhostTicket } from '../../src/ghost/replay.js';
-import { PAUSE_ACCEPTED, TicketHeldError, timerEvent, type Artifact, type ChangelogEntry,type DecisionPlan, type KnownFlakyTest, type DecisionRequest, type QueueItem, type RunRecord, type SecurityLog, type Store, type TimerRecord, type WorkflowVersion } from '../../src/store/types.js';
+import { PAUSE_ACCEPTED, TicketHeldError, timerEvent, type Artifact, type ChangelogEntry,type DecisionPlan, type KnownFlakyTest, type MaturityCard, type DecisionRequest, type QueueItem, type RunRecord, type SecurityLog, type Store, type TimerRecord, type WorkflowVersion } from '../../src/store/types.js';
 
 function run(patch: Partial<RunRecord> = {}): RunRecord {
   return {
@@ -354,6 +354,35 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.deleteKnownFlakyTest('p', t.test)).toBe(false);
     expect((await s.knownFlakyTests('p')).map((k) => k.test)).toEqual(['tests/t.py::test_it']);
     expect(await s.knownFlakyTests('other')).toEqual([{ ...t, projectId: 'other' }]);
+  });
+
+  it("keeps a project's maturity cards in their order; a detection again keeps an approval only on a value unchanged (ORC-410)", async () => {
+    const s = await store();
+    const stack = { key: 'stack', title: 'Stack', value: 'Node (npm)' };
+    const commands = { key: 'commands', title: 'Commands', value: 'test: npm test' };
+    const card = (c: typeof stack, at: number, approval: Partial<MaturityCard> = {}): MaturityCard => ({ projectId: 'p', ...c, detectedAt: at, ...approval });
+    expect(await s.maturityCards('p')).toEqual([]);
+    await s.putMaturityCards('p', [stack, commands], 1_700_000_000_000);
+    await s.putMaturityCards('other', [stack], 1_700_000_000_000);
+    expect(await s.maturityCards('p')).toEqual([card(stack, 1_700_000_000_000), card(commands, 1_700_000_000_000)]);
+    expect(await s.approveMaturityCard('p', 'stack', stack.value, 'armand', 1_700_000_000_005)).toEqual(card(stack, 1_700_000_000_000, { approvedBy: 'armand', approvedAt: 1_700_000_000_005 }));
+    // Approved again, by another: the first approval stands.
+    expect(await s.approveMaturityCard('p', 'stack', stack.value, 'lilian', 1_700_000_000_006)).toEqual(card(stack, 1_700_000_000_000, { approvedBy: 'armand', approvedAt: 1_700_000_000_005 }));
+    // A value the person did not see is not approved.
+    expect(await s.approveMaturityCard('p', 'commands', 'test: vitest', 'armand', 1_700_000_000_005)).toBe('changed');
+    expect((await s.maturityCards('p'))[1]!.approvedBy).toBeUndefined();
+    expect(await s.approveMaturityCard('p', 'commands', commands.value, 'armand', 1_700_000_000_005)).toBeDefined();
+    expect(await s.approveMaturityCard('p', 'nope', 'x', 'armand', 1_700_000_000_005)).toBeUndefined();
+    // Detected again: the stack unchanged keeps its approval, the commands changed lose theirs, a card no longer detected goes.
+    const changed = { ...commands, value: 'lint: npm run lint\ntest: npm test' };
+    const services = { key: 'services', title: 'Services', value: 'none' };
+    await s.putMaturityCards('p', [services, stack, changed], 1_700_000_000_009);
+    expect(await s.maturityCards('p')).toEqual([
+      card(services, 1_700_000_000_009),
+      card(stack, 1_700_000_000_009, { approvedBy: 'armand', approvedAt: 1_700_000_000_005 }),
+      card(changed, 1_700_000_000_009),
+    ]);
+    expect((await s.maturityCards()).map((c) => `${c.projectId}/${c.key}`)).toEqual(['other/stack', 'p/services', 'p/stack', 'p/commands']);
   });
 
   it('keeps a replay of closed tickets with its threshold, written once and never changed; its tickets and judgments (ORC-231)', async () => {

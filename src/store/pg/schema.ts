@@ -506,7 +506,26 @@ export const dryRuns = pgTable(
   (t) => [index('dry_runs_project_idx').on(t.projectId, t.endedAt)],
 );
 
-/** The public tables, in migration order: the twelve of ORC-132, the security log's (ORC-296), the known flaky tests (ORC-164), the changelog (ORC-197), the baselines (ORC-230), the deliveries (ORC-355), the review defects (ORC-229), the replays of closed tickets (ORC-231), the dry runs (ORC-408). */
+/**
+ * A project's maturity cards (ORC-410), the points of the report `factory init` detected, in its order (`position`): replaced
+ * at each detection, an approval kept on a value unchanged.
+ */
+export const maturityCards = pgTable(
+  'maturity_cards',
+  {
+    projectId: text('project_id').notNull(),
+    key: text('key').notNull(),
+    position: integer('position').notNull(),
+    title: text('title').notNull(),
+    value: text('value').notNull(),
+    detectedAt: timestamp('detected_at', { withTimezone: true, mode: 'date' }).notNull(),
+    approvedBy: text('approved_by'),
+    approvedAt: timestamp('approved_at', { withTimezone: true, mode: 'date' }),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.key] })],
+);
+
+/** The public tables, in migration order: the twelve of ORC-132, the security log's (ORC-296), the known flaky tests (ORC-164), the changelog (ORC-197), the baselines (ORC-230), the deliveries (ORC-355), the review defects (ORC-229), the replays of closed tickets (ORC-231), the dry runs (ORC-408), the maturity cards (ORC-410). */
 export const PG_TABLES = {
   inbox,
   journal,
@@ -532,6 +551,7 @@ export const PG_TABLES = {
   ghostTickets,
   ghostJudgments,
   dryRuns,
+  maturityCards,
 } as const;
 
 export const PG_TABLE_NAMES = [
@@ -559,6 +579,7 @@ export const PG_TABLE_NAMES = [
   'ghost_tickets',
   'ghost_judgments',
   'dry_runs',
+  'maturity_cards',
 ] as const;
 
 export type PgTableName = (typeof PG_TABLE_NAMES)[number];

@@ -49,6 +49,10 @@ import {
   type Artifact,
   type FindingsRecord,
   type KnownFlakyTest,
+  approvedCard,
+  maturityCard,
+  type MaturityCard,
+  type MaturityPoint,
   type ChangelogEntry,
   type EgressRecord,
   type SecurityLog,
@@ -122,6 +126,9 @@ const workflowId = (hash: string) => `wf:${hash}`;
  * outbox: the decision transaction, `updateTicket`, `recordEvent` and `enqueue`.
  */
 const ticketLock = (ticketId: string | undefined | null) => sql`select pg_advisory_xact_lock(hashtext(${ticketId ?? '__global__'}))`;
+
+/** Serializes a project's detection of maturity cards and their approvals (ORC-410). */
+const maturityLock = (projectId: string) => sql`select pg_advisory_xact_lock(hashtext(${`maturity:${projectId}`}))`;
 
 /** The `outbox.ticket_id` of a decision row: the ticket, or `*` for an event without one. */
 const outboxTicket = (ticketId: string | undefined | null) => ticketId ?? '*';
@@ -996,6 +1003,49 @@ export class PgStore implements AsyncStore {
   async deleteKnownFlakyTest(projectId: string, test: string): Promise<boolean> {
     const rows = await this.db.execute(sql`delete from known_flaky_tests where project_id = ${projectId} and test = ${test} returning test`);
     return rows.rows.length === 1;
+  }
+
+  async maturityCards(projectId?: string): Promise<MaturityCard[]> {
+    return this.readMaturityCards(this.db, projectId);
+  }
+
+  private async readMaturityCards(db: Tx | NodePgDatabase<typeof schema>, projectId?: string): Promise<MaturityCard[]> {
+    const rows = await db.execute<{ project_id: string; key: string; title: string; value: string; detected: string | number; approved_by: string | null; approved: string | number | null }>(sql`
+      select project_id, key, title, value, round(extract(epoch from detected_at) * 1000) as detected, approved_by, round(extract(epoch from approved_at) * 1000) as approved
+      from maturity_cards ${projectId === undefined ? sql`` : sql`where project_id = ${projectId}`} order by project_id, position
+    `);
+    return rows.rows.map((r) => ({
+      projectId: r.project_id, key: r.key, title: r.title, value: r.value, detectedAt: Number(r.detected),
+      ...(r.approved_by === null || r.approved === null ? {} : { approvedBy: r.approved_by, approvedAt: Number(r.approved) }),
+    }));
+  }
+
+  async putMaturityCards(projectId: string, points: readonly MaturityPoint[], at: number): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      // Locked for the detection: two inits at once write one set, not a mix.
+      await tx.execute(maturityLock(projectId));
+      const before = new Map((await this.readMaturityCards(tx, projectId)).map((c) => [c.key, c]));
+      await tx.execute(sql`delete from maturity_cards where project_id = ${projectId}`);
+      if (!points.length) return;
+      await tx.insert(schema.maturityCards).values(
+        points.map((p, position) => {
+          const c = maturityCard(projectId, p, at, before.get(p.key));
+          return { projectId, key: c.key, position, title: c.title, value: c.value, detectedAt: new Date(c.detectedAt), approvedBy: c.approvedBy ?? null, approvedAt: c.approvedAt === undefined ? null : new Date(c.approvedAt) };
+        }),
+      );
+    });
+  }
+
+  async approveMaturityCard(projectId: string, key: string, value: string, by: string, at: number): Promise<MaturityCard | 'changed' | undefined> {
+    return this.db.transaction(async (tx) => {
+      // The detection's lock: an init replacing the cards meanwhile is waited for, never approved over.
+      await tx.execute(maturityLock(projectId));
+      const stored = (await this.readMaturityCards(tx, projectId)).find((c) => c.key === key);
+      if (!stored) return undefined;
+      const card = approvedCard(stored, value, by, at);
+      if (card !== stored && card !== 'changed') await tx.execute(sql`update maturity_cards set approved_by = ${by}, approved_at = ${new Date(at)} where project_id = ${projectId} and key = ${key}`);
+      return card;
+    });
   }
 
   async putBaseline(b: Baseline, replace: boolean): Promise<boolean> {
