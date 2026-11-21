@@ -1,17 +1,18 @@
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, statSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { createServer as createNetServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { runDryRunCommand, runQueueCommand, runStatusCommand, runStopCommand, type ControlDeps } from '../../src/cli/control.js';
+import { nothingReached, runDryRunCommand, runQueueCommand, runStatusCommand, runStopCommand, type ControlDeps } from '../../src/cli/control.js';
 import type { DryRun } from '../../src/core/dry-run.js';
 import { EventBus } from '../../src/server/live-feed.js';
 import { newTicketState, type FactoryEvent } from '../../src/core/types.js';
 import { createApp, type ServerDeps } from '../../src/server/app.js';
 import { listenCliSocket } from '../../src/server/cli-socket.js';
 import { RUN_LEASE_MS } from '../../src/store/types.js';
+import { PRODUCT_NAME } from '../../src/product.js';
 import { createHarness, heldRun } from '../helpers/harness.js';
 
 type H = ReturnType<typeof createHarness>;
@@ -297,5 +298,90 @@ describe.skipIf(process.platform === 'win32')("the CLI through the daemon's Unix
     expect(await runStatusCommand({ ...c, socket: tooLong, fetch: (url, init) => (asked.push(url), c.fetch!(url, init)) })).toBe(0);
     expect(asked).toEqual(['http://127.0.0.1:4100/api/state']);
     expect(c.lines[0]).toContain('dev slots 1/3');
+  });
+});
+
+/** A daemon that takes the connection and never answers (ORC-434): over TCP on the loopback, or on a Unix socket. */
+async function mute(on: { socket?: string } = {}) {
+  const held: import('node:net').Socket[] = [];
+  const server = createNetServer((s) => void held.push(s));
+  await new Promise<void>((r) => (on.socket ? server.listen(on.socket, r) : server.listen(0, '127.0.0.1', r)));
+  const close = () => {
+    for (const s of held) s.destroy();
+    return new Promise((r) => server.close(r));
+  };
+  return { api: on.socket ? 'http://127.0.0.1:1' : `http://127.0.0.1:${(server.address() as AddressInfo).port}`, close };
+}
+
+// ORC-434: a daemon that no longer answers does not hold the CLI forever.
+describe('the CLI against a daemon that does not answer (ORC-434)', () => {
+  it('status gives up over HTTP after its delay, and says so', async () => {
+    const daemon = await mute();
+    try {
+      const lines: string[] = [];
+      expect(await runStatusCommand({ api: daemon.api, out: (l) => void lines.push(l), timeoutMs: 200 })).toBe(1);
+      expect(lines).toEqual([`${PRODUCT_NAME} did not answer on ${daemon.api} within 0.2 s: it may be stuck, check its log or restart it.`]);
+    } finally {
+      await daemon.close();
+    }
+  });
+
+  it('dry-run gives up too over HTTP, on its own client', async () => {
+    const daemon = await mute();
+    try {
+      const lines: string[] = [];
+      expect(await runDryRunCommand({ api: daemon.api, out: (l) => void lines.push(l), timeoutMs: 200 }, 'p')).toBe(1);
+      expect(lines.at(-1)).toBe(`${PRODUCT_NAME} did not answer on ${daemon.api} within 0.2 s: it may be stuck, check its log or restart it; the command may have been taken, check with \`factory status\`.`);
+    } finally {
+      await daemon.close();
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('pause gives up through the Unix socket, never falls back to HTTP, and says the command may have been taken', async () => {
+    const socket = join(mkdtempSync(join(tmpdir(), 'factory-home-')), 'factory.sock');
+    const daemon = await mute({ socket });
+    try {
+      const lines: string[] = [];
+      const fetch = () => expect.unreachable();
+      expect(await runQueueCommand({ api: daemon.api, socket, fetch, out: (l) => void lines.push(l), timeoutMs: 200 }, 'pause')).toBe(1);
+      expect(lines).toEqual([`${PRODUCT_NAME} did not answer through ${socket} within 0.2 s: it may be stuck, check its log or restart it; the command may have been taken, check with \`factory status\`.`]);
+    } finally {
+      await daemon.close();
+    }
+  });
+
+  it('a daemon that sends its headers and then stalls is given up on all the same', async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.write('{"ok"');
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const lines: string[] = [];
+      const api = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      expect(await runDryRunCommand({ api, out: (l) => void lines.push(l), timeoutMs: 200 }, 'p')).toBe(1);
+      expect(lines.at(-1)).toContain('within 0.2 s');
+      // And through `fetch`, which status takes.
+      expect(await runStatusCommand({ api, out: (l) => void lines.push(l), timeoutMs: 200 })).toBe(1);
+      expect(lines.at(-1)).toBe(`${PRODUCT_NAME} did not answer on ${api} within 0.2 s: it may be stuck, check its log or restart it.`);
+    } finally {
+      server.closeAllConnections();
+      await new Promise((r) => server.close(r));
+    }
+  });
+});
+
+// ORC-434: only a socket the CLI could not connect to falls back to HTTP; an EINVAL from a later write may come once the daemon
+// took the command, which HTTP would then send a second time.
+describe('which socket errors fall back to HTTP (ORC-434)', () => {
+  const err = (code: string, syscall: string) => Object.assign(new Error(`${syscall} ${code}`), { code, syscall });
+
+  it('EINVAL and ENAMETOOLONG only from connect', () => {
+    expect(nothingReached(err('EINVAL', 'connect'))).toBe(true);
+    expect(nothingReached(err('ENAMETOOLONG', 'connect'))).toBe(true);
+    expect(nothingReached(err('EINVAL', 'write'))).toBe(false);
+    expect(nothingReached(err('ENAMETOOLONG', 'read'))).toBe(false);
+    expect(nothingReached(err('ECONNRESET', 'read'))).toBe(false);
+    expect(nothingReached(err('ENOENT', 'connect'))).toBe(true);
   });
 });

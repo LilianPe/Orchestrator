@@ -16,22 +16,40 @@ export interface ControlDeps {
   out: (line: string) => void;
   /** The global `fetch`, for `api`; a test hands the server's own. */
   fetch?: (url: string, init?: RequestInit) => Promise<Response> | Response;
+  /** How long a command waits for the daemon's answer (ORC-434): `ANSWER_TIMEOUT_MS`, `DRY_RUN_TIMEOUT_MS` for a dry run. */
+  timeoutMs?: number;
+}
+
+/** The wait for the daemon's answer, past which the CLI gives up (ORC-434): it answers its commands at once. */
+export const ANSWER_TIMEOUT_MS = 60_000;
+/**
+ * The wait for a dry run's (ORC-409), which the daemon answers once the run is recorded: each command of its setup, then of its
+ * checks, under `verify`'s 15 minutes (and its last minute); no cap on the whole, so a wide one, past seven commands at their cap.
+ */
+export const DRY_RUN_TIMEOUT_MS = 2 * 60 * 60_000;
+
+/** The socket's errors before any byte is sent: nothing reached the daemon, HTTP may be tried instead. */
+const NOT_REACHED = new Set(['ENOENT', 'ECONNREFUSED', 'EACCES', 'EPERM', 'ENOTSOCK']);
+/**
+ * A path past the OS's limit, refused as EINVAL on Linux, ENAMETOOLONG on macOS (ORC-431): not reached only when `connect` says
+ * so, as either may come from a later call, once the daemon took the command (ORC-434).
+ */
+const NOT_CONNECTED = new Set(['EINVAL', 'ENAMETOOLONG']);
+
+/** Whether a socket's error came before the daemon could take anything, so HTTP may be tried instead without sending a command twice. */
+export function nothingReached(err: unknown): boolean {
+  const { code = '', syscall } = err as NodeJS.ErrnoException;
+  return NOT_REACHED.has(code) || (NOT_CONNECTED.has(code) && syscall === 'connect');
 }
 
 /**
- * The socket's errors before any byte is sent: nothing reached the daemon, HTTP may be tried instead. A path past the
- * OS's limit is refused as EINVAL on Linux, ENAMETOOLONG on macOS (ORC-431).
- */
-const NOT_REACHED = new Set(['ENOENT', 'ECONNREFUSED', 'EACCES', 'EPERM', 'ENOTSOCK', 'EINVAL', 'ENAMETOOLONG']);
-
-/**
- * A request of the CLI's (its commands carry no body) with node's own client, which never gives up on a slow answer: through the
- * daemon's Unix socket, rejected when nothing listens there; or over HTTP, where `fetch` gives up after 5 minutes, before a dry run
- * ends (ORC-409).
+ * A request of the CLI's (its commands carry no body) with node's own client, which never gives up on a slow answer but at the
+ * request's `signal` (ORC-434): through the daemon's Unix socket, rejected when nothing listens there; or over HTTP, where `fetch`
+ * gives up after 5 minutes, before a dry run ends (ORC-409).
  */
 function nodeRequest(to: RequestOptions, init: RequestInit): Promise<Response> {
   return new Promise((resolve, reject) => {
-    const req = request({ ...to, method: init.method ?? 'GET' }, (res) => {
+    const req = request({ ...to, method: init.method ?? 'GET', signal: init.signal ?? undefined }, (res) => {
       const chunks: Buffer[] = [];
       res.on('data', (c: Buffer) => chunks.push(c));
       res.on('end', () => resolve(new Response(Buffer.concat(chunks), { status: res.statusCode ?? 500, headers: { 'content-type': res.headers['content-type'] ?? 'text/plain' } })));
@@ -62,6 +80,9 @@ interface State {
 
 const minutes = (ms: number) => Math.max(0, Math.round(ms / 60_000));
 
+/** A delay as the CLI tells it: in hours, minutes or seconds. */
+const delay = (ms: number) => (ms >= 3_600_000 ? `${ms / 3_600_000} h` : ms >= 60_000 ? `${ms / 60_000} min` : `${ms / 1000} s`);
+
 /** A run in one line: what it runs, since when, and whether the heartbeat still holds it (ORC-220). */
 function runLine(run: Omit<RunRecord, 'token'>, now: number): string {
   const lease = run.leaseUntil !== undefined && run.leaseUntil < now ? ', lease expired' : '';
@@ -86,13 +107,22 @@ function formatStatus(s: State, now: number): string[] {
  * cannot give: it sends no credential.
  */
 async function ask(d: ControlDeps, path: string, init: RequestInit = {}, o: { slow?: boolean } = {}): Promise<Response | undefined> {
+  // One delay for the whole command, socket and HTTP together, the answer's body included (ORC-434).
+  const timeoutMs = d.timeoutMs ?? (o.slow ? DRY_RUN_TIMEOUT_MS : ANSWER_TIMEOUT_MS);
+  const signal = AbortSignal.timeout(timeoutMs);
+  const timedOut = (where: string) => {
+    const taken = init.method === 'POST' ? '; the command may have been taken, check with `factory status`' : '';
+    d.out(`${PRODUCT_NAME} did not answer ${where} within ${delay(timeoutMs)}: it may be stuck, check its log or restart it${taken}.`);
+    return undefined;
+  };
   if (d.socket) {
     try {
-      return await viaSocket(d.socket, path, init);
+      return await viaSocket(d.socket, path, { ...init, signal });
     } catch (err) {
+      if (signal.aborted) return timedOut(`through ${d.socket}`);
       // A socket a daemon killed left, or one this user may not open: HTTP, as without one. Any later error may come after
       // the daemon took the command: never sent twice.
-      if (!NOT_REACHED.has((err as NodeJS.ErrnoException).code ?? '')) {
+      if (!nothingReached(err)) {
         d.out(`${PRODUCT_NAME} did not answer through ${d.socket} (${(err as Error).message}): the command may have been taken, check with \`factory status\`.`);
         return undefined;
       }
@@ -102,8 +132,12 @@ async function ask(d: ControlDeps, path: string, init: RequestInit = {}, o: { sl
   try {
     const url = `${d.api}${path}`;
     const send = d.fetch ?? (o.slow && url.startsWith('http:') ? slowFetch : fetch);
-    res = await send(url, init);
+    const answer = await send(url, { ...init, signal });
+    // Read whole here, under the same delay: a body that stalls after its headers ends as a silent daemon does.
+    const body = await answer.arrayBuffer();
+    res = new Response(body.byteLength ? body : null, { status: answer.status, headers: answer.headers });
   } catch (err) {
+    if (signal.aborted) return timedOut(`on ${d.api}`);
     d.out(`${PRODUCT_NAME} does not answer on ${d.api} (${(err as Error).message}): run \`factory up\`, or check the port and FACTORY_HOME.`);
     return undefined;
   }

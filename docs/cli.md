@@ -103,7 +103,7 @@ Linear: connected · queue: active (0 waiting) · dev slots 1/3
     Stopped on request
 ```
 
-For each ticket: its state, a check in progress, the reason for a block, and its runs in progress with what they are executing. `, lease expired` follows a run the heartbeat no longer holds (ORC-220). Daemon unreachable or asking for a GitHub sign-in: says so, exit code 1.
+For each ticket: its state, a check in progress, the reason for a block, and its runs in progress with what they are executing. `, lease expired` follows a run the heartbeat no longer holds (ORC-220). Daemon unreachable, silent past 1 min (ORC-434), or asking for a GitHub sign-in: says so, exit code 1.
 
 ### `relais pause` / `relais resume`
 
@@ -134,7 +134,8 @@ changed meanwhile.
 
 Run it before a project's first ticket, to see it green; and after fixing a cause outside the repository that the fingerprint does
 not see (a variable's value in `factory.yml`, a registry, a test put on the known flaky list): the delegated tickets then read the
-new result. The command waits for the answer as long as the dry run lasts, through the socket or over HTTP.
+new result. The command waits for the answer as long as the dry run lasts, through the socket or over HTTP, up to 2 h (ORC-434):
+past that, it gives up and says so, and the daemon may still record the dry run it started.
 
 ### `factory replay <journal.json | directory>...` (ORC-174)
 
