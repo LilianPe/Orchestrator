@@ -17,7 +17,7 @@ import type { KeptFinding, ReviewDefect } from '../../core/audit.js';
 import type { Baseline, BaselineMeasure } from '../../core/baseline.js';
 import type { DryRun } from '../../core/dry-run.js';
 import type { GhostGrade, GhostJudgment, GhostReplay, GhostSide, GhostTicket } from '../../ghost/replay.js';
-import type { OutboxEffect } from '../../core/decision.js';
+import { LIFT_ON_WAIT, type OutboxEffect } from '../../core/decision.js';
 import { findingRowId, type ReviewFinding } from '../../core/review.js';
 import { claims, holds } from '../../core/routing.js';
 import type { FactoryEvent, QueueName, TicketState } from '../../core/types.js';
@@ -859,9 +859,9 @@ export class PgStore implements AsyncStore {
     await this.db.execute(sql`update inbox set acked_at = to_timestamp(${at / 1000}) where id = ${eventId} and acked_at is null`);
   }
 
-  /** Five reads side by side: the facts of a ticket for its measures, not a decision (no lock, no snapshot needed). */
+  /** Six reads side by side: the facts of a ticket for its measures, not a decision (no lock, no snapshot needed). */
   async measureFacts(projectId: string, ticketId: string): Promise<MeasureFacts> {
-    const [events, runs, acked, ticket, effects] = await Promise.all([
+    const [events, runs, acked, ticket, effects, lifted] = await Promise.all([
       this.db.execute<{ payload: FactoryEvent }>(sql`
         select payload from journal where ticket_id = ${ticketId} and payload->>'projectId' = ${projectId} order by seq
       `),
@@ -873,6 +873,11 @@ export class PgStore implements AsyncStore {
       `),
       this.getTicket(projectId, ticketId),
       this.listEffects(projectId, ticketId),
+      this.db.execute<{ id: string }>(sql`
+        select event_id as id from decision_trace
+        where ticket_id = ${ticketId} and decision->>'projectId' = ${projectId}
+          and exists (select 1 from jsonb_array_elements_text(coalesce(decision->'trace', '[]'::jsonb)) line where line like ${`${LIFT_ON_WAIT}:%`})
+      `),
     ]);
     return {
       devSession: ticket?.linearSessionId,
@@ -880,6 +885,7 @@ export class PgStore implements AsyncStore {
       runs,
       effects,
       acks: Object.fromEntries(acked.rows.map((r) => [r.id, Number(r.at)])),
+      liftedOnWait: lifted.rows.map((r) => r.id),
     };
   }
 

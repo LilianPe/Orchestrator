@@ -11,7 +11,12 @@ export type ActivityType = 'thought' | 'response' | 'elicitation' | 'error';
 export type Effect =
   /** `sensitivePaths`: set on a run started from an untrusted event, the mark that makes the branch untrusted (`SENSITIVE_PATHS`, ORC-338). */
   /** `relaunchOf`: the lost attempt whose step this starts again (ORC-220): what it read and its session come from its record. */
-  | { kind: 'start_run'; job: string; input?: InputKind; inputText?: string; linearSessionId?: string; resume?: boolean; sensitivePaths?: readonly string[]; relaunchOf?: string }
+  /**
+   * `relaunches`: set on the start a human message decided (ORC-440), true when it relaunches the ticket's work, false for the answer
+   * agent's; true on the start of a relaunch the wait kept (`blockers.done`). The rework measure reads it. Absent on any other
+   * start, and on a row decided before.
+   */
+  | { kind: 'start_run'; job: string; input?: InputKind; inputText?: string; linearSessionId?: string; resume?: boolean; sensitivePaths?: readonly string[]; relaunchOf?: string; relaunches?: boolean }
   /** Without linearSessionId: stop the ticket's dev work. With it: stop only the runs of that (question) session. */
   | { kind: 'stop_run'; linearSessionId?: string }
   /**
@@ -81,6 +86,15 @@ export type OutboxEffect = Effect | { kind: 'settle' };
  * names it within the ticket (key `<ticket>:<slot>`): arming a slot again pushes its timer back.
  */
 export type Timer = TimerFired & { slot: string; ms: number };
+
+/**
+ * The trace of a relaunch the wait keeps (`liftOnWait`, ORC-440): no run starts with its decision, the rework measure reads it
+ * there, and counts it once `blockers.done` starts it. Read back from the decisions stored: reworded, the past ones are no longer read.
+ */
+export const LIFT_ON_WAIT = 'relaunch kept for the end of the wait';
+
+/** A decision's trace holds a relaunch the wait keeps (`liftOnWait`). */
+export const liftsOnWait = (trace: readonly string[]): boolean => trace.some((line) => line.startsWith(`${LIFT_ON_WAIT}:`));
 
 /** What `decide` returns: state changes for `reduce`, effects to run, timers to arm, and why. */
 export interface Decision {

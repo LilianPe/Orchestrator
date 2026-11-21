@@ -3878,7 +3878,8 @@
             "job": "ask",
             "input": "thread",
             "inputText": "pourquoi ce choix ?",
-            "linearSessionId": "ls-1"
+            "linearSessionId": "ls-1",
+            "relaunches": false
           }
         ],
         "timers": [
