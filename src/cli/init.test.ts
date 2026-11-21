@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -8,11 +8,19 @@ import type { Exec } from '../adapters/exec.js';
 import { loadFactoryLimits, parseFactoryYml } from '../config/factory-yml.js';
 import { loadInstance, loadSecrets, saveInstance, saveSecrets, type InstanceConfig } from '../config/instance.js';
 import { MISSING_TEST_COMMAND, parseRepoConfig, testCommandWarnings } from '../config/repo-config.js';
+import { LINEAR_NEEDS_SECRETS_KEY } from '../config/secrets-file.js';
+import { readSecretsKey } from '../config/server-secrets.js';
 import { slugify } from '../core/naming.js';
 import { MemoryStore } from '../store/memory-store.js';
 import { GITHUB_APP_PERMISSIONS, instanceCards, MATURITY_HEADER, NO_PUBLIC_URL, PROPOSAL_HEADER, PYTEST_BESIDE_TEST, runInit, storeReport, type InitDeps, type InitIO } from './init.js';
 import type { MaturityReport } from './maturity.js';
 import { runValidateCommand } from './validate.js';
+
+/** A `secrets_key` of the shell's environment, for an init that asks Linear without --dev (ORC-470). */
+const KEY_ENV = { FACTORY_SECRETS_KEY: 'k'.repeat(44) };
+const declareEnvKey = (home: string) => appendFileSync(join(home, 'factory.yml'), 'secrets_key: env:FACTORY_SECRETS_KEY\n');
+/** secrets.json opened as the daemon opens it, with factory.yml's `secrets_key`. */
+const secretsOf = async (home: string) => loadSecrets(home, await readSecretsKey(home, KEY_ENV));
 
 function scriptedIO(answers: string[]): InitIO & { printed: string[] } {
   const printed: string[] = [];
@@ -82,7 +90,7 @@ describe('factory init', () => {
     const cfg = loadInstance(home);
     expect(cfg.relay).toEqual({ kind: 'smee', url: 'https://smee.io/abc' });
     expect(cfg.projects).toEqual([{ id: expect.any(String), repoPath: repo, linearTeamKey: 'REL' }]);
-    expect(loadSecrets(home).linear).toEqual({ clientId: 'cid', clientSecret: 'csecret', webhookSecret: 'whsecret' });
+    expect((await secretsOf(home)).linear).toEqual({ clientId: 'cid', clientSecret: 'csecret', webhookSecret: 'whsecret' });
     expect(existsSync(join(repo, '.factory'))).toBe(false);
     const out = io.printed.join('\n');
     expect(out).toContain(`${PROPOSAL_HEADER}setup: npm ci\ncommands:\n  test: npm test\n`);
@@ -178,7 +186,7 @@ describe('factory init', () => {
     await runInit({ io, home, cwd: repo, dev: true, createSmee: async () => 'https://smee.io/abc', exec });
 
     expect(asked.filter((q) => q === 'Webhook signing secret')).toHaveLength(3);
-    expect(loadSecrets(home).linear?.webhookSecret).toBe('whsecret');
+    expect((await secretsOf(home)).linear?.webhookSecret).toBe('whsecret');
   });
 
   it("replaces the repo's entry written in another form (git's `C:/x`, a trailing slash, another case on Windows), and stores a typed path resolved", async () => {
@@ -302,12 +310,13 @@ describe('factory init: the maturity report, one card per point to approve (ORC-
 });
 
 /** A fresh home and repository, and what one `init` run with `answers` printed. */
-async function initOnce(o: { home?: string; repo?: string; answers?: string[]; dev?: boolean; smee?: () => Promise<string>; config?: Partial<InstanceConfig> } = {}) {
+async function initOnce(o: { home?: string; repo?: string; answers?: string[]; dev?: boolean; smee?: () => Promise<string>; config?: Partial<InstanceConfig>; envKey?: boolean } = {}) {
   const home = o.home ?? mkdtempSync(join(tmpdir(), 'factory-init-home-'));
   if (o.config) saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], ...o.config });
+  if (o.envKey) declareEnvKey(home);
   const repo = o.repo ?? mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
   const io = scriptedIO(o.answers ?? ['REL', 'cid', 'csecret', 'whsecret']);
-  await runInit({ io, home, cwd: repo, dev: o.dev, createSmee: o.smee ?? (async () => 'https://smee.io/abc'), exec: gitTop(repo) });
+  await runInit({ io, home, cwd: repo, dev: o.dev, env: KEY_ENV, createSmee: o.smee ?? (async () => 'https://smee.io/abc'), exec: gitTop(repo) });
   return { home, repo, out: io.printed.join('\n') };
 }
 
@@ -354,9 +363,110 @@ describe('factory init: Smee only for development (ORC-411)', () => {
   });
 
   it('keeps a channel factory.yml already has, without --dev', async () => {
-    const { home, out } = await initOnce({ config: { relay: { kind: 'smee', url: 'https://smee.io/old' } } });
+    const { home, out } = await initOnce({ config: { relay: { kind: 'smee', url: 'https://smee.io/old' } }, envKey: true });
     expect(loadInstance(home).relay).toEqual({ kind: 'smee', url: 'https://smee.io/old' });
     expect(out).toContain('https://smee.io/old');
+  });
+});
+
+/** Every file under `dir`, read as text: where a secret written in clear would show. */
+function filesText(dir: string): string {
+  return readdirSync(dir, { recursive: true, encoding: 'utf8' })
+    .map((name) => join(dir, name))
+    .filter((path) => statSync(path).isFile())
+    .map((path) => readFileSync(path, 'utf8'))
+    .join('\n');
+}
+
+describe('factory init: secrets_key, Linear never in clear (ORC-470)', () => {
+  const CANARY = ['canary-client-secret-470', 'canary-webhook-secret-470'];
+
+  it('--dev draws secrets_key into a file of its own, mode 0600, declares it in factory.yml, never prints it, and seals secrets.json', async () => {
+    const { home, out } = await initOnce({ dev: true, answers: ['REL', 'cid', ...CANARY] });
+    const key = readFileSync(join(home, 'secrets.key'), 'utf8').trim();
+    expect(key.length).toBeGreaterThanOrEqual(32);
+    if (process.platform !== 'win32') expect(statSync(join(home, 'secrets.key')).mode & 0o777).toBe(0o600);
+    expect(out).not.toContain(key);
+    const text = readFileSync(join(home, 'factory.yml'), 'utf8');
+    expect(parseFactoryYml(text, { GH_APP_ID: '1', GH_APP_KEY: '/k', CLAUDE_CODE_OAUTH_TOKEN: 't' }, undefined, 'defer').secretSources).toEqual({ factory_home: { kind: 'file', options: { dir: home } } });
+    expect(text).toContain('secrets_key: factory_home:secrets.key');
+    expect(text).not.toContain(key);
+    // As the daemon reads it, at its start.
+    expect(await readSecretsKey(home, {})).toBe(key);
+    expect((await secretsOf(home)).linear).toMatchObject({ clientSecret: CANARY[0], webhookSecret: CANARY[1] });
+    const disk = filesText(home);
+    for (const canary of CANARY) expect(disk).not.toContain(canary);
+  });
+
+  it('run again with --dev, keeps the key it drew: secrets.json stays readable', async () => {
+    const { home, repo } = await initOnce({ dev: true });
+    const key = readFileSync(join(home, 'secrets.key'), 'utf8');
+    const yml = readFileSync(join(home, 'factory.yml'), 'utf8');
+    await initOnce({ home, repo, dev: true, answers: [] });
+    expect(readFileSync(join(home, 'secrets.key'), 'utf8')).toBe(key);
+    expect(readFileSync(join(home, 'factory.yml'), 'utf8')).toBe(yml);
+    expect((await secretsOf(home)).linear?.clientSecret).toBe('csecret');
+  });
+
+  it('--dev draws none beside a secrets_key factory.yml names', async () => {
+    const { home } = await initOnce({ dev: true, envKey: true, answers: ['REL', 'cid', ...CANARY] });
+    expect(existsSync(join(home, 'secrets.key'))).toBe(false);
+    expect(loadSecrets(home, KEY_ENV.FACTORY_SECRETS_KEY).linear?.clientSecret).toBe(CANARY[0]);
+    for (const canary of CANARY) expect(filesText(home)).not.toContain(canary);
+  });
+
+  it('--dev draws no key off the loopback, nor beside a secrets.json sealed with another key, nor over a source of its name', async () => {
+    const refusals: [string, (home: string) => void, string][] = [
+      ['exposed', (home) => saveInstance(home, { port: 4100, host: '0.0.0.0', publicUrl: 'https://factory.example.com', relay: { kind: 'none' }, projects: [] }), `${LINEAR_NEEDS_SECRETS_KEY}.`],
+      ['sealed', (home) => saveSecrets(home, {}, 'another-key-'.repeat(4)), 'secrets.json is encrypted at rest with a key factory.yml no longer names'],
+      ['its name', (home) => writeFileSync(join(home, 'factory.yml'), 'secret_sources: { factory_home: { kind: systemd-creds } }\n'), 'secret_sources.factory_home in factory.yml'],
+    ];
+    for (const [name, arrange, refusal] of refusals) {
+      const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+      arrange(home);
+      const asked: string[] = [];
+      const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
+      const io: InitIO = { ask: async (q) => (asked.push(q), ''), print: () => {} };
+      await expect(runInit({ io, home, cwd: repo, dev: true, env: {}, createSmee: async () => 'https://smee.io/abc', exec: gitTop(repo) }), name).rejects.toThrow(refusal);
+      expect({ name, asked, drawn: existsSync(join(home, 'secrets.key')) }).toEqual({ name, asked: [], drawn: false });
+    }
+  });
+
+  it('--dev refuses a key file too short, naming it, before asking anything', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+    writeFileSync(join(home, 'secrets.key'), 'short\n', { mode: 0o600 });
+    const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
+    await expect(runInit({ io: scriptedIO([]), home, cwd: repo, dev: true, env: {}, createSmee: async () => 'https://smee.io/abc', exec: gitTop(repo) })).rejects.toThrow(`${join(home, 'secrets.key')}: at least 32 characters expected`);
+  });
+
+  it('declares its key under a bare secret_sources:', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+    writeFileSync(join(home, 'factory.yml'), 'secret_sources:\n');
+    await initOnce({ home, dev: true });
+    expect(await readSecretsKey(home, {})).toBe(readFileSync(join(home, 'secrets.key'), 'utf8').trim());
+  });
+
+  it('says how to go on when the key\'s source is out of this shell\'s reach', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+    saveInstance(home, { port: 4100, host: '127.0.0.1', publicUrl: 'https://factory.example.com', relay: { kind: 'none' }, projects: [] });
+    appendFileSync(join(home, 'factory.yml'), 'secret_sources: { creds: { kind: systemd-creds } }\nsecrets_key: creds:secrets-key\n');
+    const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
+    await expect(runInit({ io: scriptedIO([]), home, cwd: repo, env: {}, createSmee: async () => 'https://smee.io/abc', exec: gitTop(repo) })).rejects.toThrow(
+      /CREDENTIALS_DIRECTORY is not set.*\nfactory init seals Linear's values with secrets_key, never in clear \(ORC-470\): run it where that source is readable, or write the Linear values in factory\.yml's linear section/s,
+    );
+  });
+
+  it('without --dev nor secrets_key, refuses before asking anything, and writes no secrets.json', async () => {
+    for (const config of [{ publicUrl: 'https://factory.example.com' }, { relay: { kind: 'smee' as const, url: 'https://smee.io/old' } }]) {
+      const asked: string[] = [];
+      const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+      saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], ...config });
+      const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
+      const io: InitIO = { ask: async (q) => (asked.push(q), ''), print: () => {} };
+      await expect(runInit({ io, home, cwd: repo, env: {}, createSmee: async () => 'https://smee.io/abc', exec: gitTop(repo) })).rejects.toThrow(`${LINEAR_NEEDS_SECRETS_KEY}.`);
+      expect(asked).toEqual([]);
+      expect(existsSync(join(home, 'secrets.json'))).toBe(false);
+    }
   });
 });
 
@@ -384,8 +494,8 @@ describe('factory init: the GitHub App and factory.yml (ORC-411)', () => {
   });
 
   it('with a public URL, the App\'s webhook is optional: its secret is said to add, never written, as an unset variable would stop the daemon', async () => {
-    const { home, out } = await initOnce({ config: { publicUrl: 'https://factory.example.com' } });
-    expect(parseFactoryYml(readFileSync(join(home, 'factory.yml'), 'utf8'), { GH_APP_ID: '1', GH_APP_KEY: '/k', CLAUDE_CODE_OAUTH_TOKEN: 't' }).github?.webhookSecret).toBeUndefined();
+    const { home, out } = await initOnce({ config: { publicUrl: 'https://factory.example.com' }, envKey: true });
+    expect(parseFactoryYml(readFileSync(join(home, 'factory.yml'), 'utf8'), { GH_APP_ID: '1', GH_APP_KEY: '/k', CLAUDE_CODE_OAUTH_TOKEN: 't', ...KEY_ENV }).github?.webhookSecret).toBeUndefined();
     expect(out).toContain('webhook_secret: env:GH_WEBHOOK_SECRET');
   });
 
@@ -394,7 +504,8 @@ describe('factory init: the GitHub App and factory.yml (ORC-411)', () => {
     rmSync(join(home, 'factory.yml'));
     writeFileSync(join(home, 'config.yaml'), 'port: 4555\nprojects: [{ id: other, repoPath: /other, linearTeamKey: OTH }]\n');
     const { out } = await initOnce({ home, repo, dev: true });
-    const yml = parseFactoryYml(readFileSync(join(home, 'factory.yml'), 'utf8'), ENV);
+    // Its secrets_key a file's, read at the start alone.
+    const yml = parseFactoryYml(readFileSync(join(home, 'factory.yml'), 'utf8'), ENV, undefined, 'defer');
     expect(yml.claude?.active).toBe('main');
     expect(yml.github).toBeUndefined();
     expect(loadInstance(home)).toMatchObject({ port: 4100, projects: [expect.objectContaining({ linearTeamKey: 'REL' })] });
@@ -405,7 +516,7 @@ describe('factory init: the GitHub App and factory.yml (ORC-411)', () => {
   it('keeps the comments of what it does not change, and writes no default the file leaves out (ORC-199)', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
     writeFileSync(join(home, 'factory.yml'), 'port: 4200 # my port\npublic_url: https://f.example.com # tunnel\n');
-    await initOnce({ home });
+    await initOnce({ home, envKey: true });
     const text = readFileSync(join(home, 'factory.yml'), 'utf8');
     expect(text).toContain('port: 4200 # my port\npublic_url: https://f.example.com # tunnel\n');
     expect(text).not.toMatch(/^(host|relay):/m);
@@ -441,27 +552,31 @@ describe('factory init: the GitHub App and factory.yml (ORC-411)', () => {
     const { home, repo } = first;
     // Edited since: a credential init never asked, the OAuth tokens of « Connect Linear », the roles added by hand.
     const cfg = loadInstance(home);
-    writeFileSync(join(home, 'factory.yml'), 'github: { app_id: "42", private_key: env:MY_KEY }\n');
-    const secrets = loadSecrets(home);
-    saveSecrets(home, { ...secrets, linear: { ...secrets.linear!, accessToken: 'at', refreshToken: 'rt', expiresAt: 1 } });
+    // The secrets_key --dev declared kept: it holds secrets.json.
+    const keyLines = readFileSync(join(home, 'factory.yml'), 'utf8').match(/^secret_sources:\n(?: .*\n)*secrets_key: .*\n/m)![0];
+    writeFileSync(join(home, 'factory.yml'), `github: { app_id: "42", private_key: env:MY_KEY }\n${keyLines}`);
+    const key = (await readSecretsKey(home))!;
+    const secrets = loadSecrets(home, key);
+    saveSecrets(home, { ...secrets, linear: { ...secrets.linear!, accessToken: 'at', refreshToken: 'rt', expiresAt: 1 } }, key);
     saveInstance(home, { ...cfg, projects: cfg.projects.map((p) => ({ ...p, authz: { maintainers: [], validators: ['v1', 'v2'], githubLogins: { u: 'login' } } })) });
-    const before = { yml: readFileSync(join(home, 'factory.yml'), 'utf8'), secrets: loadSecrets(home), config: loadInstance(home) };
+    const before = { yml: readFileSync(join(home, 'factory.yml'), 'utf8'), secrets: loadSecrets(home, key), config: loadInstance(home) };
 
     const { out } = await initOnce({ home, repo, answers: [] });
     expect(readFileSync(join(home, 'factory.yml'), 'utf8')).toBe(before.yml);
-    expect(loadSecrets(home)).toEqual(before.secrets);
+    expect(loadSecrets(home, key)).toEqual(before.secrets);
     expect(loadInstance(home)).toEqual(before.config);
     expect(out).toContain('factory.yml: its projects and webhook relay written, the rest kept as it is.');
   });
 
   it('a new value replaces the stored one; another client ID keeps nothing of the old application', async () => {
     const { home, repo } = await initOnce({ dev: true });
-    const s = loadSecrets(home);
-    saveSecrets(home, { ...s, linear: { ...s.linear!, accessToken: 'at' } });
+    const key = (await readSecretsKey(home))!;
+    const s = loadSecrets(home, key);
+    saveSecrets(home, { ...s, linear: { ...s.linear!, accessToken: 'at' } }, key);
     await initOnce({ home, repo, answers: ['', '', 'csecret2', ''] });
-    expect(loadSecrets(home).linear).toEqual({ clientId: 'cid', clientSecret: 'csecret2', webhookSecret: 'whsecret', accessToken: 'at' });
+    expect((await secretsOf(home)).linear).toEqual({ clientId: 'cid', clientSecret: 'csecret2', webhookSecret: 'whsecret', accessToken: 'at' });
     // Its secrets are asked: an empty webhook secret is asked again, not taken from the old application.
     await initOnce({ home, repo, answers: ['', 'cid2', 'cs3', '', 'wh3'] });
-    expect(loadSecrets(home).linear).toEqual({ clientId: 'cid2', clientSecret: 'cs3', webhookSecret: 'wh3' });
+    expect((await secretsOf(home)).linear).toEqual({ clientId: 'cid2', clientSecret: 'cs3', webhookSecret: 'wh3' });
   });
 });

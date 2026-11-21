@@ -58,14 +58,15 @@ All of the instance's state lives in **`FACTORY_HOME`**, by default `~/.factory`
 | Path | Contents | Sensitive |
 |---|---|---|
 | `factory.yml` | The instance (port, host, public URL, projects, webhook relay, knowledge base), the GitHub App, Claude token, budgets, every secret as a reference, never a value ([`configuration.md`](configuration.md)). **Required**: the daemon refuses to start without it. Written by `factory init`, which keeps the rest of an existing file. | no (references only) |
-| `secrets.json` | Linear's OAuth tokens, which the daemon writes, and the credentials `factory init` asks; encrypted at rest with `secrets_key` (ORC-398). Written with mode `0600`. On Windows, which has no POSIX mode, the file inherits the permissions (ACL) of its directory: put `FACTORY_HOME` in a directory that only the factory's user can read (the user profile is, by default). | **yes** |
+| `secrets.json` | Linear's OAuth tokens, which the daemon writes, and the credentials `factory init` asks; encrypted at rest with `secrets_key` (ORC-398), never written in clear (ORC-470). Written with mode `0600`. On Windows, which has no POSIX mode, the file inherits the permissions (ACL) of its directory: put `FACTORY_HOME` in a directory that only the factory's user can read (the user profile is, by default). | **yes** |
+| `secrets.key` | On a workstation, the `secrets_key` `factory init --dev` drew (ORC-470), which encrypts `secrets.json`; mode `0600`, never printed, declared in `factory.yml` as a `file` source ([`configuration.md`](configuration.md#the-key-of-a-workstation-orc-470)). A server keeps its key in a sealed source instead. | **yes** |
 | `transcripts/<runId>.jsonl` | `stream-json` output of each run, secrets masked, deleted 30 days after its last write ([`operations.md`](operations.md#logs-transcripts-and-data)). | yes (code, ticket contents) |
 | `workspaces/<project>/<ticket>/` | Git worktree of each ticket in progress. | — |
 | `workspaces/<project>/_trunk/<runId>/` | Detached copy of the main branch, one per read-only question, deleted when it ends. | — |
 
 The daemon's logs go to standard output. `config.yaml`, `run-settings.json` and `logs/` are gone (ORC-199): left by an older install, they are never read, and the start and `factory doctor` name each one to delete. Nothing of `config.yaml` is migrated: its keys are written in `factory.yml` ([`configuration.md`](configuration.md#the-instance-in-factoryyml-orc-199)).
 
-Backing up an instance = backing up `factory.yml`, `secrets.json` and the Postgres database of `FACTORY_DATABASE_URL` (`pg_dump`): the factory keeps its state nowhere else (ORC-178). A SQLite database file left from before Postgres is archived then deleted ([`operations.md`](operations.md#archiving-the-sqlite-data-orc-178)). Worktrees are recreated from the pushed branches.
+Backing up an instance = backing up `factory.yml`, `secrets.json` (and the key that opens it: `secrets.key` on a workstation, ORC-470) and the Postgres database of `FACTORY_DATABASE_URL` (`pg_dump`): the factory keeps its state nowhere else (ORC-178). A SQLite database file left from before Postgres is archived then deleted ([`operations.md`](operations.md#archiving-the-sqlite-data-orc-178)). Worktrees are recreated from the pushed branches.
 
 ## Uninstalling
 

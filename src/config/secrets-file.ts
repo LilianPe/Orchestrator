@@ -13,6 +13,15 @@ const AAD = Buffer.from('secrets.json');
 /** What a derived key needs to start from: `openssl rand -base64 32` gives 44 characters. */
 export const MIN_SECRETS_KEY_LENGTH = 32;
 
+/** How to set `secrets_key` (ORC-398, ORC-470): the start, doctor, init and the token writes say it alike. */
+export const SECRETS_KEY_REQUIRED = `set secrets_key in factory.yml (a reference, at least ${MIN_SECRETS_KEY_LENGTH} characters: openssl rand -base64 32; on a workstation, factory init --dev writes one): it encrypts secrets.json at rest`;
+
+/**
+ * Why nothing of Linear goes on without `secrets_key`, on the loopback too (ORC-470): its tokens and credentials are written to
+ * secrets.json, never in clear. The start and doctor refuse with it, Connect Linear and init alike.
+ */
+export const LINEAR_NEEDS_SECRETS_KEY = `Linear's tokens and credentials are kept in secrets.json, never in clear: ${SECRETS_KEY_REQUIRED}`;
+
 interface Box {
   iv: string;
   tag: string;
