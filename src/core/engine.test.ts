@@ -186,10 +186,12 @@ describe('decide — default reactions (ORC-392)', () => {
     expect(out).toEqual(decision({ events: [{ type: 'feedback.appended', item: { author: 'L', body: 'retiens agrégats côté serveur', at: 1000, source: 'session', taint: 'trusted', kind: 'command' } }] }));
   });
 
-  it('the agent:stop label stops nothing any longer (ORC-201): the stop of the session, `/stop` or the undelegation do', () => {
-    for (const change of ['added', 'removed'] as const) {
-      expect(decide(ticket({ logical: 'dev', activeRunId: 'r1', activeJob: 'dev' }), ev('label.changed', { label: 'agent:stop', change }), workflow)).toEqual(decision());
-    }
+  it('the agent:stop label stops nothing any longer (ORC-201): its addition says how to stop, the stop of the session stops', () => {
+    const atWork = ticket({ logical: 'dev', activeRunId: 'r1', activeJob: 'dev' });
+    const added = decide(atWork, ev('label.changed', { label: 'agent:stop', change: 'added' }), workflow);
+    expect(added).toEqual(decision({ effects: [{ kind: 'comment', body: expect.stringMatching(/^The `agent:stop` label stops nothing any longer: .*`\/stop`/) }] }));
+    expect(decide(atWork, ev('label.changed', { label: 'agent:stop', change: 'removed' }), workflow)).toEqual(decision());
+    expect(decide(ticket({ delegated: false }), ev('label.changed', { label: 'agent:stop', change: 'added' }), workflow)).toEqual(decision());
     const out = decide(ticket({ logical: 'dev' }), ev('session.stopped', { linearSessionId: 'ls-1' }), workflow);
     expect(kinds(out)).toEqual({ events: ['work.cancelled', 'ticket.blocked'], effects: ['stop_run', 'activity', 'labels'], timers: [] });
   });

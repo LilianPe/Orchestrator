@@ -519,7 +519,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     };
     const ciBound = wf.limits.ciFixAttempts;
     // A human event that starts work, blocked or not (ORC-184), the repair of one included: `factory run repair` is an operator's.
-    const CI_RESETS: EventType[] = ['pr.opened', 'session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'ticket.delegated', 'dead_letter.repaired'];
+    const CI_RESETS: EventType[] = ['pr.opened', 'session.prompted', 'ticket.commented', 'status.changed', 'ticket.delegated', 'dead_letter.repaired'];
     const redCiCounterexample = seq(
       ...delegated(),
       ext('status.changed', { from: 'todo', to: 'human_review' }),
@@ -610,7 +610,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
      * `humanReviewRounds` agrees with the model after every step; a round past
      * the bound starts nothing and blocks; and no round moves the count of the review and CI loop up.
      */
-    const HUMAN_RESETS: EventType[] = ['pr.opened', 'session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'ticket.delegated', 'dead_letter.repaired'];
+    const HUMAN_RESETS: EventType[] = ['pr.opened', 'session.prompted', 'ticket.commented', 'status.changed', 'ticket.delegated', 'dead_letter.repaired'];
     const humanRoundsBounded = (r: Run, bound: number): void => {
       let rounds = 0;
       for (const step of decided(r)) {
@@ -893,7 +893,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
             if (relaunched && e.type === 'run.lost') expect(recent.length).toBeLessThan(CUT_RELAUNCHES);
             if (relaunched && e.type === 'verify.lost') expect(recent.length).toBeLessThan(CUT_RELAUNCHES);
             const reset = step.decision.events.some((x) => x.type === 'ticket.patched' && x.patch.cutRelaunches?.length === 0);
-            if (reset && !answersBlock(step)) expect(['session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'ticket.delegated']).toContain(e.type);
+            if (reset && !answersBlock(step)) expect(['session.prompted', 'ticket.commented', 'status.changed', 'ticket.delegated']).toContain(e.type);
           }
         });
       },

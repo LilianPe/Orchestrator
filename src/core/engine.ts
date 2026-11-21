@@ -731,7 +731,7 @@ function stagnationBlock(p: EventPayloads['run.finished'], workflow: Workflow): 
  * on the PR never unblocks (ORC-190): authorized, in Human Review, it starts work as a reply does, and gives that bound back
  * when it arms its round (`startReaction`).
  */
-const HUMAN_RELAUNCH = new Set<EventType>(['session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'ticket.delegated', 'pr.reviewed']);
+const HUMAN_RELAUNCH = new Set<EventType>(['session.prompted', 'ticket.commented', 'status.changed', 'ticket.delegated', 'pr.reviewed']);
 
 /** A human's relaunch of a blocked ticket: those events, and a mention that answers the block (ORC-415). */
 const relaunchedByHuman = (event: FactoryEvent, ticket: TicketState): boolean => HUMAN_RELAUNCH.has(event.type) || repliesToBlock(event, ticket);
@@ -747,7 +747,7 @@ function resetRedCi(out: Decision, ticket: TicketState | undefined): void {
 }
 
 /**
- * Work starts again on a blocked ticket. Relaunched by a human (a reply, a label, a status change), the
+ * Work starts again on a blocked ticket. Relaunched by a human (a reply, a status change), the
  * red-CI count and the « Loop » guard reset; by a machine event (a timer, red CI itself), it does not, or a timer armed before
  * the block would undo it.
  */
@@ -1161,8 +1161,8 @@ function prFailed(event: FactoryEvent<'pr.checks_failed' | 'pr.conflicted'>, tic
 }
 
 /**
- * The stop of the ticket's session in Linear: the work stops, the ticket blocked until a reply. The `agent:stop` label stops
- * nothing since ORC-201: `/stop` and the undelegation stop from Linear too.
+ * The stop of the ticket's session in Linear: the work stops, the ticket blocked until a reply. `/stop` and the undelegation
+ * stop from Linear too; the `agent:stop` label no longer (ORC-201), its addition only says so (`RETIRED_STOP_LABEL`).
  */
 function stopped(out: Decision, event: FactoryEvent<'session.stopped'>): Decision {
   reacted(out, event.type);
@@ -2073,6 +2073,11 @@ export const BLOCKED_LABEL = 'Bloqué';
 /** The labels the connection to Linear creates in a team: `Bloqué` alone, no `agent:*` label any longer (ORC-201). */
 export const FACTORY_LABELS: readonly string[] = [BLOCKED_LABEL];
 
+/** The stop label of Relais, created until ORC-201: it stops nothing any longer, its addition is answered (`RETIRED_STOP_ANSWER`). */
+const RETIRED_STOP_LABEL = 'agent:stop';
+const RETIRED_STOP_ANSWER =
+  'The `agent:stop` label stops nothing any longer: to stop the work, press Stop in the agent session, write `/stop` there, or remove the delegation.';
+
 /**
  * The label follows the ticket's blocked flag from before the event to after the decision, however it
  * changed: a block or unblock decided here, or a lift made by `reduce` itself (a repair, a cancellation).
@@ -2582,6 +2587,10 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'label.changed': {
       // Routing is sticky (ORC-291): a ticket at work stays in its repo, whichever repo of the team a label added names.
       const { change, otherRepo } = event.payload;
+      // The label the connection created before ORC-201 may still be in the team: whoever adds it is told how to stop.
+      if (change === 'added' && event.payload.label === RETIRED_STOP_LABEL && ticket?.delegated) {
+        out.effects.push({ kind: 'comment', body: RETIRED_STOP_ANSWER });
+      }
       if (change === 'added' && otherRepo && ticket && holds(ticket)) {
         out.effects.push({ kind: 'comment', body: `This ticket stays on the repository ${event.projectId}: the repository does not change along the way. With no branch or PR yet, stop the work, remove the delegation, wait 5 minutes for the reconciliation to see it, then delegate again. Otherwise, open a new ticket for the other repository.` });
       }

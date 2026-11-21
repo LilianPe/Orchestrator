@@ -380,8 +380,9 @@ const debouncedReply: fc.Arbitrary<DraftEntry[]> = external(devReply).map((reply
   { kind: 'external', draft: { type: 'timer.fired', payload: reply.kind === 'external' && (reply.draft.payload as { kind?: string }).kind ? { kind: 'debounce', payload: { job: 'dev-feedback', inbox: true } } : DEBOUNCE }, untrusted: false },
 ]);
 
-/** A human talks to the factory: in the dev session, in a question session, through a label. */
-const human: fc.Arbitrary<Draft> = fc.oneof(draftOf('session.prompted'), draftOf('session.mentioned'), draftOf('command'), draftOf('label.changed'));
+/** A human talks to the factory: in the dev session, in a question session, through a label; or stops the dev session. */
+const devStop: fc.Arbitrary<Draft> = fc.constant({ type: 'session.stopped', payload: { linearSessionId: DEV_SESSION } });
+const human: fc.Arbitrary<Draft> = fc.oneof(draftOf('session.prompted'), draftOf('session.mentioned'), draftOf('command'), draftOf('label.changed'), devStop);
 const humanFragment: fc.Arbitrary<DraftEntry[]> = external(human).map((e) => [e]);
 
 /** The forge reports on the PR: red CI, green CI, merge, close without merge (ORC-134). */
