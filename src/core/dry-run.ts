@@ -164,7 +164,7 @@ const NAME = /[A-Z][A-Z0-9_]{2,}/g;
  * A port on the loopback, as the tools write it: `127.0.0.1:5432`, `[::1]:3128`, curl's `127.0.0.1 port 3128`, urllib3's
  * `host='localhost', port=8000`, libpq's `"127.0.0.1", port 5432`, asyncpg's `('127.0.0.1', 5432)`. The port is the first group.
  */
-const LOOPBACK_PORT = /(?<![\w.:])(?:127\.0\.0\.1|localhost|::1|\[::1\])['"]?(?::|(?:,\s*|\s+)(?:port[ =]?\s*)?)(\d{1,5})\b/;
+const LOOPBACK_PORT = /(?<![\w.:])(?:127\.0\.0\.1|localhost|::1|\[::1\])['"]?\)?(?::|(?:,\s*|\s+)(?:port[ =]?\s*)?)(\d{1,5})\b/;
 /** A connection refused, whatever the tool's words: Node's, curl's, Go's, wget's, apt's, Maven's, Python's. */
 const REFUSAL = /ECONNREFUSED|connection refused|failed to connect|could(?:n't| not) connect|connect call failed/i;
 /** The egress proxy's relay, where the setup's tools reach the registries. */
@@ -172,20 +172,28 @@ const RELAY_PORT = '3128';
 const refusedOn = (line: string) => (REFUSAL.test(line) ? LOOPBACK_PORT.exec(line)?.[1] : undefined);
 /** The relay refusing, by its address, whatever the tool's words: a line that only names it (`HTTPS_PROXY=…`) is not that. */
 const relayRefused = (line: string) => refusedOn(line) === RELAY_PORT;
-/** On the loopback, where the services listen: a port refusing there that is not the relay's, or what a client of a database says. */
-const SERVICE_LINES = [/could not connect to (?:server|database)/i, /Is the server running/];
+/**
+ * On the loopback, where the services listen: a port refusing there that is not the relay's, or what libpq says of a server
+ * there, the host on the line (`Is the server running on host "localhost"`): of a remote one, a breakdown of the network.
+ */
+const LOOPBACK_HOST = /(?<![\w.:])(?:127\.0\.0\.1|localhost|::1)\b/;
+const LIBPQ_SERVER = /could not connect to (?:server|database)|Is the server running/i;
 const serviceLine = (line: string) => {
   const port = refusedOn(line);
-  return port ? port !== RELAY_PORT : SERVICE_LINES.some((p) => p.test(line));
+  return port ? port !== RELAY_PORT : LOOPBACK_HOST.test(line) && LIBPQ_SERVER.test(line);
 };
 /**
  * A registry or the egress proxy not answering: nothing of the repository's state, which the dry run then does not record. The
  * proxy's 502 says so in its body (`egress proxy: getaddrinfo ENOTFOUND …`, `egress proxy: not sent on: …`), pip in a `ProxyError`;
- * to a CONNECT, curl and git say only its status. The relay refusing is read by its address (`relayRefused`).
+ * to a CONNECT, the tools say only its status, each in its words. A 5xx said is the proxy's or the registry's, whatever the
+ * `egress proxy: …` body beside it (`socket hang up`, a TLS cut), which a 403 has too. The relay refusing is read by its address
+ * (`relayRefused`).
  */
 const UNREACHABLE_LINES = [
   /\b(?:ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ECONNRESET|ESOCKETTIMEDOUT)\b|\b50[234]\b.*(?:Bad Gateway|Service Unavailable|Gateway Time-?out)/,
-  /\bCONNECT\b.*\b50[234]\b|\b50[234]\b.*\bCONNECT\b/,
+  // curl's and git's to a CONNECT, Yarn's, undici's; curl's `--fail`, npm's code.
+  /\bCONNECT\b.*\b50[234]\b|\b50[234]\b.*\bCONNECT\b|statusCode=50[234]\b|Proxy response \(50[234]\)|returned error: 50[234]\b|\bE50[234]\b/,
+  /\bConnection timed out\b/i,
   // pip's and uv's.
   /Failed to establish a new connection|Temporary failure in name resolution|\bdns error\b/,
   /egress proxy: not sent on|\bProxyError\b|Cannot connect to proxy/,

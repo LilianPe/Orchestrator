@@ -27,13 +27,18 @@ result in the store:
 
 What the factory cannot tell anything about rejects, and nothing is recorded: the forge or the container engine not answering,
 a `setup` that fails or runs over its cap with a registry or the egress proxy not answering in its output (a connection refused
-or timed out, a 502, the proxy's 5xx to a `CONNECT` as curl and git say it, pip's or uv's connection or DNS error, pip's
-`ProxyError`), even when it then says a dependency is missing. The relay refusing is read by its address, whatever the tool's
+or timed out, curl's and git's plain `Connection timed out` among them, a 502, 503 or 504 in any of the tools' words (`502 Bad
+Gateway`, the proxy's answer to a `CONNECT` as curl and git say it, Yarn's `statusCode=502`, undici's `Proxy response (502)`,
+curl's `returned error: 502`, npm's `E502`), pip's or uv's connection or DNS error, pip's `ProxyError`), even when it then says a
+dependency is missing. The proxy's body (`egress proxy: …`) is the same for its refusal (403) and its breakdown (502, as an
+upstream that hung up or a TLS cut): beside a 5xx it is a breakdown, otherwise a registry it does not allow. The relay refusing is read by its address, whatever the tool's
 words: a line that says a connection was refused and names `127.0.0.1:3128` (or `localhost`, `[::1]`, curl's `port 3128`,
 urllib3's `port=3128`) is a breakdown, from npm, curl, git, Go, wget, apt or Maven alike; a line that only names the relay
 (`HTTPS_PROXY=http://127.0.0.1:3128`) is not. A setup that exited on a variable, or on a service refusing (a connection refused
 on another port of the loopback, by any client: Node's `connect ECONNREFUSED`, Python's `requests`, `psycopg`, `redis-py` or
-`asyncpg`, Go's `dial tcp`; or `could not connect to server`), is recorded red as such, past an installer's retry warning. A setup over its cap is a `failure`: a breakdown in its output rejects it, unless a service refusing is there too.
+`asyncpg`, Go's `dial tcp`; or libpq's `could not connect to server` with the loopback on its line), is recorded red as such,
+past an installer's retry warning. A connection refused by a host off the loopback is no service: a `failure`, or in the setup a
+breakdown. A setup over its cap is a `failure`: a breakdown in its output rejects it, unless a service refusing is there too.
 Reading the repository's variables failing (its entry in `factory.yml` not looked up) rejects too, and so does a factory without
 sandboxes (`FACTORY_CONTAINER_CLI` and `FACTORY_RUNNER_IMAGE` are required). `sha`, when given, must be a full commit id: a branch name or a short sha is refused.
 

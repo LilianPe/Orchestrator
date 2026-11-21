@@ -191,6 +191,9 @@ describe('runDryRun (ORC-408)', () => {
     ['the relay down, as git alone says it', 'fatal: unable to access \'https://github.com/acme/sub.git/\': Failed to connect to 127.0.0.1 port 3128 after 0 ms: Could not connect to server\n'],
     ['the relay down, as Go says it', 'go: downloading github.com/acme/x v1.2.0\ngo: github.com/acme/x@v1.2.0: Get "https://proxy.golang.org/github.com/acme/x/@v/v1.2.0.zip": proxyconnect tcp: dial tcp 127.0.0.1:3128: connect: connection refused\n'],
     ['the proxy\'s 502 to a CONNECT, as curl says it', 'curl: (56) CONNECT tunnel failed, response 502\n'],
+    ['the proxy\'s 502 to a CONNECT, as Yarn says it', 'error An unexpected error occurred: "https://registry.yarnpkg.com/zod: tunneling socket could not be established, statusCode=502".\n'],
+    ['the proxy\'s 502 on an upstream that hung up', 'curl: (22) The requested URL returned error: 502\negress proxy: socket hang up\n'],
+    ['a connection timed out, as git says it', 'fatal: unable to access \'https://github.com/acme/sub.git/\': Failed to connect to github.com port 443: Connection timed out\n'],
   ])('a breakdown the installer reports as something else still rejects: %s', async (_, stderr) => {
     const { req, sandboxes } = forge();
     sandboxes.answer = (command) => (command === 'npm ci' ? { stdout: '', stderr, code: 1 } : undefined);
@@ -455,8 +458,25 @@ describe('classifyBreak', () => {
     ['curl', 'curl: (56) CONNECT tunnel failed, response 502'],
     ['git', 'fatal: unable to access \'https://get.example.com/\': Received HTTP code 502 from proxy after CONNECT'],
     ['a gateway timeout', 'curl: (56) CONNECT tunnel failed, response 504'],
-  ])('the proxy\'s 5xx to a CONNECT is a breakdown: %s', (_, line) => {
-    expect(unreachable(line)).toContain('CONNECT');
+    ['Yarn', 'error An unexpected error occurred: "https://registry.yarnpkg.com/zod: tunneling socket could not be established, statusCode=502".'],
+    ['undici', 'TypeError: fetch failed\n  [cause]: Error: Proxy response (502) !== 200 when HTTP Tunneling'],
+  ])('the proxy\'s 5xx to a CONNECT is a breakdown, whatever its wording: %s', (_, output) => {
+    expect(unreachable(output)).toMatch(/50[24]/);
+  });
+
+  it.each([
+    ['curl', 'curl: (28) Failed to connect to registry.npmjs.org port 443 after 130001 ms: Connection timed out'],
+    ['git', 'fatal: unable to access \'https://github.com/acme/sub.git/\': Failed to connect to github.com port 443: Connection timed out'],
+  ])('a connection timed out, in plain words, is a breakdown: %s', (_, line) => {
+    expect(unreachable(line)).toContain('timed out');
+  });
+
+  it.each([
+    ['curl', 'curl: (22) The requested URL returned error: 502\negress proxy: socket hang up\n'],
+    ['npm', 'npm error code E502\nnpm error egress proxy: Client network socket disconnected before secure TLS connection was established\n'],
+  ])('the proxy\'s 502 for another cause than a refusal is a breakdown, not a registry it does not allow: %s', (_, output) => {
+    expect(classifyBreak(output, 'setup', declared).kind).toBe('dependency');
+    expect(unreachable(output)).toMatch(/502/);
   });
 
   it('a line that only names the relay, or a relay port that is no port, is no breakdown', () => {
@@ -486,6 +506,13 @@ describe('classifyBreak', () => {
 
   it('a client refused by a host off the loopback is no service of the repository\'s', () => {
     expect(classifyBreak("HTTPSConnectionPool(host='pypi.org', port=443): Failed to establish a new connection: [Errno 111] Connection refused", 'setup', declared).kind).toBe('failure');
+    expect(classifyBreak('psql: error: could not connect to server: Connection timed out\n\tIs the server running on host "db.acme.com" (10.0.0.5) and accepting\n\tTCP/IP connections on port 5432?', 'command', declared).kind).toBe('failure');
+    expect(classifyBreak('could not connect to server: No route to host', 'command', declared).kind).toBe('failure');
+  });
+
+  it('libpq refused on the loopback is a service, in its old and its new words', () => {
+    expect(classifyBreak('psql: error: connection to server at "localhost" (127.0.0.1), port 5432 failed: Connection refused', 'command', declared)).toMatchObject({ kind: 'service', detail: expect.stringContaining('5432') });
+    expect(classifyBreak('could not connect to server: Connection refused\n\tIs the server running on host "127.0.0.1" and accepting', 'command', declared).kind).toBe('service');
   });
 
   it('anything else is a failure, its first error line said', () => {
