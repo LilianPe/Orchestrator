@@ -422,7 +422,9 @@ export function parseFactoryYml(
       ...(authz ? { authz: { maintainers: authz.maintainers, validators: authz.validators, githubLogins: authz.github_logins } } : {}),
     }));
   }
-  const knowledgeRepo = leaf('knowledge.repo_path', section('knowledge')?.['repo_path'], z.string().min(1), 'a path is expected');
+  const knowledge = section('knowledge');
+  if (knowledge && knowledge['repo_path'] == null) violations.push('knowledge.repo_path: required');
+  const knowledgeRepo = leaf('knowledge.repo_path', knowledge?.['repo_path'], z.string().min(1), 'a path is expected');
   if (knowledgeRepo !== undefined) out.knowledge = { repoPath: knowledgeRepo };
 
   const secretRefs: Record<string, SecretRef> = {};

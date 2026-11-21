@@ -74,7 +74,7 @@ describe('smee relay', () => {
     const logged = got.logs.find((m) => m.startsWith('relay: webhook rejected')) ?? '';
     expect(logged).toMatch(/^relay: webhook rejected with 401/);
     expect(logged).toMatch(/smee\.io re-serializes/);
-    expect(logged).toMatch(/publicUrl/);
+    expect(logged).toMatch(/public_url in factory\.yml/);
   });
 
   // The shapes docs/linear.md (section 3) lists as not reproducible through smee.

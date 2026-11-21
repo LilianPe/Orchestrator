@@ -51,7 +51,7 @@ Variables **set by the factory** in each run's environment (do not set them your
 
 ## The instance in `factory.yml` (ORC-199)
 
-Written by `factory init` (`projects`, `relay`, `dev`; the rest of the file, its comments included, kept as it is), editable by hand. Missing key = its default value. An invalid key prevents startup with `invalid factory.yml:` followed by the path of each offending key (`projects[0].repo_path: …`); an unknown key is refused, `limits` included (empty since ORC-216).
+Written by `factory init` (`projects`, `relay`, `dev`, when their value changed; the rest of the file, and the comments of what did not change, kept as they are), editable by hand. Missing key = its default value. An invalid key prevents startup with `invalid factory.yml:` followed by the path of each offending key (`projects[0].repo_path: …`); an unknown key is refused, `limits` included (empty since ORC-216).
 
 | Key | Type | Default | Effect |
 |---|---|---|---|

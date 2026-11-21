@@ -85,6 +85,7 @@ describe('instance config', () => {
     expect(() => parseFactoryYml('projects: [{ id: a, repoPath: /a, linear_team_key: A }]\n')).toThrow(/projects\[0\]\.repo_path: .*\n- projects\[0\]: .*repoPath/s);
     expect(() => parseFactoryYml('relay: { kind: smee }\n')).toThrow(/relay\.url/);
     expect(() => parseFactoryYml('limits: {}\n')).toThrow(/limits: unknown key/);
+    expect(() => parseFactoryYml('knowledge: {}\n')).toThrow(/knowledge\.repo_path: required/);
   });
 });
 

@@ -1,4 +1,5 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { isDeepStrictEqual } from 'node:util';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Document, parseDocument } from 'yaml';
@@ -107,10 +108,15 @@ function projectYml(p: ProjectConfig): Record<string, unknown> {
   };
 }
 
+/** The value of each instance key the file leaves out: `saveInstance` writes none of them in its place. */
+const INSTANCE_DEFAULTS: Record<string, unknown> = { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] };
+
 /**
- * Writes the instance keys into `<home>/factory.yml` (ORC-199), for `factory init`: the rest of the file, its comments
- * included, stays as it is; `base` is the rest of a file written where there is none. Never its GitHub App, whose key is a
- * reference only a person writes. Validated as the daemon reads it: a value it would refuse is never written.
+ * Writes the instance keys into `<home>/factory.yml` (ORC-199), for `factory init`: only those whose value changed, a default
+ * the file leaves out never written, so the rest of the file and the comments of what did not change stay as they are; `base`
+ * is the rest of a file written where there is none. Never its GitHub App, whose key is a reference only a person writes.
+ * Validated as the daemon reads it: a value it would refuse is never written. Replaced whole by a rename: the daemon, which
+ * reads its Claude account there at each launch (`claudeAccountReader`), never reads it half-written.
  */
 export function saveInstance(home: string, cfg: Omit<InstanceConfig, 'github'>, base?: string): void {
   const text = factoryYmlText(home) ?? base;
@@ -125,14 +131,19 @@ export function saveInstance(home: string, cfg: Omit<InstanceConfig, 'github'>, 
     projects: cfg.projects.map(projectYml),
     knowledge: cfg.knowledge && { repo_path: cfg.knowledge.repoPath },
   };
+  const current = (doc.toJS() ?? {}) as Record<string, unknown>;
   for (const [key, value] of Object.entries(values)) {
+    const same = (v: unknown) => isDeepStrictEqual(current[key] ?? INSTANCE_DEFAULTS[key], v);
     if (value === undefined) doc.delete(key);
-    else doc.set(key, doc.createNode(value));
+    else if (!same(value)) doc.set(key, doc.createNode(value));
   }
   const written = doc.toString();
   parseInstanceKeys(written);
   ensureTree(home);
-  writeFileSync(homePaths(home).factoryYml, written);
+  const file = homePaths(home).factoryYml;
+  const temp = `${file}.${process.pid}.tmp`;
+  writeFileSync(temp, written);
+  renameSync(temp, file);
 }
 
 /**
@@ -148,7 +159,7 @@ export const OLD_INSTANCE_FILES = ['config.yaml', 'run-settings.json', 'logs']; 
 export function oldInstanceFileWarnings(home: string): string[] {
   return OLD_INSTANCE_FILES.filter((name) => existsSync(join(home, name))).map((name) =>
     name === 'config.yaml'
-      ? "config.yaml: left from before factory.yml, not read (ORC-199): write what it declares in factory.yml (port, host, public_url, relay, projects, knowledge, github), then delete it; it may hold the GitHub App's key in clear"
+      ? "config.yaml: left from before factory.yml, not read (ORC-199): write what it declares in factory.yml (port, host, public_url, dev, relay, projects, knowledge, github), its keys in snake_case (publicUrl is public_url, repoPath repo_path…), then delete it; it may hold the GitHub App's key in clear"
       : `${name}: left from before ORC-199, not read: delete it`,
   );
 }

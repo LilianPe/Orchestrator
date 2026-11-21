@@ -279,7 +279,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     for (const p of problems) log(`Invalid configuration, no run is launched until it is fixed and the factory restarted: ${p}`);
     const kb = instance.knowledge ? new KnowledgeBase(instance.knowledge.repoPath, { auth: gitAuth }) : undefined;
     // The roles of a human event's signed actor (ORC-186): Linear team members and GitHub rights, read
-    // again past their TTL, and the designations of config.yaml.
+    // again past their TTL, and the designations of factory.yml.
     const roles = new CachedRoleResolver({
       projects: (id) => {
         const p = instance.projects.find((x) => x.id === id);

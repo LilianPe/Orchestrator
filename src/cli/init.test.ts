@@ -389,15 +389,26 @@ describe('factory init: the GitHub App and factory.yml (ORC-411)', () => {
     expect(out).toContain('webhook_secret: env:GH_WEBHOOK_SECRET');
   });
 
-  it('writes a factory.yml on an instance that ran without one, never reading its config.yaml (ORC-199)', async () => {
+  it('writes a factory.yml on an instance that ran without one, never reading its config.yaml, nor naming an App it ran without (ORC-199)', async () => {
     const { home, repo } = await initOnce({ dev: true });
     rmSync(join(home, 'factory.yml'));
     writeFileSync(join(home, 'config.yaml'), 'port: 4555\nprojects: [{ id: other, repoPath: /other, linearTeamKey: OTH }]\n');
     const { out } = await initOnce({ home, repo, dev: true });
-    expect(parseFactoryYml(readFileSync(join(home, 'factory.yml'), 'utf8'), ENV).claude?.active).toBe('main');
+    const yml = parseFactoryYml(readFileSync(join(home, 'factory.yml'), 'utf8'), ENV);
+    expect(yml.claude?.active).toBe('main');
+    expect(yml.github).toBeUndefined();
     expect(loadInstance(home)).toMatchObject({ port: 4100, projects: [expect.objectContaining({ linearTeamKey: 'REL' })] });
     expect(loadInstance(home).projects).toHaveLength(1);
-    expect(out).toContain('https://github.com/settings/apps/new');
+    expect(out).not.toContain('https://github.com/settings/apps/new');
+  });
+
+  it('keeps the comments of what it does not change, and writes no default the file leaves out (ORC-199)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+    writeFileSync(join(home, 'factory.yml'), 'port: 4200 # my port\npublic_url: https://f.example.com # tunnel\n');
+    await initOnce({ home });
+    const text = readFileSync(join(home, 'factory.yml'), 'utf8');
+    expect(text).toContain('port: 4200 # my port\npublic_url: https://f.example.com # tunnel\n');
+    expect(text).not.toMatch(/^(host|relay):/m);
   });
 
   it('replaces every entry of the repository an older init wrote in another form, keeping the first one\'s fields', async () => {
