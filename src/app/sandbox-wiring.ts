@@ -143,8 +143,7 @@ export function sandboxLimits(env: NodeJS.ProcessEnv): SandboxLimits | { refused
   });
   const cpus = limit(env, 'FACTORY_SANDBOX_CPUS', /^(\d+|\d*\.\d+)$/, 'a number of CPUs such as 2 or 0.5', d.cpus, Number);
   if (typeof pids === 'object' || typeof memory === 'object' || typeof cpus === 'object') {
-    const refusals = [pids, memory, cpus].flatMap((l) => (typeof l === 'object' ? [l.refused] : []));
-    return { refused: refusals.join(' ') };
+    return { refused: [pids, memory, cpus].flatMap((l) => (typeof l === 'object' ? [l.refused] : [])).join(' ') };
   }
   return { pids, memory, cpus };
 }
