@@ -470,7 +470,7 @@ export interface SecurityStats {
 
 /**
  * A move of a ticket into Blocked (ORC-300), wherever it was made: by a decision (its projection blocked, and not before
- * it), or outside one by the orchestrator (a launch error, a refused pickup), which journals nothing; such a move is
+ * it), or outside one by the daemon (a launch error, a refused pickup), which journals nothing; such a move is
  * found by the next decision of the ticket (its `before` blocked, the decision before it left the ticket free) or, when
  * none came since, by the projection. `at`: the decision's clock, or the blocked ticket's `updatedAt` for a move outside
  * a decision (a later change outside a decision, a session linked, pushes it back). `kind`: the typed kind, got back
@@ -588,7 +588,7 @@ export interface Store {
    * inbox in the same transaction (ORC-150). Only under the claim token `lease`: false, and nothing
    * changed, when the lease was lost to another worker. Without `lease`: the legacy queue rows of
    * `claim` (Postgres), no inbox event. `at`: the time of the result event (the store's clock by
-   * default; the orchestrator passes its own, the time of every event it writes). `outcome`: what
+   * default; the daemon passes its own, the time of every event it writes). `outcome`: what
    * the result carries beyond success, a replay found already made (ORC-162).
    */
   completeEffect(id: string, lease?: string, at?: number, outcome?: EffectOutcome): Promise<boolean>;

@@ -478,7 +478,7 @@ export type DecidedEvent =
  */
 export type PendingJob = { job: string; input?: InputKind; inputText?: string; resume?: boolean; sensitivePaths?: readonly string[]; relaunchOf?: string };
 
-/** Facts the orchestrator records around an effect it carried out, applied to the ticket by `reduce`. */
+/** Facts the daemon records around an effect it carried out, applied to the ticket by `reduce`. */
 export type ShellEvent =
   /** The factory itself moved the ticket in the tracker. */
   /** `reviewSha`: the PR's head when the factory moves the ticket to Human Review, the commit the human reviews (ORC-148). */

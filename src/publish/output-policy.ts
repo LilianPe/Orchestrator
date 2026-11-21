@@ -225,7 +225,7 @@ export class OutputPolicy {
 }
 
 /**
- * The tracker every write of the orchestrator goes through (ORC-214): its comments and activities pass the policy, a refused one
+ * The tracker every write of the daemon goes through (ORC-214): its comments and activities pass the policy, a refused one
  * replaced by its notice and logged without its text. Every method is written out, so a new one with free text cannot slip past:
  * reads, and writes without free text (moves, labels, the plan's fixed steps, the PR's link), go straight on.
  */

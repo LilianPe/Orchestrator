@@ -884,7 +884,7 @@ function blockersDone(out: Decision, event: FactoryEvent<'blockers.done'>, ticke
 const workInFlight = (t: TicketState): boolean => !!(t.activeRunId || t.verifyingRunId || t.pendingJob);
 
 /**
- * The answer agent (ORC-182): a job of the questions queue on a clone of the trunk, read-only. The orchestrator gives its
+ * The answer agent (ORC-182): a job of the questions queue on a clone of the trunk, read-only. The daemon gives its
  * session the answerer's role, and only its `relay` reaches the agent that implements.
  */
 export const isAnswerer = (job: JobSpec): boolean => job.queue === 'questions' && job.workspace === 'trunk-readonly';
@@ -1395,7 +1395,7 @@ function classifiedReply(out: Decision, event: FactoryEvent<'session.prompted'>,
   return regroup(out, event, ticket, workflow);
 }
 
-/** Prefix of the trace of a refused action (ORC-186): the orchestrator logs it. */
+/** Prefix of the trace of a refused action (ORC-186): the daemon logs it. */
 export const AUTHZ_REFUSED = 'authz: refused ';
 /** The trace of a decision the authorization matrix refused (ORC-186): its refusal line, else undefined. */
 export const authzRefusal = (trace: readonly string[]): string | undefined => trace.find((t) => t.startsWith(AUTHZ_REFUSED));
@@ -1424,7 +1424,7 @@ function authorize(out: Decision, event: FactoryEvent, ticket: TicketState | und
 }
 
 /**
- * Whether `decide` may check the matrix on `event` under `workflow` (ORC-186): the orchestrator resolves
+ * Whether `decide` may check the matrix on `event` under `workflow` (ORC-186): the daemon resolves
  * the actor's roles, and journals them, only then, so that an event the matrix never checks (a label,
  * a move no reaction starts a run on) does not wait on Linear or GitHub. It may say yes for an event
  * `decide` ends up not checking (the ticket is not read here), never the other way round: an event

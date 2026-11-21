@@ -92,7 +92,7 @@ describe('bootstrap', () => {
   });
 
   describe('the whole-read settings of a run (ORC-279)', () => {
-    /** What bootstrap gave the orchestrator: its `recover` is the first thing to run with them. */
+    /** What bootstrap gave the daemon: its `recover` is the first thing to run with them. */
     const depsOf = async (port: number, yml?: string) => {
       const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
       saveInstance(home, { port, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
@@ -274,7 +274,7 @@ describe('bootstrap', () => {
     await app.stop();
   });
 
-  it('ticks the orchestrator every minute until stopped', async () => {
+  it('ticks the daemon every minute until stopped', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     saveInstance(home, { port: 4198, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
     const tick = vi.spyOn(Daemon.prototype, 'tick').mockResolvedValue();

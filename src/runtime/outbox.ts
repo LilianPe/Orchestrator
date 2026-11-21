@@ -69,7 +69,7 @@ export interface OutboxExecutorDeps {
   retryIn(delayMs: number): void;
   leaseMs?: number;
   retry?: EffectRetry;
-  /** The time of the result events (the orchestrator's clock); the store's own by default. */
+  /** The time of the result events (the daemon's clock); the store's own by default. */
   now?: () => number;
 }
 

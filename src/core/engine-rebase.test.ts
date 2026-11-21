@@ -84,7 +84,7 @@ describe('a conflict with the default branch is handled by a rebase step the eng
     const busy = reviewed({ logical: 'dev', activeRunId: 'r0', activeJob: 'dev-feedback' });
     const out = decide(busy, conflicted(), workflow);
     expect(out.effects.filter((e) => e.kind === 'stop_run')).toEqual([]);
-    // The orchestrator keeps a start that meets a busy ticket pending: the rebase follows the end of the work.
+    // The daemon keeps a start that meets a busy ticket pending: the rebase follows the end of the work.
     expect(starts(out)).toEqual([expect.objectContaining({ job: 'rebase' })]);
     expect(out.events.map((e) => e.type)).not.toContain('work.cancelled');
   });
