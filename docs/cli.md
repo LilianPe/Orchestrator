@@ -9,12 +9,13 @@ All `relais` commands read `RELAIS_HOME` (default `~/.relais`) and `config.yaml`
 | Command | Role | Daemon required |
 |---|---|---|
 | `relais init` | Configure Relais for the current repository. | no |
-| `factory doctor [repo]` | Refuse a repository whose CI can expose secrets to the factory's branches. | no (GitHub App) |
+| `factory doctor [repo]` | Refuse a host without cgroup v2, a repository without a protected default branch or whose CI can expose secrets to the factory's branches. | no (GitHub App) |
 | `relais up [--fake-runner]` | Start the daemon. | — |
 | `relais plan` | List the delegated tickets and say which ones would be picked up. | no (Linear connected) |
 | `factory status` | State of the running instance: tickets, blocks, runs. | yes |
 | `relais pause` / `relais resume` | Suspend / resume the queue. | yes |
 | `factory stop <ID>` | Stop a ticket's run. | yes |
+| `factory dry-run <project>` | Run the dry run of a project's default branch (setup, build, tests in the sandbox) and print what breaks. | yes (with sandboxes) |
 | `factory run repair <ID> [replay\|skip\|force] [<event>]` | List or repair a ticket's set-aside (dead-letter) events. | no (reads and writes the database) |
 | `factory baseline <project> --since <YYYY-MM-DD> [--replace]` | Freeze the 90 days before the factory's start as the overview's baseline, from Linear and GitHub. | no (Linear connected, GitHub, the database) |
 | `factory ghost start\|collect\|judge\|report\|list` | Replay closed tickets without effects, judge the factory's PRs blind against the human ones, report against two thresholds written before (mergeable, mergeable as is). | no (the database, `gh`) |
@@ -26,13 +27,15 @@ The commands that require the daemon go through its Unix socket, `cli/factory.so
 Run it **in the repository** to entrust to Relais (otherwise it asks for the repository path). Interactive wizard:
 
 1. Asks for the **Linear team key** (e.g. `REL`), uppercased.
-2. Adds (or replaces) the project in `config.yaml`: `id` = name of the repository directory (slug, 30 characters max), `repoPath` = git root, `linearTeamKey`.
-3. Without `publicUrl` or a configured relay, creates a **smee.io channel** and records it in `relay`.
-4. Prints the exact values to enter in Linear (callback URL, webhook URL, categories) then asks for **Client ID**, **Client secret** and **Webhook signing secret** (asked again as long as the answer is empty), recorded in `secrets.json`. Details: [`linear.md`](linear.md).
+2. Adds (or replaces) the project in `config.yaml`: `id` = name of the repository directory (slug, 30 characters max), `repoPath` = git root, `linearTeamKey`; a project already there keeps its `id` and its other fields (`authz`…).
+3. With `--dev`, and without `publicUrl` or a configured relay, creates a **smee.io channel** and records it in `relay`: for a workstation only (ORC-411). Without `--dev` nor `publicUrl`, it creates none, says to set `publicUrl` or run `factory init --dev`, and skips step 4: Linear gives its webhook secret only for a webhook URL.
+4. Prints the exact values to enter in Linear (callback URL, webhook URL, categories) then asks for **Client ID**, **Client secret** and **Webhook signing secret** (asked again as long as the answer is empty and none is stored), recorded in `secrets.json`. An empty answer keeps the stored value as long as the client ID is the same; a new client ID asks for its secrets. Details: [`linear.md`](linear.md).
 5. Prints a proposed [`.factory/config.yml`](repository-configuration.md) from what it detects, and writes nothing in the repository (ORC-388): `setup` (npm's `npm ci`, pnpm's `pnpm install --frozen-lockfile`, uv's `uv sync --frozen`) and `commands` (Node: the `lint`, `typecheck`, `test` scripts in `package.json`, through pnpm when its lockfile is the only one; Python: `ruff`, `mypy` and pytest through uv when there are a `pyproject.toml` and a `uv.lock`, ORC-172; pytest is proposed as `test`, the red check's command, when Node proposes no `test`, and otherwise as `pytest`, with a warning that the red check runs `commands.test` only, ORC-420) and `preview`, what starts the application for the visual proof on `PORT` (the first of the `dev`, `start` and `preview` scripts in `package.json`, by the same package manager; none for Python, ORC-397), all in one proposal. A `package.json` that does not parse proposes nothing of Node. Nothing detected, or a `.factory/config.yml` already there, nothing proposed. Commit the file on the default branch: the factory reads it there. A `.factory/workflow.yml` or `.relais/workflow.yml` found is said to be ignored. When the repository will have no `commands.test`, the red check's command (none proposed, as for a Node repository without a `test` script, or, when a `.factory/config.yml` is there, none in the one of the default branch, where the daemon reads it), it warns that every ticket would block at the tests step (ORC-412); a file git cannot read there or that does not parse is `factory validate`'s and `factory doctor`'s to name.
-6. Writes `config.yaml` and prints the next steps: `relais up`, « Connect Linear », delegate a ticket.
+6. Writes `config.yaml`, then prints how to create and install the factory's **GitHub App** by hand (its repository permissions, those of [`github-app-manifest.json`](github-app-manifest.json); its webhook `<publicUrl>/webhooks/github`, optional, with a `publicUrl`, disabled without one), ORC-411, on a first setup only (no Linear values yet, no `factory.yml`).
+7. On that first setup, writes `FACTORY_HOME/factory.yml`: `github` (`app_id: env:GH_APP_ID`, `private_key: env:GH_APP_KEY`; never `webhook_secret`, which an enabled App webhook adds by hand), `claude` (`token: env:CLAUDE_CODE_OAUTH_TOKEN`) and the budgets of a first run, which `factory validate` accepts; every secret a reference, never a value, and the variables to export are printed. An existing `factory.yml` is kept as it is, and an instance that runs without one gets none. When `config.yaml` already has a `github` App, it prints no App steps and writes no `github` in `factory.yml`, whose App would replace it.
+8. Prints the next steps: `relais up`, « Connect Linear », delegate a ticket.
 
-`relais init` can be rerun: for a second repository (new project), or to change the Linear credentials. It no longer writes `.factory/workflow.yml`: the workflow is the `factory/default` preset, and a repository's `.factory/workflow.yml` is ignored (`factory doctor` says so, and the daemon logs it at each start).
+`relais init` can be rerun: for a second repository (new project), or to change the Linear credentials. An empty answer keeps what is stored (ORC-83, ORC-411): the team key, the client ID, secret and webhook secret, and Linear's OAuth tokens while the client ID stays the same; `factory.yml` is never rewritten. It no longer writes `.factory/workflow.yml`: the workflow is the `factory/default` preset, and a repository's `.factory/workflow.yml` is ignored (`factory doctor` says so, and the daemon logs it at each start).
 
 ### `relais up`
 
@@ -61,13 +64,14 @@ A control `factory.yml` disables (ORC-381) is named right after the repository's
 
 ### `factory doctor [repo]`
 
-Check before entrusting a repository: refuses (exit code `1`) a CI that can expose secrets to the factory's branches (the repository's naming, `feat/*` and `fix/*` by default, and the legacy `factory/*`) without human approval, and accepts (code `0`) a CI without secrets or whose jobs with secrets are each under a protected environment with required reviewers (the only approval it credits, ORC-283).
+Check before entrusting a repository, run where the daemon runs (`docker compose exec factoryd …` under compose, [`github.md`](github.md#factory-doctor-host-branch-protection-ci-secrets-and-factory-branches)): refuses (exit code `1`) a host whose engine (`FACTORY_CONTAINER_CLI`, asked with `info`) cannot limit the sandbox (no cgroup v2, or no limit through the `cpu`, `memory` and `pids` controllers), a default branch with neither a classic protection nor a ruleset requiring a pull request that the App cannot bypass ([branch protection](github.md#branch-protection-required-by-factory-doctor)), and a CI that can expose secrets to the factory's branches (the repository's naming, `feat/*` and `fix/*` by default, and the legacy `factory/*`) without human approval, and accepts (code `0`) a CI without secrets or whose jobs with secrets are each under a protected environment with required reviewers (the only approval it credits, ORC-283).
 
-- Reads `.github/workflows` and `GET /repos/{owner}/{repo}/environments` with the GitHub App: no `gh` fallback.
+- Reads `.github/workflows`, `GET /repos/{owner}/{repo}/environments` and the default branch's protection with the GitHub App: no `gh` fallback.
 - Resolves `owner/name` through `git remote get-url origin`; current repository by default.
-- `--json`: machine report (workflows, triggers, secrets yes/no, environments, verdict).
+- `--json`: machine report (`host`, `branchProtection`, workflows with their triggers, secrets yes/no, environments and verdict; `accepted` false on any refusal).
 - Never prints a secret; when in doubt (ambiguous YAML, dynamic `on`, indirect secrets, API error), refuses.
 - Warns about a `.factory/workflow.yml` or a `.relais/workflow.yml` in the repository's working copy: ignored since the workflow is the `factory/default` preset, to delete (ORC-388). It looks only at their presence, never reads them, and the verdict does not change; `--json` lists them under `ignored`.
+- Warns when the project of the repository checked has a spec gate no validator can pass (ORC-421): `authz.validators` empty in `config.yaml`, every ticket stops at the gate, as its initiator cannot approve; a lone validator, the tickets they delegate themselves. `factory/fantome` projects approve their own specs. Said before the workflows, also by the daemon at its start; the verdict does not change; `--json` has the lines under `validatorWarnings`.
 - Warns when the `.factory/config.yml` of the default branch has no `commands.test` (ORC-412): the red check of the tests step has no command to run, and every ticket blocks there. The verdict does not change; `--json` has the line under `warnings`.
 - Says first whether this instance can take the visual proof (ORC-404): `available` with the capture image of `FACTORY_BROWSER_IMAGE` and its Playwright version, or `unavailable` and why (no sandboxes, the variable unset, the image absent from the engine or the engine not answering, an image without the label of `docker/browser.Dockerfile`, or one not built on `FACTORY_RUNNER_IMAGE`). Of the instance, not the repository: the verdict does not change; `--json` has it under `visualProof` (`available`, `detail`), a failed check included.
 
@@ -108,6 +112,29 @@ For each ticket: its state, a check in progress, the reason for a block, and its
 ### `factory stop <ID>`
 
 Stops the run of ticket `<ID>` (e.g. `REL-12`): SIGINT to the Claude Code process, then SIGKILL after 10 s, and the container is destroyed; a run the daemon reattached to after a restart stops the same way. The ticket is blocked until a reply in the Linear ticket (comment or session). Equivalent to the UI's « Stop » button, to the Linear session's "stop" and to the `agent:stop` label. Without options: an unknown ticket is refused, exit code 1.
+
+### `factory dry-run <project>` (ORC-409)
+
+Asks the daemon to run the [dry run](dry-run.md) of project `<project>` (its `id` in `config.yaml`) on the forge's default branch:
+its `setup`, then its build and test commands, in the sandbox, as `verify` runs them for a ticket. The daemon records it, then the
+command prints it, which takes as long as the setup and the tests:
+
+```
+Dry run of app on 3f2a9c1b7d4e: red (npm run build · npm test).
+  dependency, setup `npm ci`: a dependency is missing, or younger than the 7 days the setup allows: No matching version found for left-pad@9.9.9
+    | npm error code ETARGET
+    | npm error notarget No matching version found for left-pad@9.9.9.
+The tickets of app are refused while its dry run is red: fix what breaks, then run this again. A ticket it refused starts on a reply once it is green.
+```
+
+Exit code 0 when green, 1 when red or when no dry run could run: no sandboxes (`FACTORY_CONTAINER_CLI` and
+`FACTORY_RUNNER_IMAGE`), the container engine, the forge or a registry not answering (`No dry run recorded (409): …`). A dry run of
+the project already under way, started by a delegated ticket, is waited for; then the command runs a new one, which reads what
+changed meanwhile.
+
+Run it before a project's first ticket, to see it green; and after fixing a cause outside the repository that the fingerprint does
+not see (a variable's value in `factory.yml`, a registry, a test put on the known flaky list): the delegated tickets then read the
+new result. The command waits for the answer as long as the dry run lasts, through the socket or over HTTP.
 
 ### `factory replay <journal.json | directory>...` (ORC-174)
 

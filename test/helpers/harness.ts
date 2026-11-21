@@ -48,10 +48,11 @@ export const packDir = join(import.meta.dirname, '../../packs/standard');
  * Without `fullChain`, the delegation starts at `build`, what most scenarios test; with it, at the preset's entry, as it ships
  * (ORC-395): `intake`, the spec and its gate, `tests`, the red check and the freeze come first (`test/helpers/chain.ts`).
  */
-export function loadTestWorkflow(overrides?: WorkflowOverrides, o: { aiReview?: boolean; fantome?: boolean; fullChain?: boolean } = {}): Workflow {
+export function loadTestWorkflow(overrides?: WorkflowOverrides, o: { aiReview?: boolean; fantome?: boolean; fullChain?: boolean; statuses?: Record<string, string> } = {}): Workflow {
   const entry = o.fullChain ? preset.entry : 'build';
+  const settings = o.statuses ? { statuses: o.statuses } : {};
   // The fixes that go back through the review (ORC-184) keep their reply and leave the ticket where it is, as before (`withoutAiReview`).
-  const base = o.fantome ? presetWorkflow(fantome) : o.aiReview ? presetWorkflow(preset, {}, entry) : workflowWithoutAiReview(entry);
+  const base = o.fantome ? presetWorkflow(fantome, settings) : o.aiReview ? presetWorkflow(preset, settings, entry) : workflowWithoutAiReview(entry, settings);
   return workflowWith(overrides, base);
 }
 
@@ -208,6 +209,10 @@ export function createHarness(
     verify?: Verifier;
     /** The clean check itself; by default its verdict comes from `checks`. */
     cleanVerify?: CleanVerifier;
+    /** The dry run itself (ORC-408); by default the real one, which a scenario without a forge cannot run. */
+    dryRunner?: DaemonDeps['dryRunner'];
+    /** The default branch's head and the files of the dry run's fingerprint there (ORC-409): given, a delegated ticket waits for the dry run. */
+    dryRunFiles?: DaemonDeps['dryRunFiles'];
     /** An instance without the GitHub App or the sandboxes: it cannot publish (ORC-125). */
     noPublisher?: boolean;
     /** `false`: an instance with neither sandboxes nor `FACTORY_ALLOW_HOST_VERIFY`. */
@@ -257,6 +262,8 @@ export function createHarness(
     onUsageLimit?: 'wait';
     /** `acknowledge` of factory.yml (ORC-380): a comment by default. */
     acknowledge?: DaemonDeps['acknowledge'];
+    /** `spec` of factory.yml (ORC-382): where a version of the spec is published, `SPEC_PUBLICATION` by default. */
+    specPublication?: DaemonDeps['specPublication'];
     /** Why the configuration lets no ticket reach its end (ORC-350): no launch while any. */
     configProblems?: readonly string[];
     /** The policy in front of every text it publishes (ORC-214); without a secret scan by default. */
@@ -271,6 +278,8 @@ export function createHarness(
     aiReview?: boolean;
     /** The delegation starts at the preset's entry, `intake`, as it ships (ORC-395); at `build` by default: `loadTestWorkflow`. */
     fullChain?: boolean;
+    /** `statuses` of factory.yml (ORC-382): the Linear status each step shows; ORC-170's by default. */
+    statuses?: Record<string, string>;
     /** Another pack than the standard one (a copy a test changed, ORC-236): its skills and settings. */
     packDir?: string;
     /** Where the runs' transcripts are, as a test writes them: the answer agent reads the session at work there (ORC-182). */
@@ -289,7 +298,7 @@ export function createHarness(
 ) {
   if (opts.workflow !== undefined && opts.preset) throw new Error('createHarness: pass workflow or preset, not both');
   const pack = opts.packDir ?? packDir;
-  const workflow = loadTestWorkflow(opts.workflow ?? opts.preset?.workflow, { aiReview: opts.aiReview, fantome: opts.fantome, fullChain: opts.fullChain });
+  const workflow = loadTestWorkflow(opts.workflow ?? opts.preset?.workflow, { aiReview: opts.aiReview, fantome: opts.fantome, fullChain: opts.fullChain, statuses: opts.statuses });
   const clock = opts.clock ?? new FakeClock(Date.UTC(2026, 9, 10, 9, 0));
   const given = opts.store;
   const database: HarnessDatabase = given ? () => given : databases.create();
@@ -335,7 +344,9 @@ export function createHarness(
       // A human's push (ORC-159) is checked on the commit pushed, not on the worktree.
       cleanVerify: opts.cleanVerify ?? (async (req: CleanVerifyRequest) => ({ ...(req.commands.length ? await life.gate(checks.run)(req.worktree, [...req.commands], undefined, {}) : { ok: true, failures: [] }), sha: req.head ?? (await workspaces.head(req.worktree)) ?? 'head', tree: 'clean-tree' })),
       // The proxy's journal of a run (ORC-296) beside its refusals log: a test writes both.
-      ...(sessionsDir ? { sandboxes: life.gate(sandboxes), sessionsDir, runsDir, egressJournal: (id: string) => join(runsDir!, id, 'egress.jsonl') } : {}),
+      ...(sessionsDir ? { sandboxes: life.gate(sandboxes), sessionsDir, runsDir, runnerImage: 'factory/runner:test', egressJournal: (id: string) => join(runsDir!, id, 'egress.jsonl') } : {}),
+      ...(opts.dryRunner ? { dryRunner: opts.dryRunner } : {}),
+      ...(opts.dryRunFiles ? { dryRunFiles: opts.dryRunFiles } : {}),
       ...(visualProof ? { visualProof } : {}),
       ...(opts.previewRecipes ? { previewRecipes: opts.previewRecipes } : {}),
       ...(opts.startFingerprint ? { startFingerprint: opts.startFingerprint } : {}),
@@ -385,6 +396,7 @@ export function createHarness(
     perTicketTokens: opts.perTicketTokens,
     onUsageLimit: opts.onUsageLimit,
     acknowledge: opts.acknowledge,
+    specPublication: opts.specPublication,
     configProblems: opts.configProblems,
     outputPolicy: opts.outputPolicy,
     roles: authz && new CachedRoleResolver({ projects: (id) => (id === 'p' ? authz : undefined), team: gate(tracker), repo: outside.forge, now: () => clock.now() }),

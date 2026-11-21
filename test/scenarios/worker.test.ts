@@ -160,7 +160,7 @@ describe('worker: per-ticket lock and decision transaction', () => {
       await h.send('control.stop', {});
       await h.orch.drained();
     };
-    const notices = () => h.tracker.comments('REL-1').filter((c) => c.startsWith('🔴 Blocked'));
+    const notices = () => h.tracker.comments('REL-1').filter((c) => c.startsWith('⛔ Refused'));
     return { h, frozen, poke, notices };
   }
 
@@ -170,6 +170,8 @@ describe('worker: per-ticket lock and decision transaction', () => {
     await poke();
     await waitFor(() => notices().length === 1);
     const notice = notices()[0]!;
+    // A refusal, not a block (ORC-425): the ticket is not blocked in the factory's state.
+    expect(notice.split('\n')[0]).toBe('⛔ Refused: old frozen workflow version');
     expect(notice).toContain(`Reason: This ticket is frozen on workflow version ${frozen.slice(0, 12)}, of another format than the one this factory reads (2): it is refused, and none of its events is decided.`);
     expect(notice).toContain('Question: Can you open a new ticket for this request? It starts on the current workflow; this one stays refused.');
     expect(notice.split('\n').at(-1)).toBe('This ticket will not resume: a reply here changes nothing.');

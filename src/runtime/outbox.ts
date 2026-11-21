@@ -36,6 +36,7 @@ export const EFFECT_REACH: Record<OutboxEffect['kind'], 'inside' | 'outside'> = 
   block_comment: 'outside',
   ack: 'outside',
   activity: 'outside',
+  publish_spec: 'outside',
   post_output: 'outside',
   review: 'outside',
   link_pr: 'outside',
@@ -69,7 +70,7 @@ export interface OutboxExecutorDeps {
   retryIn(delayMs: number): void;
   leaseMs?: number;
   retry?: EffectRetry;
-  /** The time of the result events (the orchestrator's clock); the store's own by default. */
+  /** The time of the result events (the daemon's clock); the store's own by default. */
   now?: () => number;
 }
 

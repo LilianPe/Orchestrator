@@ -1,5 +1,5 @@
 import { WORKFLOW_FORMAT, type JobSpec, type Limits, type RunLimits, type Workflow } from '../core/workflow.js';
-import { blockingFix, nextOf, REACTION_LINKS, reactionJob, startingJob } from '../core/chain.js';
+import { blockingFix, entry, nextOf, REACTION_LINKS, reactionJob, startingJob } from '../core/chain.js';
 import { UNLINKED_REACTION_JOBS } from '../core/engine.js';
 import { factoryDefault } from './factory-default.js';
 import { compilePreset, isAgentStep, mergeGate, type AgentStep, type Effort, type Preset } from './preset.js';
@@ -20,6 +20,8 @@ export interface StepSettings {
   budgets?: { maxTurns?: Record<string, number> | undefined; perStepTokens?: Record<string, number> | undefined } | undefined;
   /** The built-in tools of a step, in place of its default (ORC-383): never more than the step and its network allow. */
   tools?: { perStep?: Record<string, readonly string[]> | undefined } | undefined;
+  /** The Linear status each step shows (ORC-382), by step name: it names the status the preset's table gives the step. */
+  statuses?: Record<string, string> | undefined;
 }
 
 // Compiled once, at load: a preset that breaks an invariant of the core never reaches the engine.
@@ -53,6 +55,51 @@ function checkStepSettings({ effort, budgets, tools }: StepSettings): void {
   // Refused at load, as a network wider than the repository's: a list never gives a step more than it may have (ORC-383).
   const refused = perStepToolViolations(tools?.perStep ?? {}, preset.steps, preset.name);
   if (refused.length) throw new WorkflowError(refused.map((r) => `factory.yml: ${r}`).join('\n'));
+}
+
+/** ORC-170's Linear statuses, which `factory.yml`'s `statuses` may rename and to which it may add `spec` (ORC-382). */
+export const DEFAULT_STATES: Workflow['states'] = { todo: 'Todo', dev: 'In Progress', human_review: 'Human Review', ai_review: 'AI Review', done: 'Done' };
+
+/**
+ * The Linear status of each logical state, with `factory.yml`'s `statuses` (ORC-382): a step names the status the table of
+ * `factory/default` gives it, so that two steps of one status name the same, and one Linear status names one logical state
+ * (a ticket read in it must be in one). Refused at load otherwise, as a step the preset does not have.
+ */
+export function statesOf(statuses: Readonly<Record<string, string>> = {}): Workflow['states'] {
+  const states: Workflow['states'] = { ...DEFAULT_STATES };
+  const namedBy = new Map<string, string>();
+  for (const [step, name] of Object.entries(statuses)) {
+    const status = entry(preset.statuses, step);
+    if (!status) {
+      const withOne = Object.keys(preset.statuses).join(', ');
+      const what = preset.steps.some((s) => s.id === step) ? 'shows no status of its own' : 'is not a step';
+      throw new WorkflowError(`factory.yml: statuses.${step}: ${what} of ${preset.name} (the steps with one: ${withOne})`);
+    }
+    const before = namedBy.get(status);
+    if (before !== undefined && states[status] !== name) {
+      throw new WorkflowError(`factory.yml: statuses.${step}: « ${name} », where ${before}, which shows the same status, names « ${states[status]} »`);
+    }
+    namedBy.set(status, step);
+    states[status] = name;
+  }
+  const seen = new Map<string, string>();
+  for (const [status, name] of Object.entries(states)) {
+    const other = seen.get(name);
+    if (other) throw new WorkflowError(`factory.yml: statuses: « ${name} » would name both ${other} and ${status}: a Linear status names one`);
+    seen.set(name, status);
+  }
+  return states;
+}
+
+/**
+ * The warning of a project whose Linear team lacks statuses of `states` (ORC-382): a move to one would fail. Undefined when the
+ * team has them all. « Connect Linear » creates the missing ones.
+ */
+export function missingStatusWarning(p: { id: string; teamKey: string }, states: Workflow['states'], team: readonly string[]): string | undefined {
+  const missing = Object.values(states).filter((name) => !team.includes(name));
+  if (!missing.length) return undefined;
+  const names = missing.map((n) => `« ${n} »`).join(', ');
+  return `Warning: ${p.id}: the Linear team ${p.teamKey} has no status ${names}, which the factory moves tickets to (ORC-170's, or as \`statuses\` in factory.yml names them): a move to it fails. Connect Linear again to create it, or name a status the team has.`;
 }
 
 /**
@@ -173,7 +220,7 @@ export function presetWorkflow(given: Preset, settings: StepSettings = {}, entry
     version: WORKFLOW_FORMAT,
     ...(p.level ? { level: p.level } : {}),
     tracker: { kind: 'linear', pickup: { checks: p.guard.checks } },
-    states: { todo: 'Todo', dev: 'In Progress', human_review: 'Human Review', ai_review: 'AI Review', done: 'Done' },
+    states: statesOf(settings.statuses),
     limits,
     workspace: { setup: [], portBase: 4200 },
     // The answer agent at every level: a question in a ticket's thread starts it directly (`askInThread`).

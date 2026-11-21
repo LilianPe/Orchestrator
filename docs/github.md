@@ -41,7 +41,7 @@ A value in `config.yaml` takes precedence over the environment variable. If only
    For the dashboard's GitHub sign-in (ORC-399), under **Identifying and authorizing users**: *Callback URL* `<publicUrl>/auth/github/callback`, *Expire user authorization tokens* left on, *Request user authorization (OAuth) during installation* off. If `dashboard` in `factory.yml` names an `org` or a `team`, add the **Organization permission** *Members*: read, and install the App on that org: GitHub answers a membership to the App's user token only then. A list of `logins` needs neither.
 4. Create the App, note its **App ID** and its **Client ID**, **Generate a client secret** (for the dashboard's sign-in, `GH_APP_CLIENT_SECRET`), then **Generate a private key**. Place the `.pem` outside the repository, with mode `0600` (for example `~/.relais/github-app.pem`).
 5. **Install** the App on the repositories entrusted to Relais. The installation ID is visible in the URL `https://github.com/settings/installations/<id>`; it is optional, the daemon can look it up repository by repository.
-6. Fill in `config.yaml` or the `GH_APP_*` variables, then restart `relais up`. Startup logs the chosen forge, without secrets.
+6. Fill in `config.yaml` or the `GH_APP_*` variables (`factory init` prints these steps and writes `factory.yml` with `github: { app_id: env:GH_APP_ID, private_key: env:GH_APP_KEY }`, ORC-411), then restart `relais up`. Startup logs the chosen forge, without secrets.
 
 #### Tokens
 
@@ -185,7 +185,7 @@ The merge push may arrive before the `pr.merged` of the same merge: it is then l
 
 Each ticket works on `relais/<ticket>-<title-slug>` (e.g. `relais/rel-12-export-csv`), created from `origin/<default branch>` (read from `refs/remotes/origin/HEAD`, otherwise `main`). A local or remote branch with the same name is reused. The `not_started` check refuses to take a ticket that already has a `factory/<ticket>-…` branch on the forge; with `intake` on, it is part of intake's duplicate search ([preset](preset.md#duplicates-existing-code-and-scope-orc-207)).
 
-## Branch protection (strongly recommended)
+## Branch protection (required by `factory doctor`)
 
 The pack forbids agents from `gh pr merge` and any push ([`pack-and-skills.md`](pack-and-skills.md#permissions)), but these refusals are a **guard against mistakes, not a barrier**: they depend on Claude Code and on how the command is written, and an agent that runs code can bypass them. A push fails for want of means: no token in a sandbox, and on the host a git config that sends every push nowhere, which an agent under the daemon's user can still undo (ORC-349, [`interface-and-security.md`](interface-and-security.md#known-limitations)). It is GitHub that guarantees only humans merge. On the default branch of each repository:
 
@@ -196,9 +196,20 @@ The pack forbids agents from `gh pr merge` and any push ([`pack-and-skills.md`](
 
 The knowledge repository (`relais-knowledge`) deserves the same protection: a human merges there.
 
-## `factory doctor`: CI secrets and factory branches
+`factory doctor` refuses a repository whose default branch has neither (ORC-208). It reads, with the App's read permissions only (*Metadata*): `GET /repos/{owner}/{repo}` for the default branch, `GET /repos/{owner}/{repo}/branches/{branch}` for the classic protection's flag, `protection.enabled` (not the branch's `protected`, which GitHub also sets for an active ruleset, whatever its rules), `GET /repos/{owner}/{repo}/rules/branches/{branch}` for the rules the repository's **active** rulesets apply to it (a ruleset in *Evaluate* mode applies none), and `GET /repos/{owner}/{repo}/rulesets/{id}` of each ruleset with a pull request rule, whose `current_user_can_bypass` says whether the App is in its bypass list. Accepted:
 
-`factory doctor [repo] [--json]` (current repository by default) checks, before entrusting a repository, that no CI can expose secrets to the factory's branches. The check lives in `doctor`, not only in the `fix-ci` skill: a factory PR must never trigger a job that reads the repository's secrets without a human having approved it.
+- a ruleset with the **Require a pull request before merging** rule (`pull_request`) that the App cannot bypass (`current_user_can_bypass: never`): `doctor` can read it, it is the recommended form. A ruleset the App bypasses (`always`, `pull_requests_only`, `exempt`) does not count; with no other, `doctor` refuses and names it;
+- a classic branch protection: its rules need the *Administration* permission, which the App does not have, so `doctor` credits its flag alone and says so; check by hand that it requires a pull request.
+
+Refused: no protection and no ruleset, rulesets without the `pull_request` rule (blocking force pushes or deletion alone still lets a direct push land), or only rulesets the App bypasses. An unreadable answer refuses too. Not checked: the number of approvals the rule requires (0 is accepted, see the bullet list above), nor what a classic protection holds.
+
+## `factory doctor`: host, branch protection, CI secrets and factory branches
+
+`factory doctor [repo] [--json]` (current repository by default), run where the daemon runs, in the `factoryd` container under compose (`docker compose exec factoryd node dist/src/cli/factory.js doctor /srv/factory/repos/mon-app`, [`deployment.md`](deployment.md)), checks before entrusting a repository that the host can limit the sandbox, that the default branch is protected ([above](#branch-protection-required-by-factory-doctor)), and that no CI can expose secrets to the factory's branches. Each check has its verdict; one refusal refuses.
+
+**The host (ORC-208).** The attempt containers are limited in processes, memory and CPUs through cgroups ([`tests.md`](tests.md), isolation 9). `doctor` asks the engine the sandboxes run on, `FACTORY_CONTAINER_CLI`, not the cgroups of its own process (in the `factoryd` container, a cgroup namespace of its own, and a uid that is not the engine's): `docker info --format '{{json .}}'` (`CgroupVersion`, `CgroupDriver`, the `CpuCfsQuota`, `MemoryLimit` and `PidsLimit` flags, `name=rootless` in `SecurityOptions`, and `ServerErrors`) or `podman info --format json` (`host.cgroupVersion`, `host.cgroupControllers`, `host.cgroupManager`, `host.security.rootless`). A rootless engine reports what systemd delegates to its user. `doctor` refuses without `FACTORY_CONTAINER_CLI`, on an engine without cgroup v2 (cgroups v1 or the hybrid layout), one that cannot limit through `cpu`, `memory` or `pids` (rootless: not delegated, `sudo loginctl enable-linger <user>`), and a rootless engine on a cgroup manager other than `systemd` (Docker's `CgroupDriver` `none` without a user session; Podman on `cgroupfs`, also behind the Docker-compatible socket compose's `docker` CLI talks to), which ignores the limits whatever its flags. The check runs regardless of `FACTORY_SANDBOX_*`: removing the limits does not make a host without them acceptable. An engine it cannot reach, or whose answer it cannot read, refuses with its error.
+
+**CI secrets.** The check lives in `doctor`, not only in the `fix-ci` skill: a factory PR must never trigger a job that reads the repository's secrets without a human having approved it.
 
 Since ORC-283 the factory's branches follow the team's convention, `feat/<id>-<slug>` or `fix/<id>-<slug>` by default, or the repository's own `branches.pattern` ([repository configuration](repository-configuration.md#branch-names)). They no longer live in a space of their own: a branch filter can no longer tell them from a human's. So `doctor` accepts a job that sees a secret or a writable `GITHUB_TOKEN` on these branches only if a human approves each of its runs: the job runs under an environment with required reviewers. A condition on the actor (`if: github.actor != '<app-slug>[bot]'`) is not credited: a human can start a run on the agent's code (a push on top of its commits, re-opening or labelling its PR), and that run's actor is the human. A ticket whose PR was already open on `factory/<id>-<slug>` keeps that branch, so `doctor` still counts `factory/*` among the factory's branches.
 
@@ -268,7 +279,7 @@ jobs:
 
 `factory doctor` then displays `secrets: yes`, `protected environment: yes` and `verdict: accepted`. The CI without secrets can still run on the factory's branches beside it, in another job or workflow, without approval.
 
-`--json` produces the same verdict in an object `{ repoPath, accepted, workflows: [{ path, triggers, secrets, githubToken, factoryBranches, environments, protected, verdict, reasons }] }`, without any secret value (`githubToken`: the jobs whose token can write, with their rights).
+`--json` produces the same verdict in an object `{ repoPath, accepted, host: { engine?, cgroupV2?, controllers?, rootless?, verdict, reasons }, branchProtection: { branch, classic, rules, pullRequestRulesets: [{ id, bypass }], verdict, reasons }, workflows: [{ path, triggers, secrets, githubToken, factoryBranches, environments, protected, verdict, reasons }] }`, without any secret value (`githubToken`: the jobs whose token can write, with their rights; `host`: what the engine reported, its fields absent when it could not be asked or read).
 
 ### Limitations
 

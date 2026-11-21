@@ -131,6 +131,9 @@ const RESERVED = new RegExp(
 
 const at = (path: PropertyKey[]): string => path.map((p) => (typeof p === 'number' ? `[${p}]` : `.${String(p)}`)).join('');
 
+/** The setup a commit runs, in `verify`, at a launch and in the dry run (whose fingerprint reads it, ORC-409): its `.factory/config.yml`'s, else the workflow's. */
+export const setupOf = (config: Pick<RepoConfig, 'setup'>, workflow: readonly string[]): string[] => (config.setup ? [config.setup] : [...workflow]);
+
 /**
  * Validates a `.factory/config.yml` (undefined: no file) and merges it over the socle; throws a RepoConfigError listing every
  * violation. `defaultBranch`: the repository's, which the factory's branch names must not collide with (ORC-283), when known.

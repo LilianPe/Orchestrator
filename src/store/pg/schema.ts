@@ -14,6 +14,7 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import type { FactoryEvent, FeedbackItem } from '../../core/types.js';
+import type { DryRun } from '../../core/dry-run.js';
 import type { GhostTicket } from '../../ghost/replay.js';
 import type { ChangelogEntry } from '../types.js';
 
@@ -488,7 +489,24 @@ export const ghostJudgments = pgTable(
   (t) => [primaryKey({ columns: [t.replayId, t.ticketId, t.side] })],
 );
 
-/** The public tables, in migration order: the twelve of ORC-132, the security log's (ORC-296), the known flaky tests (ORC-164), the changelog (ORC-197), the baselines (ORC-230), the deliveries (ORC-355), the review defects (ORC-229), the replays of closed tickets (ORC-231). */
+/**
+ * Each dry run of a repository (ORC-408): `setup` and its commands on a commit of its default branch, in the sandbox. `target`,
+ * `main` or a commit given; the last on `main` is what part 3 (ORC-409) reads. The record whole in `data`.
+ */
+export const dryRuns = pgTable(
+  'dry_runs',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id').notNull(),
+    sha: text('sha').notNull(),
+    target: text('target').notNull(),
+    endedAt: timestamp('ended_at', { withTimezone: true, mode: 'date' }).notNull(),
+    data: jsonb('data').$type<DryRun>().notNull(),
+  },
+  (t) => [index('dry_runs_project_idx').on(t.projectId, t.endedAt)],
+);
+
+/** The public tables, in migration order: the twelve of ORC-132, the security log's (ORC-296), the known flaky tests (ORC-164), the changelog (ORC-197), the baselines (ORC-230), the deliveries (ORC-355), the review defects (ORC-229), the replays of closed tickets (ORC-231), the dry runs (ORC-408). */
 export const PG_TABLES = {
   inbox,
   journal,
@@ -513,6 +531,7 @@ export const PG_TABLES = {
   ghostReplays,
   ghostTickets,
   ghostJudgments,
+  dryRuns,
 } as const;
 
 export const PG_TABLE_NAMES = [
@@ -539,6 +558,7 @@ export const PG_TABLE_NAMES = [
   'ghost_replays',
   'ghost_tickets',
   'ghost_judgments',
+  'dry_runs',
 ] as const;
 
 export type PgTableName = (typeof PG_TABLE_NAMES)[number];

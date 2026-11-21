@@ -112,7 +112,7 @@ branches:
 
 The name is given once per ticket. The first run that makes its worktree records it on the ticket, and the next runs keep it, even if its labels or this file change since: a ticket never gets a second branch, nor a second PR. A ticket whose branch already exists under the name the factory gave before ORC-283, `factory/<id>-<slug>` (its PR open, say), keeps that branch.
 
-The factory recognizes its own branches by the branch recorded on its ticket, by its GitHub App as the author of its pushes (the webhooks, ORC-134), and by the heads it published (the GitHub reconciliation, ORC-281, [github.md](github.md#what-relais-polls)), no longer by a prefix. The `not_started` pickup check and the duplicate search look for the ticket's branches by this naming, every type and title, and by the legacy name. Because these branches look like a human's, `factory doctor` asks every CI job that sees a secret to keep the factory's App out or to wait for a human approval ([github.md](github.md#factory-doctor-ci-secrets-and-factory-branches)).
+The factory recognizes its own branches by the branch recorded on its ticket, by its GitHub App as the author of its pushes (the webhooks, ORC-134), and by the heads it published (the GitHub reconciliation, ORC-281, [github.md](github.md#what-relais-polls)), no longer by a prefix. The `not_started` pickup check and the duplicate search look for the ticket's branches by this naming, every type and title, and by the legacy name. Because these branches look like a human's, `factory doctor` asks every CI job that sees a secret to keep the factory's App out or to wait for a human approval ([github.md](github.md#factory-doctor-host-branch-protection-ci-secrets-and-factory-branches)).
 
 ## What a configuration cannot do
 

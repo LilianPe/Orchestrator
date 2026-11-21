@@ -37,7 +37,7 @@ export interface FactoryYml {
   /** Tickets worked at once: the dev queue's capacity (ORC-203), the only one since the workflow's `parallel_sessions` went (ORC-390). */
   concurrency?: number;
   /**
-   * `max_turns` and `per_step_tokens` are applied by `stepSettings` (ORC-136); `per_ticket_tokens` and `on_usage_limit` by the orchestrator (ORC-340).
+   * `max_turns` and `per_step_tokens` are applied by `stepSettings` (ORC-136); `per_ticket_tokens` and `on_usage_limit` by the daemon (ORC-340).
    * A token cap `off` is disabled (ORC-381), `budgets: off` both: unlike a cap left unset, `factory validate` accepts it. `on_usage_limit` is no cap of the factory's.
    */
   budgets?: { perStepTokens?: Record<string, number> | 'off'; perTicketTokens?: number | 'off'; maxTurns?: Record<string, number>; onUsageLimit?: 'wait' };
@@ -67,7 +67,29 @@ export interface FactoryYml {
   acknowledge?: AckMode;
   /** The caps of a run's reads that move a public counter (ORC-370), each `READ_CAPS`' when unset; never off, and no repository's to change. */
   egress?: Partial<ReadCaps>;
+  /** The Linear status each step shows (ORC-382), by step: applied by `stepSettings`, checked against the preset by `defaultWorkflow`. */
+  statuses?: Record<string, string>;
+  /** Where a version of the spec is published (ORC-382): `SPEC_PUBLICATION` for what is unset. */
+  spec?: Partial<SpecPublication>;
 }
+
+/**
+ * How a spec is published in the ticket (ORC-382): in a `comment` alone, in a linked `doc` always, or in the comment and, past
+ * `threshold` characters, in a linked document with the comment giving its summary and its link (`comment+doc`).
+ */
+export interface SpecPublication {
+  mode: 'comment' | 'comment+doc' | 'doc';
+  threshold: number;
+}
+
+/**
+ * `comment+doc` (decided 11/11), past 5 000 characters: half of what the factory posts in one message (`OUTPUT_LIMITS.text`), well
+ * under what Linear takes in a comment, which its API does not state; a spec longer than a screen or two goes to its document.
+ */
+export const SPEC_PUBLICATION: SpecPublication = { mode: 'comment+doc', threshold: 5_000 };
+
+/** The spec's publication `factory.yml` asks for, `SPEC_PUBLICATION`'s for what it leaves unset. */
+export const specPublicationOf = (yml: Pick<FactoryYml, 'spec'> | undefined): SpecPublication => ({ ...SPEC_PUBLICATION, ...yml?.spec });
 
 /** The caps the egress proxy applies to each run's counted reads (ORC-370): factory.yml's, the defaults for those it leaves unset. */
 export function readCapsOf(yml: Pick<FactoryYml, 'egress'> | undefined): ReadCaps {
@@ -176,10 +198,10 @@ export function claudeToken(value: string | undefined, from: string): string | u
 /** What the workflow's agent steps read of the file (ORC-136): no per-step cap when it is `off` (ORC-381). */
 export function stepSettings(yml: FactoryYml | undefined): StepSettings {
   const { perStepTokens, ...budgets } = yml?.budgets ?? {};
-  return { effort: yml?.claude?.effort, budgets: yml?.budgets && { ...budgets, ...(perStepTokens === 'off' ? {} : { perStepTokens }) }, tools: yml?.tools };
+  return { effort: yml?.claude?.effort, budgets: yml?.budgets && { ...budgets, ...(perStepTokens === 'off' ? {} : { perStepTokens }) }, tools: yml?.tools, statuses: yml?.statuses };
 }
 
-/** The ticket's token cap the orchestrator applies (ORC-340): none when it is unset or `off` (ORC-381). */
+/** The ticket's token cap the daemon applies (ORC-340): none when it is unset or `off` (ORC-381). */
 export function ticketCapOf(yml: Pick<FactoryYml, 'budgets'> | undefined): number | undefined {
   const cap = yml?.budgets?.perTicketTokens;
   return cap === 'off' ? undefined : cap;
@@ -216,6 +238,8 @@ const SECTIONS: Record<string, string[]> = {
   audit: ['serious_defect'],
   acknowledge: [],
   egress: ['max_versions_per_package', 'max_assets_per_repo'],
+  statuses: [],
+  spec: ['publish', 'threshold'],
 };
 const effort = z.enum(['low', 'medium', 'high']);
 const counts = z.record(z.string(), z.number().int().positive());
@@ -516,6 +540,15 @@ export function parseFactoryYml(
     const versionsPerPackage = cap('max_versions_per_package');
     const assetsPerRepo = cap('max_assets_per_repo');
     out.egress = { ...(versionsPerPackage ? { versionsPerPackage } : {}), ...(assetsPerRepo ? { assetsPerRepo } : {}) };
+  }
+
+  const statuses = leaf('statuses', r['statuses'], z.record(z.string(), z.string().trim().min(1)), '`step: Linear status` expected');
+  if (statuses) out.statuses = statuses;
+  const spec = section('spec');
+  if (spec) {
+    const mode = leaf('spec.publish', spec['publish'], z.enum(['comment', 'comment+doc', 'doc']), '`comment`, `comment+doc` or `doc` expected');
+    const threshold = leaf('spec.threshold', spec['threshold'], z.number().int().positive(), 'a positive integer is expected: characters');
+    out.spec = { ...(mode ? { mode } : {}), ...(threshold ? { threshold } : {}) };
   }
 
   if (Object.keys(secretRefs).length) out.secretRefs = secretRefs;

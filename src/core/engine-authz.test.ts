@@ -142,7 +142,7 @@ describe('decide — authorization matrix (ORC-186)', () => {
     expect(integration.effects).toEqual([]);
   });
 
-  it('says which events the matrix may check, so the orchestrator resolves roles only for them', () => {
+  it('says which events the matrix may check, so the daemon resolves roles only for them', () => {
     const e = <T extends EventType>(type: T, payload: EventPayloads[T]) => ev(type, payload, 'u', undefined);
     expect(mayCheck(e('ticket.delegated', {}), workflow)).toBe(true);
     expect(mayCheck(e('session.prompted', { linearSessionId: 's', body: '', author: 'A' }), workflow)).toBe(true);

@@ -1,4 +1,4 @@
-import { isAgentStep, mergeGate, type FailureEdge, type FixCause, type Step } from '../presets/preset.js';
+import { isAgentStep, mergeGate, type FailureEdge, type FixCause, type Step, type StepStatus } from '../presets/preset.js';
 import type { LogicalState } from './types.js';
 import type { JobSpec, Post, Workflow } from './workflow.js';
 
@@ -9,11 +9,26 @@ import type { JobSpec, Post, Workflow } from './workflow.js';
  * merge; or the end of the run.
  */
 
-/** The status the ticket shows while a step works or waits (ORC-170's names). ORC-382 makes it configurable. */
-const STEP_STATUS: Readonly<Partial<Record<string, LogicalState>>> = { build: 'dev', review: 'ai_review', human_review: 'human_review' };
+/** The entry of `table` for step `id`, if it has one. */
+export const entry = <T>(table: Readonly<Record<string, T>>, id: string): T | undefined => (Object.hasOwn(table, id) ? table[id] : undefined);
 
-/** What the end of a step posts in the ticket's session: the build's summary, a fix's reply, the review (published by its last lens). */
-const STEP_POST: Readonly<Partial<Record<string, Post>>> = { build: 'summary', fix: 'reply', review: 'review' };
+/** The logical state the preset gives step `id` (ORC-382), whether the workflow names it or not. */
+const statusOf = (wf: Workflow, id: string): StepStatus | undefined => entry(wf.preset.statuses, id);
+
+/**
+ * The status the ticket moves to when the chain reaches step `id` (ORC-382): the preset's step → status table, frozen with it, to a
+ * status the workflow names. Never Todo, a human's status, nor a status with no name (`spec`, unless `factory.yml` names one).
+ */
+export function stepStatus(wf: Workflow, id: string): LogicalState | undefined {
+  const status = statusOf(wf, id);
+  return status && status !== 'todo' && wf.states[status] ? status : undefined;
+}
+
+/** The status the chain moves the ticket to when it reaches step `id`: the chain's entry moves it at its own launch instead (`startMove`). */
+export const statusReached = (wf: Workflow, id: string): LogicalState | undefined => (id !== wf.entry ? stepStatus(wf, id) : undefined);
+
+/** What the end of step `id` posts in the ticket's session: the preset's step → post table, frozen with it (ORC-382). */
+const stepPost = (wf: Workflow, id: string): Post | undefined => entry(wf.preset.posts, id);
 
 /** What the end of a job does: the job it starts, the move it makes, what it posts. */
 export interface JobEnd {
@@ -79,8 +94,8 @@ export function nextOf(wf: Workflow, job: JobSpec, gatePassed = false): JobEnd {
   const run = next ? jobStarting(wf, next) : undefined;
   if (wf.level === 'rapide') return { ...(run ? { run } : {}), step: next };
   // The chain's entry moves the ticket at its own launch (`startMove`), wherever it starts from: an end that reaches it does not.
-  const move = next && next.id !== wf.entry ? STEP_STATUS[next.id] : undefined;
-  const post = STEP_POST[step.id];
+  const move = next ? statusReached(wf, next.id) : undefined;
+  const post = stepPost(wf, step.id);
   return { ...(run ? { run } : {}), ...(move ? { move } : {}), ...(post ? { post } : {}), step: next };
 }
 
@@ -90,9 +105,26 @@ export function delegatedJob(wf: Workflow): JobSpec | undefined {
   return entry && jobStarting(wf, entry);
 }
 
+/**
+ * Step `id` comes in the chain before the step that shows In Progress (ORC-422): intake, the spec, the tests for
+ * `factory/default`. A ticket at one of them is not at work on the code yet, whatever status a delegation again left it in.
+ */
+export function beforeInProgress(wf: Workflow, id: string): boolean {
+  let seen = false;
+  for (let s = stepById(wf, wf.entry); s; s = stepById(wf, s.next)) {
+    if (statusOf(wf, s.id) === 'dev') return seen;
+    seen ||= s.id === id;
+  }
+  // A chain where no step shows In Progress (its entry past it): none comes before it.
+  return false;
+}
+
+/** The step of the preset that drafts the spec (ORC-212), if it has one. */
+export const specStep = (wf: Workflow): string | undefined => wf.preset.steps.find((s) => s.type === 'agent_step' && s.writes === 'spec')?.id;
+
 /** The move the launch of `job` makes: the chain's entry shows its status from its first run on. */
 export function startMove(wf: Workflow, job: JobSpec): LogicalState | undefined {
-  return wf.level !== 'rapide' && job.step !== undefined && job.step === wf.entry ? STEP_STATUS[job.step] : undefined;
+  return wf.level !== 'rapide' && job.step !== undefined && job.step === wf.entry ? stepStatus(wf, job.step) : undefined;
 }
 
 /**
@@ -100,7 +132,7 @@ export function startMove(wf: Workflow, job: JobSpec): LogicalState | undefined 
  * first lens for AI Review.
  */
 export function jobEntering(wf: Workflow, status: LogicalState): JobSpec | undefined {
-  const step = wf.preset.steps.find((s) => STEP_STATUS[s.id] === status && s.id !== wf.entry);
+  const step = wf.preset.steps.find((s) => stepStatus(wf, s.id) === status && s.id !== wf.entry);
   return step && jobStarting(wf, step);
 }
 

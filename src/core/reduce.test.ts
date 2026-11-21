@@ -124,7 +124,7 @@ describe('reduce — decided events', () => {
   });
 });
 
-describe('reduce — facts recorded by the orchestrator', () => {
+describe('reduce — facts recorded by the daemon', () => {
   it('records a move made by the factory, a linked session and the pending job', () => {
     const out = fold(ticket(), { type: 'status.recorded', to: 'human_review' }, { type: 'session.linked', linearSessionId: 's1' }, { type: 'pending.set', job: { job: 'dev' } })!;
     expect(out).toMatchObject({ logical: 'human_review', linearSessionId: 's1', pendingJob: { job: 'dev' } });

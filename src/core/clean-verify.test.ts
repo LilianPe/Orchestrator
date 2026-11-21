@@ -22,7 +22,7 @@ import { VERIFY_TIMEOUT_MS } from './verify.js';
 
 const BRANCH = 'factory/orc-1-x';
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
-/** A second check of the same run: its work dir emptied as the orchestrator's new one would be. */
+/** A second check of the same run: its work dir emptied as the daemon's new one would be. */
 const setupAgain = (req: CleanVerifyRequest): CleanVerifyRequest => {
   rmSync(join(req.workDir, 'gitconfig'), { force: true });
   return req;

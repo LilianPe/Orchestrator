@@ -10,7 +10,7 @@ Relais acts in Linear as an **agent**: an OAuth application installed with `acto
 |---|---|
 | Name | `relais`: this is the name that will be mentioned with `@`. |
 | Callback URL | `http://localhost:4100/oauth/callback`, or `<publicUrl>/oauth/callback` if `publicUrl` is set. The port follows `port` in `config.yaml`. |
-| Webhooks | Checked. URL: `<publicUrl>/webhooks/linear` on the server; on a workstation, the smee channel created by `relais init` (`https://smee.io/…`). See [Webhooks](#3-webhooks-production-and-development). |
+| Webhooks | Checked. URL: `<publicUrl>/webhooks/linear` on the server; on a workstation, the smee channel created by `factory init --dev` (`https://smee.io/…`). See [Webhooks](#3-webhooks-production-and-development). |
 | Webhook categories | **Agent session events**, **Issues**, **Comments**. |
 
 Create the application, then copy into `relais init`:
@@ -44,7 +44,7 @@ Linear must be able to reach Relais. Set in `config.yaml`:
 
 - **Production, on the server**: `publicUrl: https://relais.exemple.fr` and `relay: { kind: none }`. Linear calls `POST <publicUrl>/webhooks/linear` directly, in HTTPS, through the server's reverse proxy: the host's own (nginx, Caddy…), or the optional `caddy` service of `compose.yaml` (`--profile tls`). `factoryd` listens in plain HTTP behind it. Setup and examples: [`deployment.md`](deployment.md#tls-and-webhooks) (ORC-221).
 - **Development, on a workstation only** (never the server):
-  - **smee relay** (the default of `relais init`): `relay: { kind: smee, url: https://smee.io/… }`. Linear sends the webhooks to the public smee.io channel; `relais up` subscribes to it (SSE stream) and replays them locally. Nothing to open on the machine. The channel is created by `relais init`;
+  - **smee relay** (`factory init --dev`, ORC-411: without `--dev`, `init` creates no channel): `relay: { kind: smee, url: https://smee.io/… }`. Linear sends the webhooks to the public smee.io channel; `relais up` subscribes to it (SSE stream) and replays them locally. Nothing to open on the machine. The channel is created by `factory init --dev`;
   - **a tunnel** (ngrok, `cloudflared tunnel`): `publicUrl: <the tunnel's HTTPS URL>` and `relay: { kind: none }`, as on the server; the tunnel stands in for the reverse proxy, towards `http://localhost:4100`. Its URL changes with each tunnel unless it is reserved: update the application's webhook and callback URLs then.
 
 Every webhook is verified, whatever the mode:
@@ -138,9 +138,9 @@ Reply on this ticket: I will resume as soon as you answer.
 
 `decide` writes the fields, the factory composes the text in a single place (`src/core/block-comment.ts`; the `OutputPolicy` checks it before it is posted, ORC-214) and reads the state at write time. What the factory does not know, it says (`none`, `unknown`). "What I tried" only lists facts: sometimes just one, never invented. A block that a reply does not lift (repository to add or to name) says so on the last line. A stop on request (`stop`, PR closed) stays a reply in the session: there is nothing to escalate.
 
-**Replying.** A comment from a workspace user on a blocked and delegated ticket, or a reply in its session, relaunches the blocked step. The comment can be at the ticket level or in a thread. These do not count as a reply: a comment from the factory, from an integration or synced (Slack, email), a comment that starts with a mention (`@relais` opens its own session, `@someone` talks to someone else), `/refreeze`. A human who is not a member of the team is refused: the refusal is journaled and replied to in the ticket. An accepted comment follows the same path as a reply in the session: secret masked before the journal, classified, kept in `humanInbox` with its taint, and the run that empties the inbox takes the taint of everything it empties (I12). A question on a blocked ticket counts as a reply and relaunches the step. So does an `@relais` mention on a blocked and delegated ticket, a question or unclassified (ORC-415): it is kept in `humanInbox` for the agent, needs the right to relaunch as well as the right to trigger, and resumes the blocked step instead of starting the answer agent, so the block is never lifted with no step running. A mention that gives an instruction waits in `humanInbox`, the block kept; on a ticket no longer delegated, the question is answered and the block kept. `/status` and `/stop` are commands: they relaunch nothing, and `/status` is answered in a comment. On a ticket that is not waiting for a reply, a comment remains a conversation between humans: the factory does not read it, it does not enter `humanInbox`, and a comment written just after the resumption is therefore not kept. To talk to the agent while it works, use its session. A comment lost by Linear is not caught up by reconciliation.
+**Replying.** A comment from a workspace user on a blocked and delegated ticket, or a reply in its session, relaunches the blocked step. The comment can be at the ticket level or in a thread. These do not count as a reply: a comment from the factory, from an integration or synced (Slack, email), a comment that starts with a mention (`@relais` opens its own session, `@someone` talks to someone else), `/refreeze`. A human who is not a member of the team is refused: the refusal is journaled and replied to in the ticket. An accepted comment follows the same path as a reply in the session: secret masked before the journal, classified, kept in `humanInbox` with its taint, and the run that empties the inbox takes the taint of everything it empties (I12). A question on a blocked ticket counts as a reply and relaunches the step. So does an `@relais` mention on a blocked and delegated ticket, a question, an instruction or unclassified (ORC-415, ORC-426): it is kept in `humanInbox` for the agent, needs the right to relaunch as well as the right to trigger, and resumes the blocked step instead of starting the answer agent, so the block is never lifted with no step running. On a ticket no longer delegated, the question is answered and the block kept. `/status` and `/stop` are commands: they relaunch nothing, and `/status` is answered in a comment. On a ticket that is not waiting for a reply, a comment remains a conversation between humans: the factory does not read it, it does not enter `humanInbox`, and a comment written just after the resumption is therefore not kept. To talk to the agent while it works, use its session. A comment lost by Linear is not caught up by reconciliation.
 
-A ticket frozen on a workflow of format 1 (before ORC-393, which dropped the free text in the session and the `agent:reprendre` label) is refused, not decided, and a comment on the ticket says why and asks for a new ticket (ORC-419, [preset](preset.md#frozen-versions-orc-393)).
+A ticket frozen on a workflow of format 1 (before ORC-393, which dropped the free text in the session and the `agent:reprendre` label) is refused, not decided, and a comment on the ticket says why and asks for a new ticket (ORC-419), titled « ⛔ Refused: old frozen workflow version », with no step nor attempt: the ticket is not blocked (ORC-425, [preset](preset.md#frozen-versions-orc-393)).
 
 ### Triggering
 
@@ -203,23 +203,24 @@ Linear members and GitHub permissions are cached for **60 s** then reread: someo
 
 ## 5. States, columns and labels
 
-Relais reasons in five **logical states** mapped by name to the team's statuses ("Ready to Merge" no longer exists since ORC-170):
+Relais reasons in **logical states** mapped by name to the team's statuses ("Ready to Merge" no longer exists since ORC-170). Each step of the preset shows one, or none; `statuses` in `factory.yml` names them by step (ORC-382, [preset](preset.md#linear-statuses)):
 
 | Logical state | Linear status (pack) | Linear type given if created |
 |---|---|---|
 | `todo` | Todo | `unstarted` |
+| `spec` | none, unless `statuses.spec_draft` names one (« Spec ») | `started` |
 | `dev` | In Progress | `started` |
 | `human_review` | Human Review | `started` |
 | `ai_review` | AI Review | `started` |
 | `done` | Done | `completed` |
 
-Missing statuses are created on connection. If your columns have other names, declare them in `states` in `.relais/workflow.yml` **before** connecting Linear ([`preset.md`](preset.md#linear-statuses)), otherwise Relais creates the pack's names next to yours.
+Missing statuses are created on connection. If your columns have other names, declare them in `statuses` in `factory.yml` **before** connecting Linear ([`preset.md`](preset.md#linear-statuses)), otherwise Relais creates the pack's names next to yours. `factory doctor` warns of a status the team lacks.
 
 Moves made by Relais itself are recognized, by the actor of their webhook, and do not re-trigger a reaction.
 
 A delegated ticket moved by a human to a status of type *Canceled* cancels its run (stop, queue and pending replies dropped); it is not blocked, and a block in progress is lifted along with its label (ORC-170). The ticket then goes to the logical state `cancelled`, read on the status's Linear type, never mapped by name: it is not declared in `states`, and nothing moves a ticket to it. A cancelled ticket is settled, as a delivered one: a failure that comes after (an effect replayed late) blocks it no more, nor does its PR closed afterwards (only recorded closed, no `pr.closed` rule applies), a delegation starts nothing, a question the answer agent relays is not asked (nobody implements it: the human is told so, and a message is acked as not picked up unless a human moves the ticket out of Canceled), its session folder is purged as a closed ticket's ([`operations.md`](operations.md)), and the dashboard no longer lists it among the unfinished tickets nor counts its duration on. A human move to a declared status takes it out of `cancelled`.
 
-**Who sets which status.** In a ticket taken to the merge, a human sets two statuses only: *Todo* (the ticket written, then delegated) and *Done* (the merge decision, ORC-148). The factory sets *In Progress*, *AI Review* and *Human Review* from its steps (the preset's step → status table, ORC-391). After a *Done* set by a human, the merge moves nothing: the ticket is already in *Done*. After a PR merged directly on GitHub, the factory moves the ticket to *Done* (`pr.merged` rule). No work of the factory waits for a human move either: a commit published on a reply, a block lifted included, goes to *AI Review* and its review by itself (`dev-feedback`, as `fix-human`).
+**Who sets which status.** In a ticket taken to the merge, a human sets two statuses only: *Todo* (the ticket written, then delegated) and *Done* (the merge decision, ORC-148). The factory sets *In Progress*, *AI Review* and *Human Review* (and *Spec*, when `factory.yml` names it) from its steps (the preset's step → status table, ORC-391, ORC-382). After a *Done* set by a human, the merge moves nothing: the ticket is already in *Done*. After a PR merged directly on GitHub, the factory moves the ticket to *Done* (`pr.merged` rule). No work of the factory waits for a human move either: a commit published on a reply, a block lifted included, goes to *AI Review* and its review by itself (`dev-feedback`, as `fix-human`).
 
 As long as a ticket is **blocked** (the factory is waiting for a reply), the `Bloqué` label is set next to its status; it is removed when the ticket restarts. Relais creates it on connection, along with `agent:stop`.
 

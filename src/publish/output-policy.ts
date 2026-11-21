@@ -225,7 +225,7 @@ export class OutputPolicy {
 }
 
 /**
- * The tracker every write of the orchestrator goes through (ORC-214): its comments and activities pass the policy, a refused one
+ * The tracker every write of the daemon goes through (ORC-214): its comments and activities pass the policy, a refused one
  * replaced by its notice and logged without its text. Every method is written out, so a new one with free text cannot slip past:
  * reads, and writes without free text (moves, labels, the plan's fixed steps, the PR's link), go straight on.
  */
@@ -242,6 +242,13 @@ export class PolicedTracker implements Tracker {
     return this.tracker.comment(id, out, effectId);
   }
 
+  /** A document's body passes the policy as a comment's does (ORC-382): its title is the factory's own. */
+  async document(id: string, title: string, body: string, effectId?: string): Promise<string | undefined> {
+    const out = await this.policy.comment(body);
+    if (out !== body) this.log(`document on ${id}: ${out}`);
+    return this.tracker.document(id, title, out, effectId);
+  }
+
   async activity(session: string, a: ActivityInput, effectId?: string): Promise<void> {
     const out = await this.policy.activity(a);
     if (out !== a) this.log(`activity in session ${session}: ${out.type === 'action' ? out.parameter : out.body}`);
@@ -255,6 +262,7 @@ export class PolicedTracker implements Tracker {
   moveTo(id: string, state: string): Promise<void> { return this.tracker.moveTo(id, state); }
   setLabels(id: string, add: string[], remove: string[]): Promise<LabelsWritten> { return this.tracker.setLabels(id, add, remove); }
   findComment(id: string, effectId: string): Promise<string | undefined> { return this.tracker.findComment(id, effectId); }
+  findDocument(id: string, effectId: string): Promise<string | undefined> { return this.tracker.findDocument(id, effectId); }
   react(commentId: string, emoji: string, effectId?: string): Promise<void> { return this.tracker.react(commentId, emoji, effectId); }
   findReaction(commentId: string, effectId: string): Promise<string | undefined> { return this.tracker.findReaction(commentId, effectId); }
   findActivity(session: string, effectId: string): Promise<string | undefined> { return this.tracker.findActivity(session, effectId); }

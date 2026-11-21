@@ -55,12 +55,9 @@ describe('spec_draft, spec_check and the spec_review gate (ORC-212)', () => {
     expect(workflow.limits).toMatchObject({ specCheckReturns: 1, specChanges: 3 });
   });
 
-  it('a spec that passes spec_check is published in the session, with its risk and its criteria count, and the ticket waits for review', () => {
+  it('a spec that passes spec_check is published, with its version and its risk (ORC-382: in the ticket), and the ticket waits for review', () => {
     const out = decide(ticket(), drafted(SPEC), workflow);
-    const published = out.effects.filter((x) => x.kind === 'activity');
-    expect(published).toEqual([expect.objectContaining({ type: 'response', body: expect.stringMatching(/^Spec published \(risk: medium\)\. 2 acceptance criteria → tests\./) })]);
-    expect(published[0]).toMatchObject({ body: expect.stringContaining('/approve') });
-    expect(published[0]).toMatchObject({ body: expect.stringContaining('**Assumed without verification**\n- (none)') });
+    expect(out.effects.filter((x) => x.kind === 'publish_spec' || x.kind === 'activity')).toEqual([{ kind: 'publish_spec', version: 1, spec: SPEC, risk: 'medium' }]);
     expect(out.effects.some((x) => x.kind === 'start_run' || x.kind === 'move')).toBe(false);
     expect(reviewing()).toMatchObject({ blocked: false, spec: { job: 'spec', version: 1, spec: SPEC, at: 1000 } });
     expect(reviewing().spec).not.toHaveProperty('approval');
@@ -207,7 +204,7 @@ describe('spec_draft, spec_check and the spec_review gate (ORC-212)', () => {
     expect(changed.spec).not.toHaveProperty('approval');
     // Its new version is published for review: the run starts again from spec_review, nothing goes on before a new approval.
     const v2 = decide({ ...changed, activeRunId: 'r-spec2', activeJob: 'spec' }, drafted({ ...SPEC, out_of_scope: ['Archived audits'] }, 'r-spec2'), workflow);
-    expect(v2.effects).toEqual([expect.objectContaining({ kind: 'activity', body: expect.stringMatching(/^Spec published/) })]);
+    expect(v2.effects).toEqual([{ kind: 'publish_spec', version: 2, spec: { ...SPEC, out_of_scope: ['Archived audits'] }, risk: 'medium' }]);
     const reviewed = after({ ...changed, activeRunId: 'r-spec2', activeJob: 'spec' }, drafted({ ...SPEC, out_of_scope: ['Archived audits'] }, 'r-spec2'));
     expect(reviewed.spec).toMatchObject({ version: 2 });
     expect(decide(reviewed, command('/approve'), workflow).effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'tests' }));

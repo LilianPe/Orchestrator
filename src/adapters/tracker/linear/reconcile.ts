@@ -119,7 +119,7 @@ async function reconcileProject(d: ReconcileDeps, p: ProjectRuntime, team: strin
       const kind = repos ? 'unrouted' : 'delegated';
       const id = t ? `reconcile:${kind}:${p.id}:${issue.identifier}:${t.updatedAt}` : `reconcile:${kind}:${p.id}:${issue.identifier}`;
       const logical = logicalFromName(p.workflow.states, issue.stateName) ?? 'todo';
-      // An untracked ticket: the snapshot spares the orchestrator a second read of the tracker.
+      // An untracked ticket: the snapshot spares the daemon a second read of the tracker.
       const payload = { ...(t ? {} : { issue: { title: issue.title, logical, priority: issue.priority } }), ...(repos ? { repos } : {}), ...(waitedIn ? { waitedIn } : {}) };
       await emit({ ticketId: issue.identifier }, UNSIGNED, id, 'ticket.delegated', payload);
       await inTurn(() => recordLabels(d.store, p.id, issue.identifier, issue.labels, issue.updatedAt ?? 0));

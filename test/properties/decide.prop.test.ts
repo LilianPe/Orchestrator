@@ -99,7 +99,9 @@ const answersBlock = (step: Step): boolean => step.kind === 'decided' && step.ev
 /**
  * I5 on one loop: between two resets of its `counter`, the runner gets at most `bound - 1` of its relaunches, counted as it
  * gets them (`launches`, ORC-360: a relaunch kept pending counts once, when it starts, by a decision or by `settle`); and the
- * `failure` that reaches the bound is decided with no relaunch and a block.
+ * `failure` that reaches the bound is decided with no relaunch and a block. On a ticket already blocked (ORC-416), the launch
+ * would refuse its relaunch: a failure there gets none and counts none, and the block stays, never replaced by the check's
+ * (a human push's own check re-blocks on that push: ORC-159).
  */
 function loopBounded(r: Run, counter: 'verifyAttempts' | 'redAttempts', bound: number, relaunch: (e: Effect) => boolean, failure: (e: FactoryEvent) => boolean): void {
   let relaunches = 0;
@@ -107,9 +109,17 @@ function loopBounded(r: Run, counter: 'verifyAttempts' | 'redAttempts', bound: n
     if (step.kind === 'decided' && step.decision.events.some((e) => e.type === 'ticket.patched' && e.patch[counter] === 0)) relaunches = 0;
     relaunches += launches(step).filter(relaunch).length;
     expect(relaunches).toBeLessThanOrEqual(bound - 1);
-    if (step.kind !== 'decided' || !failure(step.event) || isFenced(step.decision) || (step.before?.[counter] ?? 0) + 1 < bound) continue;
+    if (step.kind !== 'decided' || !failure(step.event) || isFenced(step.decision)) continue;
+    const blocked = step.before?.blocked;
+    if (!blocked && (step.before?.[counter] ?? 0) + 1 < bound) continue;
     expect(step.decision.effects.filter(relaunch)).toEqual([]);
-    expect(step.decision.events.map((e) => e.type)).toContain('ticket.blocked');
+    if (!blocked) {
+      expect(step.decision.events.map((e) => e.type)).toContain('ticket.blocked');
+      continue;
+    }
+    expect(step.after?.[counter] ?? 0).toBe(step.before?.[counter] ?? 0);
+    expect(step.decision.events.filter((e) => e.type === 'ticket.blocked' && e.kind !== 'human_push')).toEqual([]);
+    expect(step.after?.blocked).toBe(true);
   }
 }
 
@@ -424,6 +434,9 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
           ...failedAttempt('dev', 'r3'),
           ...failedAttempt('dev', 'r4'),
         );
+        // Found by fast-check (ORC-416): at verify_attempts 1 the first failure blocks; the done of a run started anyway is
+        // kept (ORC-403), and its failed check no longer replaces that block.
+        const failedOnBlock = seq(...delegated(), ...failedAttempt('dev', 'r1'), ...failedAttempt('dev', 'r2'));
         fc.assert(
           fc.property(sequences, fc.integer({ min: 1, max: 3 }), (s, attempts) => {
             const w = workflow(attempts);
@@ -436,7 +449,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
               (e) => e.type === 'verify.failed' && !w.jobs[e.payload.job]?.red,
             );
           }),
-          params<[Sequences, number]>([[redCiOnPending, 2], [stuckSettle, 2], [stuckOnBlocked, 2], [pendingPastGreen, 3]]),
+          params<[Sequences, number]>([[redCiOnPending, 2], [stuckSettle, 2], [stuckOnBlocked, 2], [pendingPastGreen, 3], [failedOnBlock, 1]]),
         );
       },
       TIMEOUT,

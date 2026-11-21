@@ -106,6 +106,11 @@ export class FakeTracker implements Tracker, TeamDirectory {
     return this.argsOf('comment', identifier).map(([body]) => body as string);
   }
 
+  /** The documents linked to the ticket (ORC-382), in order. */
+  documents(identifier: string): { title: string; body: string }[] {
+    return this.argsOf('document', identifier).map(([title, body]) => ({ title: title as string, body: body as string }));
+  }
+
   /** The emojis put on the comment, in order (ORC-380). */
   reactions(commentId: string): string[] {
     return this.argsOf('react', commentId).map(([emoji]) => emoji as string);
@@ -220,6 +225,22 @@ export class FakeTracker implements Tracker, TeamDirectory {
     this.must(identifier);
     const n = this.argsOf('comment', identifier).findIndex(([, e]) => e === effectId);
     return n < 0 ? undefined : `comment-${identifier}-${n + 1}`;
+  }
+
+  /** `keepsDocuments: false`: a tracker with no document beside a ticket (ORC-382), whose `document` gives no link. */
+  keepsDocuments = true;
+
+  async document(identifier: string, title: string, body: string, effectId?: string): Promise<string | undefined> {
+    this.must(identifier);
+    if (!this.keepsDocuments) return undefined;
+    this.record('document', identifier, title, body, ...(effectId === undefined ? [] : [effectId]));
+    return `https://linear.test/document/${identifier}-${this.argsOf('document', identifier).length}`;
+  }
+
+  async findDocument(identifier: string, effectId: string): Promise<string | undefined> {
+    this.must(identifier);
+    const n = this.argsOf('document', identifier).findIndex(([, , e]) => e === effectId);
+    return n < 0 ? undefined : `https://linear.test/document/${identifier}-${n + 1}`;
   }
 
   async react(commentId: string, emoji: string, effectId?: string): Promise<void> {

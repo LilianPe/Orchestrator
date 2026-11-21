@@ -1,16 +1,21 @@
 import { parseAllDocuments } from 'yaml';
-import type { Exec } from '../adapters/exec.js';
+import { execCmd, mustExec, type Exec } from '../adapters/exec.js';
 import {
   GitHubAppApi,
+  type BranchProtection,
   type EnvironmentProtection,
   type WorkflowSource,
 } from '../adapters/forge/github-app-api.js';
 import type { HttpClient } from '../adapters/forge/github-app.js';
 import { resolveGithubApp } from '../config/github-app.js';
-import { GITHUB_APP_SECRETS, loadSealedFactoryYml, serverSecretLines, serverSecretReport, type SecretReport } from '../config/server-secrets.js';
-import { effectiveInstance } from '../config/instance.js';
+import { GITHUB_APP_SECRETS, LINEAR_SECRETS, loadSealedFactoryYml, serverSecretLines, serverSecretReport, type SecretReport } from '../config/server-secrets.js';
+import { effectiveInstance, samePath, validatorWarnings, type ProjectConfig } from '../config/instance.js';
+import type { Workflow } from '../core/workflow.js';
+import { isFantome } from '../presets/fantome.js';
+import { missingStatusWarning, statesOf } from '../presets/workflow.js';
+import { cliLinearTracker } from './linear.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
-import { browserImage, visualProofLine } from '../app/sandbox-wiring.js';
+import { browserImage, containerCli, visualProofLine } from '../app/sandbox-wiring.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning, testCommandWarnings, type RepoConfig } from '../config/repo-config.js';
 import { branchNameOfType, branchSpaces, branchTypes, DEFAULT_BRANCH_NAMING, LEGACY_BRANCHES, legacyBranchName, type BranchNaming } from '../core/naming.js';
 
@@ -44,11 +49,147 @@ function factoryBranches(naming: BranchNaming): FactoryBranches {
 export interface DoctorApi {
   listWorkflows(repoPath: string): Promise<WorkflowSource[]>;
   listEnvironments(repoPath: string): Promise<EnvironmentProtection[]>;
+  branchProtection(repoPath: string): Promise<BranchProtection>;
+}
+
+type Verdict = 'accepted' | 'refused';
+
+/**
+ * The host as the sandbox limits need it (ORC-208), as its engine reports it: cgroup v2, and the limits it can set. What the
+ * engine did not say is absent, never `false`: an engine that cannot be asked or read leaves only the verdict and its reason.
+ */
+export interface HostReport {
+  /** The engine asked, `FACTORY_CONTAINER_CLI`. */
+  engine?: 'docker' | 'podman';
+  cgroupV2?: boolean;
+  /** Of `cpu`, `memory` and `pids`, the controllers the engine can set its limits through. */
+  controllers?: string[];
+  rootless?: boolean;
+  verdict: Verdict;
+  reasons: string[];
+}
+
+/** The limits of an attempt's containers: processes, memory, CPUs (docs/tests.md, isolation 9). */
+const REQUIRED_CONTROLLERS = ['cpu', 'memory', 'pids'];
+
+/** What `info` says of the cgroups, whichever the engine. */
+interface EngineCgroups {
+  cgroupV2: boolean;
+  controllers: string[];
+  rootless: boolean;
+  /** Docker's CgroupDriver, Podman's cgroupManager: rootless, the engine ignores the limits off `systemd`. */
+  manager: string | undefined;
+}
+
+/**
+ * Asks the engine the sandboxes run on (ORC-208), `FACTORY_CONTAINER_CLI`, rather than this process's cgroups: run in the
+ * `factoryd` container, `doctor` sees a cgroup namespace of its own, and its uid is not the engine's. A rootless engine
+ * reports the controllers delegated to its user, the only ones it can limit through.
+ */
+export async function checkHost(env: NodeJS.ProcessEnv, run: Exec = execCmd): Promise<HostReport> {
+  const cli = containerCli(env);
+  if (!cli) return { verdict: 'refused', reasons: ['no container engine (FACTORY_CONTAINER_CLI is not set): nothing limits the sandbox'] };
+  if (typeof cli !== 'string') return { verdict: 'refused', reasons: [cli.refused] };
+  let cgroups: EngineCgroups;
+  try {
+    const args = cli === 'docker' ? ['info', '--format', '{{json .}}'] : ['info', '--format', 'json'];
+    const info: unknown = JSON.parse(await mustExec(run, cli, args, { timeoutMs: 60_000 }));
+    cgroups = cli === 'docker' ? dockerCgroups(info) : podmanCgroups(info);
+  } catch (error) {
+    return { engine: cli, verdict: 'refused', reasons: [`cannot read the cgroups of the engine (${cli} info): ${errorMessage(error).slice(0, 600)}`] };
+  }
+  const { cgroupV2, controllers, rootless, manager } = cgroups;
+  const linger = 'sudo loginctl enable-linger <user>, docs/tests.md';
+  const reasons: string[] = [];
+  const missing = REQUIRED_CONTROLLERS.filter((controller) => !controllers.includes(controller));
+  // On cgroups v1, no delegation makes the limits work: the version alone is said.
+  if (!cgroupV2) reasons.push(`no cgroup v2: ${cli} runs on cgroups v1 or the hybrid layout, the sandbox cannot limit processes, memory and CPUs`);
+  else if (rootless && manager !== 'systemd') {
+    // Whatever the controllers it lists: Docker's rootless driver `none` (no user session), Podman's `cgroupfs`.
+    reasons.push(`rootless ${cli} on the ${manager ?? 'unknown'} cgroup manager ignores the limits: it needs systemd, a user session (${linger})`);
+  } else if (missing.length > 0) {
+    reasons.push(`${cli} cannot limit through the ${missing.join(', ')} controller(s)${rootless ? `, not delegated to its user (${linger})` : ''}`);
+  }
+  return {
+    engine: cli,
+    cgroupV2,
+    controllers,
+    rootless,
+    verdict: reasons.length > 0 ? 'refused' : 'accepted',
+    reasons: reasons.length > 0 ? reasons : [`${rootless ? 'rootless ' : ''}${cli} on cgroup v2, limits through ${REQUIRED_CONTROLLERS.join(', ')}`],
+  };
+}
+
+const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
+
+/** `docker info --format '{{json .}}'`: one flag per limit, which a rootless engine sets from its user's delegated controllers. */
+function dockerCgroups(info: unknown): EngineCgroups {
+  if (!isObject(info)) throw new Error('not a JSON object');
+  const errors = info['ServerErrors'];
+  if (Array.isArray(errors) && errors.length > 0) throw new Error(errors.join('; '));
+  const version = info['CgroupVersion'];
+  if (typeof version !== 'string' || version === '') throw new Error('no CgroupVersion in its answer');
+  const flags: Record<string, string> = { cpu: 'CpuCfsQuota', memory: 'MemoryLimit', pids: 'PidsLimit' };
+  const options = Array.isArray(info['SecurityOptions']) ? info['SecurityOptions'] : [];
+  return {
+    cgroupV2: version === '2',
+    controllers: REQUIRED_CONTROLLERS.filter((controller) => info[flags[controller]!] === true),
+    rootless: options.some((option) => typeof option === 'string' && option.split(',').includes('name=rootless')),
+    manager: typeof info['CgroupDriver'] === 'string' ? info['CgroupDriver'] : undefined,
+  };
+}
+
+/** `podman info --format json`: the controllers of its cgroup. */
+function podmanCgroups(info: unknown): EngineCgroups {
+  const host = isObject(info) ? info['host'] : undefined;
+  if (!isObject(host)) throw new Error('no host in its answer');
+  const version = host['cgroupVersion'];
+  if (typeof version !== 'string' || version === '') throw new Error('no host.cgroupVersion in its answer');
+  const listed = host['cgroupControllers'];
+  const controllers = Array.isArray(listed) ? listed.filter((c): c is string => typeof c === 'string') : [];
+  const rootless = isObject(host['security']) && host['security']['rootless'] === true;
+  const manager = host['cgroupManager'];
+  return { cgroupV2: version === 'v2', controllers, rootless, manager: typeof manager === 'string' ? manager : undefined };
+}
+
+/** The protection's verdict; what was read of it, absent when it could not be read. */
+export interface BranchProtectionReport extends Partial<BranchProtection> {
+  verdict: Verdict;
+  reasons: string[];
+}
+
+/**
+ * Whether GitHub keeps the default branch for humans (ORC-208): a ruleset rule that requires a pull request, which the
+ * App cannot bypass, or the classic protection, whose rules the App cannot read (credited on its flag, docs/github.md
+ * says what it must hold).
+ */
+function judgeProtection(protection: BranchProtection): BranchProtectionReport {
+  const report = (verdict: Verdict, reason: string): BranchProtectionReport => ({ ...protection, verdict, reasons: [reason] });
+  const rules = protection.rules.join(', ');
+  if (protection.pullRequestRulesets.some((ruleset) => ruleset.bypass === 'never')) {
+    return report('accepted', `a ruleset the App cannot bypass requires a pull request (rules: ${rules})`);
+  }
+  const bypassed = protection.pullRequestRulesets.map((ruleset) => `ruleset ${ruleset.id} (${ruleset.bypass})`).join(', ');
+  // A ruleset the App bypasses does not count, and takes nothing from a classic protection.
+  if (protection.classic) {
+    return report('accepted', 'branch protection on; its rules need the Administration permission, which the App does not have: check it requires a pull request (docs/github.md)');
+  }
+  if (bypassed) {
+    return report('refused', `not protected from the factory: its App can bypass every ruleset that requires a pull request, ${bypassed}; remove it from their bypass list`);
+  }
+  return report(
+    'refused',
+    protection.rules.length > 0
+      ? `not protected: its rulesets (${rules}) do not require a pull request (\`pull_request\` rule), a direct push still lands`
+      : 'not protected: no branch protection and no ruleset',
+  );
 }
 
 export interface DoctorOptions {
   repoPath: string;
   api: DoctorApi;
+  /** The host the daemon runs on (`checkHost`). */
+  host: HostReport;
   out: (line: string) => void;
   json?: boolean;
   /** The repository's branch naming (`.factory/config.yml`, ORC-283): the team's convention without it. */
@@ -62,12 +203,17 @@ export interface DoctorOptions {
   visualProof?: { image?: string; detail: string };
   /** The server secrets (ORC-398): where each is kept and its rotation, for the JSON report; never part of the verdict. In text, `runDoctorCommand` says it first. */
   serverSecrets?: SecretReport[];
+  /** The projects whose spec gate no validator can pass (ORC-421), for the JSON report; never part of the verdict. In text, `runDoctorCommand` says them first. */
+  validatorWarnings?: string[];
 }
 
-/** The visual proof (ORC-404) and the server secrets (ORC-398) in the JSON report. */
-const instanceReportOf = (o: Pick<DoctorOptions, 'visualProof' | 'serverSecrets'>) => ({
+type InstanceReport = Pick<DoctorOptions, 'visualProof' | 'serverSecrets' | 'validatorWarnings'>;
+
+/** The visual proof (ORC-404), the server secrets (ORC-398) and the validators (ORC-421) in the JSON report. */
+const instanceReportOf = (o: InstanceReport) => ({
   ...(o.visualProof ? { visualProof: { available: !!o.visualProof.image, detail: o.visualProof.detail } } : {}),
   ...(o.serverSecrets ? { serverSecrets: o.serverSecrets } : {}),
+  ...(o.validatorWarnings?.length ? { validatorWarnings: o.validatorWarnings } : {}),
 });
 
 export interface WorkflowReport {
@@ -482,7 +628,14 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   // Neither is part of the verdict: said whatever it is.
   const warnings = testCommandWarnings(options.commands);
   if (!options.json) for (const line of [...ignored.map(ignoredWorkflowWarning), ...warnings]) out(line);
-  const failure = (message: string) => doctorFailure(options, message, ignored, warnings);
+  // Read beside the workflows; an unreadable protection is a refusal with its reason, the other verdicts still told.
+  const protectionRead = api.branchProtection(repoPath).then(judgeProtection, (error: unknown): BranchProtectionReport => ({
+    verdict: 'refused',
+    reasons: [`Cannot read the protection of the default branch: ${errorMessage(error)}`],
+  }));
+  // Unreadable workflows or environments still tell the host's and the protection's verdicts.
+  const failure = async (message: string) =>
+    doctorFailure(options, message, ignored, warnings, { host: options.host, branchProtection: await protectionRead });
   let workflows: WorkflowSource[];
   try {
     workflows = await api.listWorkflows(repoPath);
@@ -497,15 +650,27 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
       return failure(`Cannot read the environments: ${errorMessage(error)}`);
     }
   }
+  const protection = await protectionRead;
+  const { host } = options;
   const environmentMap = new Map(environments.map((environment) => [environment.name, environment] as const));
   const factory = factoryBranches(options.naming ?? DEFAULT_BRANCH_NAMING);
   const reports = workflows.map((workflow) => analyzeWorkflow(workflow, environmentMap, factory));
-  const accepted = reports.every((report) => report.verdict === 'accepted');
   const refused = reports.filter((report) => report.verdict === 'refused').length;
+  const branch = protection.branch ? ` ${protection.branch}` : '';
+  const refusals = [
+    ...(host.verdict === 'refused' ? ['the host cannot limit the sandbox'] : []),
+    // Unread, the protection is unknown: never told as absent.
+    ...(protection.verdict === 'refused'
+      ? [protection.branch === undefined ? "the default branch's protection cannot be read" : `the default branch${branch} is not protected`]
+      : []),
+    ...(refused > 0 ? [`${refused} workflow(s) of ${reports.length} can expose secrets or a writable GITHUB_TOKEN to the factory's branches`] : []),
+  ];
+  const accepted = refusals.length === 0;
 
   if (options.json) {
-    out(JSON.stringify({ repoPath, accepted, workflows: reports, ...notes(ignored, warnings), ...instanceReportOf(options) }, null, 2));
+    out(JSON.stringify({ repoPath, accepted, host, branchProtection: protection, workflows: reports, ...notes(ignored, warnings), ...instanceReportOf(options) }, null, 2));
   } else {
+    for (const line of verdictLines({ host, branchProtection: protection })) out(line);
     if (reports.length === 0) out('No GitHub Actions workflow found.');
     else {
       out(`GitHub Actions workflows: ${reports.length}`);
@@ -532,8 +697,8 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
     }
     out(
       accepted
-        ? "Result: accepted — no workflow can expose a secret or a writable GITHUB_TOKEN to the factory's branches."
-        : `Result: refused — ${refused} workflow(s) of ${reports.length} can expose secrets or a writable GITHUB_TOKEN to the factory's branches.`,
+        ? "Result: accepted — a cgroup v2 host, a protected default branch, and no workflow can expose a secret or a writable GITHUB_TOKEN to the factory's branches."
+        : `Result: refused — ${refusals.join('; ')}.`,
     );
   }
   return accepted ? 0 : 1;
@@ -542,10 +707,28 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
 /** The ignored workflow files and the warnings in the JSON report, each only when there is one. */
 const notes = (ignored: string[], warnings: string[]) => ({ ...(ignored.length ? { ignored } : {}), ...(warnings.length ? { warnings } : {}) });
 
-function doctorFailure(options: Pick<DoctorOptions, 'repoPath' | 'out' | 'json' | 'visualProof' | 'serverSecrets'>, message: string, ignored: string[] = [], warnings: string[] = []): number {
+interface Verdicts {
+  host: HostReport;
+  branchProtection: BranchProtectionReport;
+}
+
+/** The host's and the default branch's verdicts, in text, then a blank line. */
+function verdictLines({ host, branchProtection: protection }: Verdicts): string[] {
+  const branch = protection.branch ? ` ${protection.branch}` : '';
+  return [`Host: ${host.verdict} — ${host.reasons.join(' ')}`, `Default branch${branch}: ${protection.verdict} — ${protection.reasons.join(' ')}`, ''];
+}
+
+function doctorFailure(
+  options: Pick<DoctorOptions, 'repoPath' | 'out' | 'json'> & InstanceReport,
+  message: string,
+  ignored: string[] = [],
+  warnings: string[] = [],
+  verdicts?: Verdicts,
+): number {
   if (options.json) {
-    options.out(JSON.stringify({ repoPath: options.repoPath, accepted: false, error: message, ...notes(ignored, warnings), ...instanceReportOf(options) }, null, 2));
+    options.out(JSON.stringify({ repoPath: options.repoPath, accepted: false, error: message, ...verdicts, ...notes(ignored, warnings), ...instanceReportOf(options) }, null, 2));
   } else {
+    if (verdicts) for (const line of verdictLines(verdicts)) options.out(line);
     options.out(message);
   }
   return 1;
@@ -560,12 +743,45 @@ export interface DoctorCommandOptions {
   http?: HttpClient;
   exec?: Exec;
   now?: () => number;
+  /** The statuses of a Linear team (ORC-382); the daemon's Linear connection by default (`cliLinearTracker`). */
+  teamStatuses?: (teamKey: string) => Promise<string[]>;
 }
 
 /**
- * CLI adapter: loads the instance, requires the GitHub App (no `gh` fallback for this check), reads the repository's
- * branch naming (ORC-283) and commands (ORC-412) on its default branch as the clone last fetched it, then runs the same
- * analysis as `runDoctor`.
+ * The statuses factory.yml names that the Linear team of each project lacks (ORC-382): a warning, never the verdict. The daemon
+ * cannot refuse them at load, before it reads the team: `doctor` reads it, through the daemon's Linear connection.
+ */
+async function statusWarnings(projects: readonly Pick<ProjectConfig, 'id' | 'linearTeamKey' | 'preset'>[], o: { home: string; env: NodeJS.ProcessEnv; states: Workflow['states']; read?: ((teamKey: string) => Promise<string[]>) | undefined }): Promise<string[]> {
+  const mine = projects.filter((p) => !isFantome(p));
+  if (!mine.length) return [];
+  let teamStatuses = o.read;
+  if (!teamStatuses) {
+    let tracker;
+    try {
+      // Linear's secrets read apart from the GitHub App's: one that cannot be read leaves the other checks as they were.
+      tracker = cliLinearTracker(o.home, (await loadSealedFactoryYml(o.home, o.env, { only: LINEAR_SECRETS })).yml);
+    } catch (error) {
+      return [`Linear statuses not checked: ${errorMessage(error)}`];
+    }
+    if (typeof tracker === 'string') return [`Linear statuses not checked: ${tracker}`];
+    teamStatuses = (teamKey) => tracker.teamStatuses(teamKey);
+  }
+  const lines: string[] = [];
+  for (const p of mine) {
+    try {
+      const warning = missingStatusWarning({ id: p.id, teamKey: p.linearTeamKey }, o.states, await teamStatuses(p.linearTeamKey));
+      if (warning) lines.push(warning);
+    } catch (error) {
+      lines.push(`Linear statuses of ${p.id} not checked: ${errorMessage(error)}`);
+    }
+  }
+  return lines;
+}
+
+/**
+ * CLI adapter: loads the instance, requires the GitHub App (no `gh` fallback for this check), asks the engine for the host's
+ * cgroups, reads the repository's branch naming (ORC-283) and commands (ORC-412) on its default branch as the clone last
+ * fetched it, then runs the same analysis as `runDoctor`.
  */
 export async function runDoctorCommand(options: DoctorCommandOptions): Promise<number> {
   const out = options.out ?? ((line) => console.log(line));
@@ -582,12 +798,25 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   }
   if (!options.json && serverSecrets) for (const line of serverSecretLines(serverSecrets)) out(line);
   let githubApp;
+  let validators: string[];
+  let projects;
+  let states;
   try {
-    githubApp = resolveGithubApp(effectiveInstance(options.home, (await loadSealedFactoryYml(options.home, env, { only: GITHUB_APP_SECRETS })).yml), env);
+    const { yml } = await loadSealedFactoryYml(options.home, env, { only: GITHUB_APP_SECRETS });
+    const instance = effectiveInstance(options.home, yml);
+    projects = instance.projects.filter((p) => samePath(p.repoPath, options.repoPath));
+    // The project of this repository whose spec gate no validator can pass (ORC-421): a warning, never the verdict.
+    validators = validatorWarnings(projects);
+    if (!options.json) for (const line of validators) out(line);
+    // factory.yml's statuses the daemon would refuse at load (ORC-382): refused here too.
+    states = statesOf(yml?.statuses);
+    githubApp = resolveGithubApp(instance, env);
   } catch (error) {
     out(errorMessage(error));
     return 1;
   }
+  // Its Linear team's statuses against factory.yml's (ORC-382): a warning, never the verdict.
+  if (!options.json) for (const line of await statusWarnings(projects, { home: options.home, env, states, read: options.teamStatuses })) out(line);
   if (!githubApp) {
     out(
       'GitHub App not configured: `factory doctor` needs github.appId and github.privateKey (or GH_APP_ID and GH_APP_KEY) ' +
@@ -601,20 +830,12 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     ...(options.exec ? { exec: options.exec } : {}),
     ...(options.now ? { now: options.now } : {}),
   });
+  const report = { repoPath: options.repoPath, out, visualProof, validatorWarnings: validators, ...(serverSecrets ? { serverSecrets } : {}), ...(options.json ? { json: true } : {}) };
   let config: RepoConfig;
   try {
     config = await makeRepoConfig(options.exec ? { exec: options.exec } : {})({ repoPath: options.repoPath }, { fetch: false });
   } catch (error) {
-    return doctorFailure({ repoPath: options.repoPath, out, visualProof, ...(serverSecrets ? { serverSecrets } : {}), ...(options.json ? { json: true } : {}) }, `Cannot read the repository's branch naming: ${errorMessage(error)}`);
+    return doctorFailure(report, `Cannot read the repository's branch naming: ${errorMessage(error)}`);
   }
-  return runDoctor({
-    repoPath: options.repoPath,
-    api,
-    out,
-    naming: config.branches,
-    commands: config.commands,
-    visualProof,
-    ...(serverSecrets ? { serverSecrets } : {}),
-    ...(options.json ? { json: true } : {}),
-  });
+  return runDoctor({ ...report, api, host: await checkHost(env, options.exec), naming: config.branches, commands: config.commands });
 }

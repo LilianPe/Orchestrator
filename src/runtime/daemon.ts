@@ -11,7 +11,7 @@ import type { WorkspaceManager } from '../adapters/workspace/types.js';
 import type { RepoVariables } from '../config/repo-variables.js';
 import type { RepoConfig, RepoConfigRead } from '../config/repo-config.js';
 import type { Workflow } from '../core/workflow.js';
-import type { AckMode } from '../config/factory-yml.js';
+import type { AckMode, SpecPublication } from '../config/factory-yml.js';
 import type { EffectRetry } from './outbox.js';
 import { backoff, isTransient, type RetryPolicy } from './transient.js';
 import { RUN_LEASE_MS, type DecisionOutcome, type DecisionRequest, type EffectOutcome, type OutboxRow, type RunRecord, type Store } from '../store/types.js';
@@ -31,6 +31,7 @@ import type { Scheduler } from './capacity.js';
 import { CREATES_TICKET, type EventPayloads, type IssueSnapshot, type LogicalState, type FactoryEvent, type RunOutcome, type TicketState, TRUSTED } from '../core/types.js';
 import type { RegistryOpener } from '../checks/registry.js';
 import type { CleanVerifier } from '../core/clean-verify.js';
+import type { DryRun, DryRunRequest, FingerprintFiles } from '../core/dry-run.js';
 import type { Verifier } from '../core/verify.js';
 import type { VisualShooter } from '../adapters/browser/types.js';
 import { isTakenOver } from '../core/block-cause.js';
@@ -73,7 +74,7 @@ export interface DaemonDeps {
    */
   captureHost?: ArtifactHost;
   /**
-   * The policy in front of every text the orchestrator publishes (ORC-214): its comments and activities, the PR's text. Absent: one
+   * The policy in front of every text the daemon publishes (ORC-214): its comments and activities, the PR's text. Absent: one
    * without gitleaks, for a test or the fake runner's daemon; the daemon's scans in its sandboxes.
    */
   outputPolicy?: OutputPolicy;
@@ -90,6 +91,15 @@ export interface DaemonDeps {
   hostChecks?: boolean;
   /** `verify` with sandboxes (ORC-151); a test replaces it. */
   cleanVerify?: CleanVerifier;
+  /** The dry run (ORC-408); a test replaces it. */
+  dryRunner?: (req: DryRunRequest) => Promise<DryRun>;
+  /** The image the sandboxes run (`FACTORY_RUNNER_IMAGE`), in the dry run's fingerprint (ORC-408); required for a dry run. */
+  runnerImage?: string;
+  /**
+   * The default branch's head and the files of the dry run's fingerprint there, as the factory's repository has it, without a fetch
+   * (ORC-409). Absent, or without sandboxes: no dry run gates a delegated ticket.
+   */
+  dryRunFiles?: (project: ProjectRuntime) => Promise<FingerprintFiles & { sha: string }>;
   /** The package registries `verify` asks (`factory/dependances`, ORC-371), through the egress proxy. */
   registries?: RegistryOpener;
   projects: ProjectRuntime[];
@@ -163,6 +173,8 @@ export interface DaemonDeps {
   onUsageLimit?: 'wait';
   /** `acknowledge` of factory.yml (ORC-380): `reaction` reacts on the message in place of the ack's comment. Absent: `comment`. */
   acknowledge?: AckMode;
+  /** `spec` of factory.yml (ORC-382): where a version of the spec is published. Absent: `SPEC_PUBLICATION`. */
+  specPublication?: SpecPublication;
   /** Why the configuration lets no ticket reach its end (ORC-350): while any, nothing is launched; events and effects go on. */
   configProblems?: readonly string[];
   /** The Claude account runs use (`claude.active`, ORC-211), asked at each launch (ORC-215): a usage limit holds the launches of that account only. Absent: `default`. */
@@ -271,13 +283,13 @@ export class Daemon extends DaemonLaunch {
     return this.replayInbox();
   }
 
-  /** A result the orchestrator produces itself (a check, a run lost): `deliver`ed to the inbox. */
+  /** A result the daemon produces itself (a check, a run lost): `deliver`ed to the inbox. */
   protected submitResult(event: FactoryEvent): Promise<void> {
     return this.deliver(event.id, `event ${event.id} (${event.type})`, async () => void (await this.accept(event)));
   }
 
   /**
-   * For the results the orchestrator produces itself (run finished, checks): nobody resends them, so a failed write is
+   * For the results the daemon produces itself (run finished, checks): nobody resends them, so a failed write is
    * retried with a short backoff. Still failing transiently (`isTransient`: the database down), it is kept and written
    * again at each beat, with no bound but this process's life (ORC-343): the ticket and its slot go on once the database
    * is back. A permanent failure gives up with an error (the run's slot is then held until `recover()` at the next

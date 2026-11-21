@@ -344,6 +344,24 @@ describe('LinearTracker', () => {
     expect(calls.at(-1)!.vars).toEqual({ input: { issueId: 'uuid-1', body: 'Budget atteint.' } });
   });
 
+  it("keys an effect's document, linked to its issue, by a client id, and finds it by that id (ORC-382)", async () => {
+    let found: { url: string }[] = [];
+    const { api, calls } = fakeLinear({
+      Issue: () => ({ issue: node }),
+      DocumentCreate: () => ({ documentCreate: { success: true, document: { id: 'd-1', url: 'https://linear.app/doc/d-1' } } }),
+      EffectDocument: () => ({ documents: { nodes: found } }),
+    });
+    const t = new LinearTracker(api, 'app-1');
+    const id = effectUuid('document', 'REL-1:4:1');
+    expect(id).not.toBe(effectUuid('comment', 'REL-1:4:1'));
+    expect(await t.findDocument('REL-1', 'REL-1:4:1')).toBeUndefined();
+    expect(await t.document('REL-1', 'REL-1: spec, version 1', '**Goal**', 'REL-1:4:1')).toBe('https://linear.app/doc/d-1');
+    expect(calls.at(-1)).toEqual({ op: 'DocumentCreate', vars: { input: { issueId: 'uuid-1', title: 'REL-1: spec, version 1', content: '**Goal**', id } } });
+    found = [{ url: 'https://linear.app/doc/d-1' }];
+    expect(await t.findDocument('REL-1', 'REL-1:4:1')).toBe('https://linear.app/doc/d-1');
+    expect(calls.at(-1)).toEqual({ op: 'EffectDocument', vars: { id } });
+  });
+
   it("keys an effect's reaction by a client id and finds it among the comment's reactions (ORC-380)", async () => {
     let reactions: { id: string }[] = [{ id: 'someone-else' }];
     const { api, calls } = fakeLinear({

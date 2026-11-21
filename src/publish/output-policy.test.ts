@@ -56,7 +56,7 @@ describe('OutputPolicy (ORC-214)', () => {
     });
 
     it('a list of modules, one per line, is no blob', () => {
-      const modules = ['src/adapters/tracker/activity-relay', 'src/adapters/publisher/types', 'src/core/orchestrator', 'src/publish/output-policy', 'test/scenarios/output-policy'];
+      const modules = ['src/adapters/tracker/activity-relay', 'src/adapters/publisher/types', 'src/runtime/daemon', 'src/publish/output-policy', 'test/scenarios/output-policy'];
       expect(leaks.check(modules.join('\n'))).toEqual([]);
     });
   });

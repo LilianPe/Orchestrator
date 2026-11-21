@@ -14,7 +14,7 @@ import { defaultWorkflow } from '../presets/workflow.js';
 import { openStore } from '../store/open.js';
 import { join } from 'node:path';
 import { runBaselineCommand } from './baseline.js';
-import { runQueueCommand, runStatusCommand, runStopCommand } from './control.js';
+import { runDryRunCommand, runQueueCommand, runStatusCommand, runStopCommand } from './control.js';
 import { runInit } from './init.js';
 import { cliLinearTracker } from './linear.js';
 import { runDoctorCommand } from './doctor.js';
@@ -27,14 +27,15 @@ import { runValidateCommand } from './validate.js';
 import { PRODUCT_NAME } from '../product.js';
 
 const USAGE = `Usage: factory <command>
-  init               set up ${PRODUCT_NAME} for the current repository
+  init [--dev]       set up ${PRODUCT_NAME} for the current repository (--dev: a smee.io relay for Linear's webhooks without a public URL, on a workstation)
   validate [repo]    check .factory/config.yml against the baseline (it can only add)
-  doctor [repo] [--json] refuse a repository whose CI can expose secrets to the factory's branches
+  doctor [repo] [--json] refuse a host without cgroup v2, a repository without a protected default branch or whose CI can expose secrets to the factory's branches
   up [--fake-runner] start ${PRODUCT_NAME} (interface on http://localhost:4100)
   plan               see which delegated tickets would be taken
   status             state of the running instance
   pause | resume     suspend or resume the queue
   stop <ID>          stop a ticket's run
+  dry-run <project>  run the dry run of a project's default branch (setup, build, tests in the sandbox) and print what breaks
   replay <journal>... replay exported journals (bit-for-bit regression, --what-if <preset>, --export <ID>)
   run repair <ID> [replay|skip|force] [<event>]  repair an event set aside (dead letter)
   flaky <project> [add <test> --reason <why> [--frozen] | remove <test>]  the known flaky tests verify marks indicative
@@ -50,6 +51,8 @@ async function main(): Promise<number> {
   if (process.argv[2] === 'baseline') return runBaselineCommand(factoryHome(), process.argv.slice(3));
   // Its own options, on the store and the projects; GitHub through gh, no running instance needed (ORC-231).
   if (process.argv[2] === 'ghost') return runGhostCommand(factoryHome(), process.argv.slice(3));
+  // Its own option, `--dev` (ORC-411): a Smee channel without a public URL.
+  if (process.argv[2] === 'init') return runInitCommand(process.argv.slice(3));
   // The repository's file, the budgets, max_diff and tools of factory.yml (ORC-216, ORC-381, ORC-383), its secrets left unresolved: no running instance needed.
   if (process.argv[2] === 'validate') return runValidateCommand({ repoPath: process.argv[3] ?? process.cwd(), out: (l) => console.log(l), factoryYml: () => loadFactoryLimits(factoryHome()) });
   const { positionals, values } = parseArgs({
@@ -66,21 +69,6 @@ async function main(): Promise<number> {
   const control = { api, ...(process.platform === 'win32' ? {} : { socket: homePaths(home).socket }), out: (l: string) => console.log(l) };
 
   switch (cmd) {
-    case 'init': {
-      const rl = createInterface({ input: process.stdin, output: process.stdout });
-      await runInit({
-        home,
-        cwd: process.cwd(),
-        exec: execCmd,
-        createSmee: () => createSmeeChannel(),
-        io: {
-          ask: async (q, def) => (await rl.question(`${q}${def ? ` [${def}]` : ''}: `)).trim() || def || '',
-          print: (s) => console.log(s),
-        },
-      });
-      rl.close();
-      return 0;
-    }
     case 'doctor':
       return runDoctorCommand({ repoPath: arg ?? process.cwd(), home, json: values.json });
     case 'up': {
@@ -125,6 +113,9 @@ async function main(): Promise<number> {
     case 'stop':
       if (!arg) break;
       return runStopCommand(control, arg);
+    case 'dry-run':
+      if (!arg) break;
+      return runDryRunCommand(control, arg);
     case 'run':
       if (arg === 'repair') return runRepairCommand(home, positionals.slice(2));
       break;
@@ -133,6 +124,24 @@ async function main(): Promise<number> {
   }
   console.log(USAGE);
   return 1;
+}
+
+async function runInitCommand(args: string[]): Promise<number> {
+  const { values } = parseArgs({ args, options: { dev: { type: 'boolean' } } });
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  await runInit({
+    home: factoryHome(),
+    cwd: process.cwd(),
+    dev: values.dev,
+    exec: execCmd,
+    createSmee: () => createSmeeChannel(),
+    io: {
+      ask: async (q, def) => (await rl.question(`${q}${def ? ` [${def}]` : ''}: `)).trim() || def || '',
+      print: (s) => console.log(s),
+    },
+  });
+  rl.close();
+  return 0;
 }
 
 main().then(

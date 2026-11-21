@@ -19,7 +19,7 @@ import { addedLines, isRepoRuleFile, REPO_RULES_DIR, REPO_RULES_TARGET, semgrepA
 import { isTestSpec } from '../checks/test-files.js';
 import { probeStart } from '../checks/preview-probe.js';
 import { brief, decideVisualProof, judgeShots, type CaptureGate, type Judged, type VisualProof } from '../checks/visual-proof.js';
-import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig } from '../config/repo-config.js';
+import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, setupOf, type RepoConfig } from '../config/repo-config.js';
 import { BUNDLE_TARGET, extractWork, HARDENING, hostGitEnv, IN_SANDBOX, IN_SANDBOX_ENV } from '../publish/extract.js';
 import { recipeStart, type PreviewRecipe } from './agent-output.js';
 import { classifyBranch, type ClassifiedDiff } from './diff-class.js';
@@ -211,7 +211,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const config = await baseConfig(git);
     const declared = Object.values(config.commands);
     const commands = declared.length ? declared : req.commands;
-    const setup = config.setup ? [config.setup] : req.setup;
+    const setup = setupOf(config, req.setup);
     const env = await req.env(config);
     const from = await forkPoint(git, sha);
     const failures = await checkClone(git, from, sha, req.frozen, req.untrusted && untrustedCheck(req.untrusted, config));
@@ -324,7 +324,7 @@ const REPORT_READ_S = 60;
  * agent's (a test that hangs), as on the host. With a runner, the line asks it for its report in a file of the sandbox, read
  * back by an exec of its own, capped: not through the command's output, whose tail alone reaches the daemon.
  */
-function reportRun(sandboxes: Boxes, id: string, env: Record<string, string>): Run {
+export function reportRun(sandboxes: Boxes, id: string, env: Record<string, string>): Run {
   return async (line, runner) => {
     const f = `"\${TMPDIR:-/tmp}"/factory-report-${randomUUID()}`;
     const started = Date.now();
@@ -340,7 +340,7 @@ function reportRun(sandboxes: Boxes, id: string, env: Record<string, string>): R
  * Each command as the red check runs it (`testCommand`, ORC-420): the line its files and flags are appended to, and the runner
  * it names, from the commit's `package.json` for a script npm, pnpm or yarn runs. Read before any of its code runs, each file once.
  */
-async function testCommands(git: CloneGit, sha: string, commands: readonly string[]): Promise<Map<string, { line: string; runner?: Runner }>> {
+export async function testCommands(git: CloneGit, sha: string, commands: readonly string[]): Promise<Map<string, { line: string; runner?: Runner }>> {
   const read = new Map<string, Promise<string | undefined>>();
   const showAtHead = (p: string) => read.get(p) ?? read.set(p, show(git, sha, p)).get(p)!;
   return new Map(await Promise.all(commands.map(async (c) => [c, await testCommand(c, { showAtHead })] as const)));
@@ -437,14 +437,25 @@ export async function baseConfig(git: CloneGit): Promise<RepoConfig> {
  */
 async function fetchBase(req: CleanVerifyRequest, cloneDir: string, pushed = false): Promise<void> {
   // A human's push (ORC-159) comes in the same fetch, its objects checked: what it holds was written outside the factory.
-  const fsck = pushed ? ['-c', 'transfer.fsckObjects=true'] : [];
-  const args = [...HARDENING.flatMap((c) => ['-c', c]), ...fsck, '-C', cloneDir, 'fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--', req.originUrl, `+HEAD:${BASE}`, ...(pushed ? [`+refs/heads/${req.branch}:${PUSHED}`] : [])];
+  const refspecs = [`+HEAD:${BASE}`, ...(pushed ? [`+refs/heads/${req.branch}:${PUSHED}`] : [])];
+  await fetchFromForge(req, cloneDir, refspecs, pushed ? 'the base or the pushed branch' : 'base branch', pushed ? ['transfer.fsckObjects=true'] : []);
+}
+
+/** `refspecs` from the forge into the clone, with the daemon's credentials, kept out of the error it throws (`said` not read: …). */
+export async function fetchFromForge(req: Pick<CleanVerifyRequest, 'originUrl' | 'exec'>, cloneDir: string, refspecs: readonly string[], said: string, config: readonly string[] = []): Promise<void> {
+  const args = [...[...HARDENING, ...config].flatMap((c) => ['-c', c]), '-C', cloneDir, 'fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--', req.originUrl, ...refspecs];
   try {
     await mustExec(req.exec ?? execCmd, 'git', args, { env: { GIT_TERMINAL_PROMPT: '0' } });
   } catch (err) {
     // eslint-disable-next-line preserve-caught-error -- its message holds the URL and its credentials: it stays out of what is journaled.
-    throw new Error(`${pushed ? 'the base or the pushed branch' : 'base branch'} not read: ${withoutCredentials((err as Error).message, req.originUrl)}`);
+    throw new Error(`${said} not read: ${withoutCredentials((err as Error).message, req.originUrl)}`);
   }
+}
+
+/** A new repository of ours in `cloneDir`, hardened for whoever runs git in it next, as `extractWork` keeps them in its clone. */
+export async function initHardenedClone(git: CloneGit): Promise<void> {
+  await git('init', '--quiet', '--template=');
+  for (const c of HARDENING) await git('config', c.slice(0, c.indexOf('=')), c.slice(c.indexOf('=') + 1));
 }
 
 const PUSHED = 'refs/factory/pushed';
@@ -457,9 +468,7 @@ const PUSHED = 'refs/factory/pushed';
 async function fetchPushed(req: CleanVerifyRequest, head: string, cloneDir: string): Promise<{ sha: string }> {
   mkdirSync(cloneDir);
   const git = cloneGit(req, cloneDir);
-  await git('init', '--quiet', '--template=');
-  // For whoever runs git in it next, as `extractWork` keeps them in its clone.
-  for (const c of HARDENING) await git('config', c.slice(0, c.indexOf('=')), c.slice(c.indexOf('=') + 1));
+  await initHardenedClone(git);
   await fetchBase(req, cloneDir, true);
   // A commit the clone does not even hold is not on the branch either.
   if ((await git.status('merge-base', '--is-ancestor', head, PUSHED)).code !== 0) {
@@ -816,7 +825,7 @@ async function checkAdded(git: CloneGit, from: string, sha: string): Promise<Ver
  * A file of a commit; undefined when it has none. A blob the agent made huge never comes into the daemon's memory: as
  * itself, by its id, it reads as changed.
  */
-async function show(git: CloneGit, rev: string, path: string): Promise<string | undefined> {
+export async function show(git: CloneGit, rev: string, path: string): Promise<string | undefined> {
   const entry = /^\d+ (\w+) (\w+)\s+(\d+)?/.exec(await git.raw('ls-tree', '-l', '-z', rev, '--', path));
   if (entry?.[1] !== 'blob') return undefined;
   return Number(entry[3]) > MAX_READ_BYTES ? `\0too large: ${entry[2]}` : git.raw('show', `${rev}:${path}`);
