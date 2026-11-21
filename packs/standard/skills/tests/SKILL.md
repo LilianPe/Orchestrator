@@ -17,7 +17,7 @@ If the prompt carries an "Approved spec" block: a designated human approved it, 
 2. At least one test per criterion, named after the expected behavior. Place it where this code is already tested, in a test file of the repository (`*.test.ts`, `*.spec.ts`, `test_*.py`, `tests/`…).
 3. Each test calls the code as its user does (the function, the route, the command the criterion names) and checks what that user would see: a returned value, a response, a stored row, an error message. Not a private helper, not a mock's calls. Before keeping a test, imagine the code it targets written as stubs: if it would still pass with every function returning nothing, throw it away and write one that checks a real value.
 4. Write **only test files**: no production code, no configuration, no dependency. A module that the ticket must create may remain absent: import it at its future path.
-5. Commit: `<ID>: acceptance criteria tests` (or the `CLAUDE.md` convention). The factory publishes, not you.
+5. Commit: `<ID>: acceptance criteria tests` (or the `CLAUDE.md` convention).
 
 The factory then runs these tests itself and checks that they fail on an assertion (or on a module absent before the ticket), not on a syntax, compilation or import error. No need to prove it in your message: it does not believe it, it observes it. If it sends you back its finding, fix the tests and commit again.
 

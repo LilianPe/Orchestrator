@@ -12,7 +12,7 @@ If the prompt carries a "Feedback to address" block: these are messages from hum
 ## 1. Read the exact failure
 
 1. The "CI failures" block holds what the factory read of the PR's red checks: their names and, when it has them, the failing step, its command and the end of its output. Read the **first** error message, not only the last line. A block that only says the CI is failing, or points at a forge command, gives no detail: go on to 2. You have no access to the forge: do not look for the CI's logs anywhere else.
-2. The repository's CI workflows (`.github/workflows/`: read them, never change them) say which commands each check runs. Find the command of the failing check and the environment it sets (versions, variables, services).
+2. The repository's CI workflows (`.github/workflows/`, never changed) say which commands each check runs: `grep -rn "<check name>" .github/workflows/`, then read the file that defines it, for the failing check's command and the environment it sets (versions, variables, services).
 3. Messages that never come from your code: lost runner ("lost communication with the server"), quota, network, external service unavailable, cancellation. A job timeout, on the other hand, is almost always your code (loop, wait, stuck test).
 
 ## 2. Reproduce

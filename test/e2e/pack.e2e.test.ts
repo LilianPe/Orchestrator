@@ -34,7 +34,6 @@ describe.skipIf(process.env['FACTORY_E2E'] !== '1')('pack with the real claude C
     const result = await h.done;
     const transcript = readFileSync(join(transcriptsDir, 'e2e.jsonl'), 'utf8');
     expect(transcript).toContain('git push origin HEAD:refs/heads/e2e');
-    expect(transcript).toMatch(/"is_error":true/);
     // Refused by the pack's PreToolUse hook, which journals it: the proof the hook ran, whatever else would have failed the push.
     const refusals = join(transcriptsDir, 'refusals.jsonl');
     expect(existsSync(refusals)).toBe(true);

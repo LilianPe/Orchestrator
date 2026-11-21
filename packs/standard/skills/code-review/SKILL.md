@@ -36,7 +36,7 @@ Documentation that describes the code is not a "quick" diff: its truth is in the
 
 - **Quick**: one careful reading of the diff, hunk by hunk. No exploration beyond it.
 - **Standard**: the reading, plus the passes of section 3, plus the consumers of the changed symbols (`grep -rn "<symbol>"`).
-- **Thorough**: all of standard, in separate passes per angle (section 3), with the explicit list of critical surfaces to test (access controls, per-customer filtering, reversibility of a migration, what happens on a failure halfway through). Do the passes yourself, one after the other, each limited to its angle: only the defects in these lines or in what they break. Keep it for diffs that warrant it: it is the most expensive level.
+- **Thorough**: all of standard, in separate passes per angle (section 3), with the explicit list of critical surfaces to test (access controls, per-customer filtering, reversibility of a migration, what happens on a failure halfway through). Read the diff once, then go through the angles one after the other against that reading, each limited to its angle: only the defects in these lines or in what they break. Keep it for diffs that warrant it: it is the most expensive level.
 
 ## 3. The angles
 

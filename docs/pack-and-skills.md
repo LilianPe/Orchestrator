@@ -50,7 +50,7 @@ None of them pushes, opens a PR, reruns a CI or calls `gh` (the runner image has
 | `factory:code-review` | review a diff (`review`, `dev`'s self-review) | Diff bounded at the PR's base. Three levels chosen by risk: **quick** (text, config), **standard** (logic, docs that describe the code), **thorough** (access, data, migrations, secrets, large diff; passes by angle, one after the other). Findings classified by scope (in scope, out of scope, rule conflict) and severity (blocking, important, minor), each verified before being reported. |
 | `factory:receiving-review` | handle feedback or findings | Read everything, check the premise and the proposed fix in the code, do not decide a trade-off alone, one commit per cause with its proof, reply without complacency (fixed, refused with a reason, or question). |
 
-The method is rewritten from the superpowers skills (MIT): see `packs/standard/NOTICE.md`. The rules of the `tests` and `dev` skills on honest tests and on building are inspired by Uncle Bob's ub-mode and written anew: that repository has no license, nothing of its text is taken (ORC-191).
+The method is rewritten from the superpowers skills (MIT): see `packs/standard/NOTICE.md`. It also credits the ub-mode rules of the `tests` and `dev` skills, written anew (ORC-191).
 
 Full text: `packs/standard/skills/<name>/SKILL.md`.
 
@@ -129,6 +129,6 @@ The factory always loads `packs/standard`: there is not yet a mechanism to choos
 - Rely on the method skills rather than repeating their rules: "apply `factory:receiving-review`" stays correct when the method evolves.
 - The run's prompt starts with `/<skill>` followed by the « Ticket » block (identifier, title, URL, branch, PR, description), the « Linear context » block when the webhook provides one and, depending on `input`, « Feedback to address », « CI failures », « Message » or « Failed checks ».
 - State explicitly what to do **at the end**: commit (the factory publishes), and the `mcp__factory__submit_result` it ends on, whose summary the factory posts in Linear.
-- Never tell the agent to push, to call `gh`, to skip the git hooks or to launch a subagent: `src/pack.test.ts` refuses a skill or the session-start hook that names `git push`, `gh`, `--no-verify`, a subagent or the `Task` and `Agent` tools.
+- Never tell the agent to push, to call `gh`, to skip the git hooks or to launch a subagent ([job skills](#job-skills): `src/pack.test.ts` refuses it).
 - For any missing decision, end the turn with `submit_result`, `status: "blocked"` and the `question`.
 - Test it by hand in a repository: `claude -p "/<skill> …" --plugin-dir packs/standard --settings ~/.factory/run-settings.json`.
