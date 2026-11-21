@@ -8,15 +8,29 @@ import type { EventPayloads, FactoryEvent, TicketState } from './types.js';
 /** What the `after_merge` step (ORC-197) is given of the merge. */
 export type MergedPr = Extract<Effect, { kind: 'after_merge' }>;
 
-/** The factory's last publication that reached the forge: an `empty` one pushed nothing (ORC-402). */
+/** A publication that reached the forge: an `empty` one pushed nothing (ORC-402). */
+const isPush = (e: FactoryEvent): e is FactoryEvent<'publish.done'> => e.type === 'publish.done' && !e.payload.empty;
+
+/** The factory's last publication that reached the forge. */
 export function lastPushed(events: readonly FactoryEvent[]): EventPayloads['publish.done'] | undefined {
-  return events.findLast((e): e is FactoryEvent<'publish.done'> => e.type === 'publish.done' && !e.payload.empty)?.payload;
+  return events.findLast(isPush)?.payload;
+}
+
+/**
+ * The factory's last push and the head it went over (ORC-438): a publication of the same commit since, which pushed nothing, names
+ * none, so the last that does is read. No `before`: the push made the branch, or was journaled before ORC-438.
+ */
+export function lastPush(events: readonly FactoryEvent[]): { sha: string; before?: string } | undefined {
+  const sha = lastPushed(events)?.sha;
+  if (!sha) return undefined;
+  const before = events.filter(isPush).findLast((e) => e.payload.sha === sha && e.payload.before)?.payload.before;
+  return { sha, ...(before ? { before } : {}) };
 }
 
 /** The commits the factory pushed, oldest first: one per `publish.done` that reached the forge, a commit published twice in a row once. */
 export function pushedHeads(events: readonly FactoryEvent[]): string[] {
   return events
-    .flatMap((e) => (e.type === 'publish.done' && !e.payload.empty ? [e.payload.sha] : []))
+    .flatMap((e) => (isPush(e) ? [e.payload.sha] : []))
     .filter((sha, i, all) => sha !== all[i - 1]);
 }
 

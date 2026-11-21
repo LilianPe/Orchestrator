@@ -1,5 +1,5 @@
 import type { Clock } from "../../core/clock.js";
-import { pushedHeads } from "../../core/changelog.js";
+import { lastPush, pushedHeads } from "../../core/changelog.js";
 import type { ProjectRuntime } from "../../runtime/daemon.js";
 import { TRUSTED, type FactoryEvent, type TicketState } from "../../core/types.js";
 import { isTakenOver } from "../../core/block-cause.js";
@@ -113,22 +113,12 @@ export class GithubReconciler {
     // A take-over's bundle is pushed before its `push.human`, under the human's name, is accepted (ORC-234): read once it ends.
     if (isTakenOver(t)) return;
     if (head === t.verifiedSha || head === t.humanHead) return;
-    const heads = pushedHeads((await this.d.store.ticketJournal(t.projectId, t.ticketId)).map((j) => upcast(j.event)));
-    const published = heads.at(-1);
-    // With no publication, there is nothing to compare with: the head read then is kept, and the forge may still read the PR
-    // on it just after the first publication.
-    if (heads.length <= 1) {
-      const unpublishedKey = `lost-push:${t.projectId}:${t.ticketId}`;
-      const unpublished = await this.d.store.getMeta(unpublishedKey);
-      if (!published) {
-        if (unpublished !== head) await this.d.store.setMeta(unpublishedKey, head);
-        return;
-      }
-      if (unpublished === head) return;
-    }
-    // The last commit it pushed, and the one before, which the forge may still read just after a push. A branch put back on
-    // an older one is a human's push, as the webhook reports it.
-    if (heads.slice(-2).includes(head)) return;
+    const events = (await this.d.store.ticketJournal(t.projectId, t.ticketId)).map((j) => upcast(j.event));
+    const last = lastPush(events);
+    const published = last?.sha;
+    // The last push and the head it went over, which the forge may still read just after it (ORC-438). A branch put back on
+    // any other is a human's push, as the webhook reports it.
+    if (last?.before ? head === published || head === last.before : await this.inWindow(t, head, pushedHeads(events))) return;
     await this.d.submit({
       ...TRUSTED,
       // What the push brought was verified by no one in the factory (I12).
@@ -141,5 +131,24 @@ export class GithubReconciler {
       // The PR names no pusher; `before`, the head last known, so that only the commits since are the human's (ORC-338).
       payload: { branch: pr.branch, sha: head, author: UNKNOWN_PUSHER, before: t.humanHead ?? published },
     });
+  }
+
+  /**
+   * A last push journaled with no head it went over (before ORC-438, a push that made the branch, or one whose publisher failed
+   * before it said the head): the factory's heads are then its last two commits pushed, and, before the second, the head read
+   * with no publication, which the forge may still read just after the first.
+   */
+  private async inWindow(t: TicketState, head: string, heads: string[]): Promise<boolean> {
+    if (heads.length <= 1) {
+      const unpublishedKey = `lost-push:${t.projectId}:${t.ticketId}`;
+      const unpublished = await this.d.store.getMeta(unpublishedKey);
+      // With no publication, there is nothing to compare with: the head read then is kept.
+      if (!heads.length) {
+        if (unpublished !== head) await this.d.store.setMeta(unpublishedKey, head);
+        return true;
+      }
+      if (unpublished === head) return true;
+    }
+    return heads.slice(-2).includes(head);
   }
 }

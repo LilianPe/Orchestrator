@@ -27,7 +27,8 @@ export function describePublisherContract(name: string, make: () => PublisherSub
       const replay = await resolved(s.publisher.publish(s.request));
       const sha = `${s.request.sha}-next`;
       expect(replay).toEqual(first);
-      expect(await resolved(s.publisher.publish({ ...s.request, sha }))).toEqual({ ...first, sha });
+      // The push names the head it went over (ORC-438).
+      expect(await resolved(s.publisher.publish({ ...s.request, sha }))).toEqual({ ...first, sha, before: first.sha });
     });
 
     it('each branch gets its own PR', async () => {

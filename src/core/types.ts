@@ -304,8 +304,11 @@ export interface EventPayloads {
    */
   'pr.merge_refused': PrPayload & { reason: string; headMoved?: boolean };
   /** The verified commit is on the forge and its PR open (ORC-125), or the branch holds nothing to publish. The job's end applies (`nextOf`). */
-  /** `empty`: the run committed nothing, and no PR was opened (ORC-170). */
-  'publish.done': { runId: string; job: string; sha: string; output?: AgentOutput; empty?: true };
+  /**
+   * `empty`: the run committed nothing, and no PR was opened (ORC-170). `before`: the head the push went over (ORC-438), none when
+   * nothing was pushed, the push made the branch, or the event predates it.
+   */
+  'publish.done': { runId: string; job: string; sha: string; output?: AgentOutput; empty?: true; before?: string };
   /** The factory did not publish, and says why (ORC-125): nothing was written on the forge. The ticket is blocked. */
   'publish.refused': { runId: string; job: string; sha: string; reason: string };
   /**
