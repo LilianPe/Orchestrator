@@ -7,7 +7,7 @@ import { SHA } from '../adapters/workspace/git-workspaces.js';
 import { runAndRerun, settle, type CommandRun, type KnownFlaky, type Standing } from '../checks/flaky.js';
 import { isLockfile } from '../checks/diff-size.js';
 import { ANSI, logExcerpt } from '../checks/log-excerpt.js';
-import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig } from '../config/repo-config.js';
+import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, setupOf, type RepoConfig } from '../config/repo-config.js';
 import { IN_SANDBOX } from '../publish/extract.js';
 import { BASE, boxOpener, cloneGit, fetchFromForge, initHardenedClone, reportRun, show, testCommands, verifyCommand, withDeadline, within, zFields, type CloneGit } from './clean-verify.js';
 import { RELEASE_AGE_DAYS, runSealedSetup, SetupFailure } from './sealed-setup.js';
@@ -277,7 +277,7 @@ export async function runDryRun(req: DryRunRequest): Promise<DryRun> {
   }
   const declared = Object.values(config.commands);
   const commands = declared.length ? declared : req.commands;
-  const setup = config.setup ? [config.setup] : req.setup;
+  const setup = setupOf(config, req.setup);
   const unprovided = req.sandboxes.unprovided([...new Set(config.services)]);
   if (unprovided.length) {
     const detail = `${unprovided.join(', ')}: declared under \`services\` in ${REPO_CONFIG_PATH}, and no sandbox backend of this factory provides ${unprovided.length === 1 ? 'it' : 'them'}`;

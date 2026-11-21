@@ -8,7 +8,7 @@ import { ExecFailure } from '../adapters/exec.js';
 import { ActivityRelay, composedActivity } from '../adapters/tracker/activity-relay.js';
 import type { Workspace } from '../adapters/workspace/types.js';
 import type { RepoVariables } from '../config/repo-variables.js';
-import { RepoConfigError, ticketTokenCap } from '../config/repo-config.js';
+import { RepoConfigError, setupOf, ticketTokenCap } from '../config/repo-config.js';
 import type { JobSpec } from '../core/workflow.js';
 import { attemptsFor, backoff, isTransient, TRANSIENT_WINDOW_MS, type RetryPolicy } from './transient.js';
 import { LEASE_MS, PAUSE_ACCEPTED, RUN_LEASE_MS, type QueueItem, type RunRecord, type SessionRole } from '../store/types.js';
@@ -858,7 +858,7 @@ export abstract class DaemonLaunch extends DaemonEffects {
       const declared = [...new Set(config.services)];
       const unprovided = this.d.sandboxes ? this.d.sandboxes.unprovided(declared) : declared;
       if (unprovided.length) throw new Error(servicesUnavailable(unprovided, !!this.d.sandboxes));
-      const setup = config.setup ? [config.setup] : wf.workspace.setup;
+      const setup = setupOf(config, wf.workspace.setup);
       setUp ||= !setup.length;
       const cap = ticketTokenCap(this.d.perTicketTokens, config);
       if (job.queue === 'dev' && cap !== undefined) spent ??= await state(this.codeTokensSpent(project.id, ticketId));

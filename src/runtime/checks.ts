@@ -4,7 +4,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Sandbox } from '../adapters/sandbox/types.js';
 import { NO_REPO_VARIABLES, type RepoVariables } from '../config/repo-variables.js';
-import { parseRepoConfig, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
+import { parseRepoConfig, setupOf, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
 import type { JobSpec } from '../core/workflow.js';
 import type { RunRecord } from '../store/types.js';
 import type { AgentOutput, PreviewRecipe } from '../core/agent-output.js';
@@ -180,25 +180,36 @@ export abstract class DaemonChecks extends DaemonBase {
     };
   }
 
-  /** The dry run of each project's default branch under way (ORC-409): the launches and `factory dry-run` that ask meanwhile wait for it. */
-  private readonly dryRunsUnderWay = new Map<string, Promise<DryRun>>();
+  /**
+   * The last dry run asked of each project's default branch, under way or waiting for the one before (ORC-409): the launches and
+   * `factory dry-run` that ask meanwhile share it.
+   */
+  private readonly dryRuns = new Map<string, { run: Promise<DryRun>; started: boolean }>();
 
   /**
    * The dry run of a project (ORC-408), on the forge's default branch or on the commit `sha`: its `setup` and commands in the
    * sandboxes (`runDryRun`), in a place of its own under `runsDir/<id>`, then recorded, red or green. It rejects when it cannot run
    * (no sandboxes, an engine or a forge down): nothing is recorded then. On the default branch, one at a time by project: who asks
-   * while one is under way gets its result (ORC-409), or with `fresh` a new one once it ended, which reads what changed meanwhile.
+   * while one is under way gets its result (ORC-409), or with `fresh` a new one once it ended, which reads what changed meanwhile:
+   * one for all who ask before it starts.
    */
   async dryRun(projectId: string, o: { sha?: string; fresh?: boolean } = {}): Promise<DryRun> {
     if (o.sha) return this.runDry(projectId, o.sha);
-    const under = this.dryRunsUnderWay.get(projectId);
-    if (under && !o.fresh) return under;
+    const last = this.dryRuns.get(projectId);
+    if (last && (!o.fresh || !last.started)) return last.run;
     // After the one under way, whatever its end: never two dry runs of a project at once.
-    const run = (under ? under.catch(() => undefined) : Promise.resolve()).then(() => this.runDry(projectId)).finally(() => {
-      if (this.dryRunsUnderWay.get(projectId) === run) this.dryRunsUnderWay.delete(projectId);
-    });
-    this.dryRunsUnderWay.set(projectId, run);
-    return run;
+    // With none before it, it starts now.
+    const entry = { started: !last } as { run: Promise<DryRun>; started: boolean };
+    entry.run = (last ? last.run.catch(() => undefined) : Promise.resolve())
+      .then(() => {
+        entry.started = true;
+        return this.runDry(projectId);
+      })
+      .finally(() => {
+        if (this.dryRuns.get(projectId) === entry) this.dryRuns.delete(projectId);
+      });
+    this.dryRuns.set(projectId, entry);
+    return entry.run;
   }
 
   /** Whether a delegated ticket of `project` waits for its dry run (ORC-409): with sandboxes, which run it; never a replayed ticket's. */
@@ -213,10 +224,9 @@ export abstract class DaemonChecks extends DaemonBase {
    */
   protected async refusingDryRun(project: ProjectRuntime, config: RepoConfig): Promise<DryRun | undefined> {
     if (!this.dryRunGates(project)) return undefined;
-    const { sha, ...files } = await this.d.dryRunFiles!(project);
-    const fingerprint = dryRunFingerprint({ setup: config.setup ? [config.setup] : project.workflow.workspace.setup, image: this.d.runnerImage!, ...files });
+    const [{ sha, ...files }, last] = await Promise.all([this.d.dryRunFiles!(project), this.d.store.lastDryRun(project.id)]);
+    const fingerprint = dryRunFingerprint({ setup: setupOf(config, project.workflow.workspace.setup), image: this.d.runnerImage!, ...files });
     const now = { sha, fingerprint };
-    const last = await this.d.store.lastDryRun(project.id);
     if (last && dryRunHolds(last, now)) return last.ok ? undefined : last;
     let run = await this.dryRun(project.id);
     // Red on other inputs than this launch's: one under way since before a fix of the default branch. Run anew, once.

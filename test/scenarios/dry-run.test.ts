@@ -59,12 +59,15 @@ describe('the dry run of a project', () => {
     const first = h.orch.dryRun('p');
     const joined = h.orch.dryRun('p');
     const fresh = h.orch.dryRun('p', { fresh: true });
+    // Asked before it starts: the same new one.
+    const freshToo = h.orch.dryRun('p', { fresh: true });
     await vi.waitFor(() => expect(ends).toHaveLength(1));
     ends[0]!();
     expect(await joined).toEqual(await first);
     await vi.waitFor(() => expect(ends).toHaveLength(2));
     ends[1]!();
     expect((await fresh).id).not.toBe((await first).id);
+    expect(await freshToo).toEqual(await fresh);
   });
 
   it('without sandboxes, it refuses and records nothing', async () => {

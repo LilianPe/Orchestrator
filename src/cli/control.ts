@@ -1,4 +1,4 @@
-import { request } from 'node:http';
+import { request, type RequestOptions } from 'node:http';
 import { PRODUCT_NAME } from '../product.js';
 import type { DryRun } from '../core/dry-run.js';
 import type { RunRecord } from '../store/types.js';
@@ -22,11 +22,11 @@ export interface ControlDeps {
 const NOT_REACHED = new Set(['ENOENT', 'ECONNREFUSED', 'EACCES', 'EPERM', 'ENOTSOCK']);
 
 /**
- * A request to the daemon through its Unix socket (the CLI's commands carry no body), rejected when nothing listens there; or with
- * `url`, over HTTP. Neither gives up on a slow answer: `fetch` does after 5 minutes, before a dry run ends (ORC-409).
+ * A request of the CLI's (its commands carry no body) with node's own client, which never gives up on a slow answer: through the
+ * daemon's Unix socket, rejected when nothing listens there; or over HTTP, where `fetch` gives up after 5 minutes, before a dry run
+ * ends (ORC-409).
  */
-function nodeRequest(socket: string | URL, path: string, init: RequestInit): Promise<Response> {
-  const to = typeof socket === 'string' ? { socketPath: socket, path, headers: { host: 'localhost' } } : { host: socket.hostname, port: socket.port, path: socket.pathname };
+function nodeRequest(to: RequestOptions, init: RequestInit): Promise<Response> {
   return new Promise((resolve, reject) => {
     const req = request({ ...to, method: init.method ?? 'GET' }, (res) => {
       const chunks: Buffer[] = [];
@@ -38,6 +38,14 @@ function nodeRequest(socket: string | URL, path: string, init: RequestInit): Pro
     req.end();
   });
 }
+
+const viaSocket = (socketPath: string, path: string, init: RequestInit) => nodeRequest({ socketPath, path, headers: { host: 'localhost' } }, init);
+
+/** `fetch`'s stand-in for a slow answer over HTTP. */
+const slowFetch = (url: string, init: RequestInit = {}) => {
+  const u = new URL(url);
+  return nodeRequest({ host: u.hostname, port: u.port, path: `${u.pathname}${u.search}` }, init);
+};
 
 /** What `/api/state` answers and these commands read. */
 interface State {
@@ -77,7 +85,7 @@ function formatStatus(s: State, now: number): string[] {
 async function ask(d: ControlDeps, path: string, init: RequestInit = {}, o: { slow?: boolean } = {}): Promise<Response | undefined> {
   if (d.socket) {
     try {
-      return await nodeRequest(d.socket, path, init);
+      return await viaSocket(d.socket, path, init);
     } catch (err) {
       // A socket a daemon killed left, or one this user may not open: HTTP, as without one. Any later error may come after
       // the daemon took the command: never sent twice.
@@ -90,7 +98,8 @@ async function ask(d: ControlDeps, path: string, init: RequestInit = {}, o: { sl
   let res: Response;
   try {
     const url = `${d.api}${path}`;
-    res = await (d.fetch ?? (o.slow && url.startsWith('http:') ? (u: string, i?: RequestInit) => nodeRequest(new URL(u), '', i ?? {}) : fetch))(url, init);
+    const send = d.fetch ?? (o.slow && url.startsWith('http:') ? slowFetch : fetch);
+    res = await send(url, init);
   } catch (err) {
     d.out(`${PRODUCT_NAME} does not answer on ${d.api} (${(err as Error).message}): run \`factory up\`, or check the port and FACTORY_HOME.`);
     return undefined;

@@ -154,7 +154,7 @@ describe('the dry run gate of a delegated ticket', () => {
   });
 
   it('a red dry run under way since before a fix of the default branch is not taken for it: the ticket delegated after runs a new one', async () => {
-    const ends: ((run: DryRun) => void)[] = [];
+    const ends: ((ok: boolean) => void)[] = [];
     const main: Main = { sha: MAIN, files: FILES };
     const asked: DryRunRequest[] = [];
     const h = createHarness({
@@ -164,7 +164,7 @@ describe('the dry run gate of a delegated ticket', () => {
         asked.push(req);
         // What the forge's default branch is when it starts.
         const at = { ...main };
-        return new Promise((resolve) => ends.push((ok) => resolve({ ...dryRunOf(at, ok.ok), id: req.runId })));
+        return new Promise((resolve) => ends.push((ok) => resolve({ ...dryRunOf(at, ok), id: req.runId })));
       },
     });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: DESCRIPTION });
@@ -176,9 +176,9 @@ describe('the dry run gate of a delegated ticket', () => {
     await delegated('REL-2');
     await new Promise((r) => setTimeout(r, 50));
     expect(asked).toHaveLength(1);
-    ends[0]!(dryRunOf({ sha: MAIN, files: FILES }, false));
+    ends[0]!(false);
     await vi.waitFor(() => expect(asked).toHaveLength(2));
-    ends[1]!(dryRunOf({ sha: MOVED, files: FILES }, true));
+    ends[1]!(true);
     await h.orch.drained();
     expect(await h.ticket('REL-1')).toMatchObject({ blocked: true, blockKind: 'repo_config' });
     expect((await h.ticket('REL-2')).blocked).toBe(false);
