@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ExecResult } from '../adapters/exec.js';
+import { execCmd, type Exec, type ExecResult } from '../adapters/exec.js';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
 import type { SandboxExecOptions, SandboxRequest } from '../adapters/sandbox/types.js';
 import type { CommandRun } from '../checks/flaky.js';
@@ -118,8 +118,9 @@ describe('runDryRun (ORC-408)', () => {
     const run = await runDryRun(req);
     expect(run.ok).toBe(false);
     expect(run.breaks).toEqual([{ kind: 'dependency', step: 'setup', command: 'npm ci', detail: expect.stringContaining('left-pad@9.9.9'), output: expect.stringContaining('ETARGET') }]);
-    // Nothing runs on a commit that could not be set up.
+    // Nothing runs on a commit that could not be set up, and none is recorded as run.
     expect(sandboxes.ran.map((r) => r.command)).toEqual(['npm ci']);
+    expect(run.commands).toEqual([]);
     expect(sandboxes.active()).toEqual([]);
   });
 
@@ -144,6 +145,11 @@ describe('runDryRun (ORC-408)', () => {
     git(origin, 'branch', '-q', '-D', 'side');
     const run = await runDryRun({ ...req, sha: side });
     expect(run).toMatchObject({ sha: side, target: 'commit', ok: true });
+  });
+
+  it('the host git\'s config stays out of the commit\'s working tree: a repository that tracks a `gitconfig` at its root is set up as any other', async () => {
+    const { req } = forge({}, { gitconfig: '[core]\n', '.factory/config.yml': 'setup: npm ci\ncommands:\n  test: grep green state.txt && s=$(git status --porcelain) && test -z "$s"\n' });
+    expect(await runDryRun(req)).toMatchObject({ ok: true, breaks: [] });
   });
 
   it('a sha that is not a full commit id is refused before anything is fetched', async () => {
@@ -177,11 +183,51 @@ describe('runDryRun (ORC-408)', () => {
     await expect(runDryRun(req)).rejects.toThrow('no dry run recorded');
   });
 
-  it('the clone the sandboxes mount holds nothing of the host\'s git: a tracked root gitconfig checks out', async () => {
-    const { req, sandboxes } = forge({}, { gitconfig: '[core]\n' });
-    const run = await runDryRun(req);
-    expect(run.ok).toBe(true);
-    expect(sandboxes.ran.map((r) => r.command)).toContain('grep green state.txt');
+  it.each([
+    ['pip, past its ProxyError', "WARNING: Retrying (Retry(total=4)) after connection broken by 'ProxyError('Cannot connect to proxy.', NewConnectionError('Failed to establish a new connection: [Errno 111] Connection refused'))'\nERROR: No matching distribution found for requests\n"],
+    ['the proxy\'s 502 on a host it could not resolve', 'curl: (22) The requested URL returned error: 502\negress proxy: getaddrinfo ENOTFOUND get.pnpm.io\n'],
+    ['the proxy\'s 502 on a request it could not send', 'egress proxy: not sent on: Invalid character in header content\n'],
+    ['the proxy down, as npm and git say it', 'npm error connect ECONNREFUSED 127.0.0.1:3128\nfatal: unable to access \'https://github.com/acme/sub.git/\': Failed to connect to 127.0.0.1 port 3128 after 0 ms: Could not connect to server\n'],
+  ])('a breakdown the installer reports as something else still rejects: %s', async (_, stderr) => {
+    const { req, sandboxes } = forge();
+    sandboxes.answer = (command) => (command === 'npm ci' ? { stdout: '', stderr, code: 1 } : undefined);
+    await expect(runDryRun(req)).rejects.toThrow('no dry run recorded');
+  });
+
+  it('a variable the setup asks for is the repository\'s, past a retry an installer warned of: recorded red, as a variable', async () => {
+    const { req, sandboxes } = forge();
+    const stderr = "WARNING: Retrying (Retry(total=4)) after connection broken by 'ProxyError('Cannot connect to proxy.')'\nError: STRIPE_KEY is not set\n";
+    sandboxes.answer = (command) => (command === 'npm ci' ? { stdout: '', stderr, code: 1 } : undefined);
+    expect((await runDryRun(req)).breaks).toEqual([expect.objectContaining({ kind: 'variable', step: 'setup' })]);
+  });
+
+  it.each([
+    ['a host the proxy refuses a CONNECT to, as curl says it', 'curl: (56) CONNECT tunnel failed, response 403\n'],
+    ['a host the proxy refuses a CONNECT to, as git says it', 'fatal: unable to access \'https://get.example.com/\': Received HTTP code 403 from proxy after CONNECT\n'],
+    ['the relay\'s address printed by a setup that then fails', 'HTTPS_PROXY=http://127.0.0.1:3128\nnpm error 404 Not Found - GET https://registry.npmjs.org/left-pad\n'],
+  ])('what names the proxy without a breakdown is the repository\'s: recorded red, %s', async (_, stderr) => {
+    const { req, sandboxes } = forge();
+    sandboxes.answer = (command) => (command === 'npm ci' ? { stdout: '', stderr, code: 1 } : undefined);
+    expect((await runDryRun(req)).ok).toBe(false);
+  });
+
+  it('a setup over its cap on a registry that no longer answers rejects too', async () => {
+    const { req, sandboxes } = forge();
+    let now = Date.now();
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    sandboxes.answer = (command) => {
+      if (command !== 'npm ci') return undefined;
+      now += VERIFY_TIMEOUT_MS;
+      return { stdout: '', stderr: 'npm error code ETIMEDOUT\n', code: 124 };
+    };
+    await expect(runDryRun(req)).rejects.toThrow('no dry run recorded');
+  });
+
+  it('a service of its own refusing on the loopback in the setup is the repository\'s: recorded red, as a service', async () => {
+    const { req, sandboxes } = forge();
+    // As Node prints it: the address on the first line only.
+    sandboxes.answer = (command) => (command === 'npm ci' ? { stdout: '', stderr: "Error: connect ECONNREFUSED 127.0.0.1:5432\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1555:16) {\n  errno: -111,\n  code: 'ECONNREFUSED',\n  syscall: 'connect',\n  address: '127.0.0.1',\n  port: 5432\n}\n", code: 1 } : undefined);
+    expect((await runDryRun(req)).breaks).toEqual([expect.objectContaining({ kind: 'service', step: 'setup' })]);
   });
 
   it('a registry the egress proxy refuses is the repository\'s: recorded red, as a dependency', async () => {
@@ -189,6 +235,12 @@ describe('runDryRun (ORC-408)', () => {
     sandboxes.answer = (command) => (command === 'npm ci' ? { stdout: '', stderr: 'npm error 403 Forbidden - GET https://npm.acme.internal/left-pad\n', code: 1 } : undefined);
     const run = await runDryRun(req);
     expect(run.breaks).toEqual([expect.objectContaining({ kind: 'dependency', step: 'setup', detail: expect.stringContaining('egress proxy does not allow') })]);
+  });
+
+  it('a forge that no longer answers rejects at the dry run\'s deadline, not at git\'s', async () => {
+    const { req } = forge();
+    const exec: Exec = (cmd, args, opts) => (args.includes('fetch') ? new Promise(() => {}) : execCmd(cmd, args, opts));
+    await expect(runDryRun({ ...req, exec, deadlineMs: 200 })).rejects.toThrow('the forge no longer responds');
   });
 
   it('a commit the forge does not hold rejects: no dry run is recorded on it', async () => {
@@ -211,6 +263,12 @@ describe('runDryRun (ORC-408)', () => {
     const run = await runDryRun(req);
     expect(run).toMatchObject({ ok: false, breaks: [expect.objectContaining({ kind: 'failure', step: 'config', detail: expect.stringContaining('nope') })] });
     expect(sandboxes.ran).toEqual([]);
+  });
+
+  it('a variable the repository declares that factory.yml gives no value is recorded red as a variable, its cause named', async () => {
+    const { req } = forge({}, { '.factory/config.yml': 'env: [API_URL]\ncommands:\n  test: test -n "$API_URL" || { echo API_URL is not set; exit 1; }\n' });
+    const run = await runDryRun(req);
+    expect(run.breaks).toEqual([expect.objectContaining({ kind: 'variable', step: 'command', detail: expect.stringContaining('gives no value (API_URL)') })]);
   });
 
   it('without a setup or commands of its own, it takes the workflow\'s, and the variables the repository declares', async () => {
@@ -296,7 +354,7 @@ describe('dryRunRefusal (ORC-409)', () => {
 });
 
 describe('classifyBreak', () => {
-  const declared = { env: ['DATABASE_URL'] };
+  const declared = { env: ['DATABASE_URL', 'SENTRY_ENV'], provided: ['DATABASE_URL'], secrets: ['NPM_TOKEN'] };
   it.each([
     ['npm error code ETARGET\nnpm error notarget No matching version found for left-pad@9.9.9.', 'left-pad@9.9.9'],
     ['npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/@acme%2fnope - Not found', '404'],
@@ -305,6 +363,8 @@ describe('classifyBreak', () => {
     ['  × No solution found when resolving dependencies:\n  ╰─▶ Because there is no version of httpx==9.0 and you require httpx==9.0', 'httpx==9.0'],
     ['ERROR: No matching distribution found for requests==99.1', 'requests==99.1'],
     ["Error: Cannot find module 'lodash'\nRequire stack:", 'lodash'],
+    ["Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@acme/ui' imported from /work/src/a.ts", '@acme/ui'],
+    ["Error: Cannot find module '/work/node_modules/zod/index.js'", 'node_modules/zod'],
     ["ModuleNotFoundError: No module named 'yaml'", 'yaml'],
     ['npm error `npm ci` can only install packages when your package.json and package-lock.json or npm-shrinkwrap.json are in sync.', 'in sync'],
   ])('a missing or too recent dependency: %s', (output, named) => {
@@ -325,6 +385,20 @@ describe('classifyBreak', () => {
     expect(classifyBreak('Error: DATABASE_URL is not set', 'command', declared).kind).toBe('failure');
   });
 
+  it('each name of a line is read: one undeclared past a declared one is that line\'s cause', () => {
+    expect(classifyBreak('Error: Missing environment variables: DATABASE_URL, STRIPE_KEY', 'command', declared)).toMatchObject({ kind: 'variable', detail: expect.stringContaining('does not declare under `env` (STRIPE_KEY)') });
+    expect(classifyBreak('DATABASE_URL is not set, STRIPE_KEY is not set', 'command', declared)).toMatchObject({ kind: 'variable', detail: expect.stringContaining('(STRIPE_KEY)') });
+    expect(classifyBreak('Error: Missing environment variables: DATABASE_URL', 'command', declared).kind).toBe('failure');
+  });
+
+  it('a secret the repository declares under setup_secrets is never said undeclared: no variable is read of it, in the setup or a command', () => {
+    for (const step of ['setup', 'command'] as const) expect(classifyBreak('Error: NPM_TOKEN is not set', step, declared).kind).toBe('failure');
+  });
+
+  it('a variable the repository declares and factory.yml gives no value is said as such: the factory\'s config, not the code', () => {
+    expect(classifyBreak('Error: Missing environment variable: SENTRY_ENV', 'command', declared)).toMatchObject({ kind: 'variable', detail: expect.stringContaining('`factory.yml` gives no value (SENTRY_ENV)') });
+  });
+
   it('in a command\'s output, what only an installer means is not a dependency: the application\'s 404, a module of its own', () => {
     expect(classifyBreak('expected 200 "OK", got 404 "Not Found"', 'command', declared).kind).toBe('failure');
     expect(classifyBreak("Error: Cannot find module './dist/index.js'", 'command', declared).kind).toBe('failure');
@@ -343,11 +417,14 @@ describe('classifyBreak', () => {
   it('the egress proxy\'s relay on the loopback is no service; a registry that does not answer is said apart', () => {
     expect(classifyBreak('connect ECONNREFUSED 127.0.0.1:3128', 'setup', declared).kind).toBe('failure');
     expect(unreachable('connect ECONNREFUSED 127.0.0.1:3128')).toContain('3128');
+    // The relay by its address: a 3128 that is no port (a pid, a duration) leaves a service a service.
+    expect(classifyBreak('Error: connect ECONNREFUSED 127.0.0.1:5432 (after 3128 ms)', 'command', declared).kind).toBe('service');
     expect(unreachable('npm error code ETIMEDOUT')).toContain('ETIMEDOUT');
     expect(unreachable('npm error 502 Bad Gateway - GET https://registry.npmjs.org/zod')).toContain('502');
     expect(unreachable("Failed to establish a new connection: [Errno 111] Connection refused")).toContain('Errno 111');
     expect(unreachable('error: Request failed after 3 retries\n  Caused by: dns error: failed to lookup address information')).toContain('dns error');
     expect(unreachable('AssertionError: expected 1 to be 2')).toBeUndefined();
+    expect(unreachable("Error: connect ECONNREFUSED 127.0.0.1:5432\n  code: 'ECONNREFUSED',")).toBeUndefined();
   });
 
   it('anything else is a failure, its first error line said', () => {
@@ -363,23 +440,23 @@ describe('breaksOfRuns', () => {
   });
 
   it('a test that failed then passed on its rerun is flaky; a command that failed on it alone has no other break', () => {
-    expect(breaksOfRuns([run({ tests: [test('races', 'passed')] })], { known: [] }, { env: [] })).toEqual([
+    expect(breaksOfRuns([run({ tests: [test('races', 'passed')] })], { known: [] }, { env: [], provided: [], secrets: [] })).toEqual([
       { kind: 'flaky', step: 'command', command: 'npm test', detail: expect.stringContaining('a.test.ts > races'), output: 'FAIL a.test.ts' },
     ]);
   });
 
   it('a test that failed again is the command\'s failure, the flaky ones beside it', () => {
-    const breaks = breaksOfRuns([run({ tests: [test('races', 'passed'), test('broken', 'failed')] })], { known: [] }, { env: [] });
+    const breaks = breaksOfRuns([run({ tests: [test('races', 'passed'), test('broken', 'failed')] })], { known: [] }, { env: [], provided: [], secrets: [] });
     expect(breaks.map((b) => b.kind)).toEqual(['flaky', 'failure']);
   });
 
   it('known flaky tests alone, but the command without them still not passing (cut by its cap), is the command\'s failure', () => {
     const known = { known: [{ test: 'a.test.ts > races', coversFrozen: false }] };
-    expect(breaksOfRuns([run({ tests: [test('races', 'failed')], withoutIndicative: null })], known, { env: [] }).map((b) => b.kind)).toEqual(['failure']);
-    expect(breaksOfRuns([run({ tests: [test('races', 'failed')], withoutIndicative: 1 })], known, { env: [] }).map((b) => b.kind)).toEqual(['failure']);
+    expect(breaksOfRuns([run({ tests: [test('races', 'failed')], withoutIndicative: null })], known, { env: [], provided: [], secrets: [] }).map((b) => b.kind)).toEqual(['failure']);
+    expect(breaksOfRuns([run({ tests: [test('races', 'failed')], withoutIndicative: 1 })], known, { env: [], provided: [], secrets: [] }).map((b) => b.kind)).toEqual(['failure']);
   });
 
   it('a known flaky test of the repository that alone failed the command is no break: it does not count', () => {
-    expect(breaksOfRuns([run({ tests: [test('races', 'failed')], withoutIndicative: 0 })], { known: [{ test: 'a.test.ts > races', coversFrozen: false }] }, { env: [] })).toEqual([]);
+    expect(breaksOfRuns([run({ tests: [test('races', 'failed')], withoutIndicative: 0 })], { known: [{ test: 'a.test.ts > races', coversFrozen: false }] }, { env: [], provided: [], secrets: [] })).toEqual([]);
   });
 });

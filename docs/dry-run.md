@@ -13,9 +13,10 @@ when what it ran with changes (ORC-409, [below](#the-gate-of-a-delegated-ticket)
 `Daemon.dryRun(projectId, { sha? })` (in `src/runtime/checks.ts`) runs `runDryRun` (`src/core/dry-run.ts`) and records the
 result in the store:
 
-1. **The commit.** The forge's default branch, or the commit `sha` when one is given (the replay of closed tickets runs it on
-   each ticket's start commit, [ORC-231](ghost-replay.md)). It is fetched from the forge with the daemon's credentials into a
-   clone of the factory's, with no config of the repository's. A commit the forge does not hold rejects: nothing is recorded.
+1. **The commit.** The forge's default branch, or the commit `sha` when one is given (for the replay of closed tickets, on
+   each ticket's start commit: `factory ghost start` does not call it yet, [ORC-231](ghost-replay.md)). It is fetched from the
+   forge with the daemon's credentials into a clone of the factory's, with no config of the repository's. A commit the forge does
+   not hold rejects: nothing is recorded.
 2. **What it runs.** `.factory/config.yml` read at that commit: its `setup` and `commands`, or the workflow's
    (`workspace.setup`, the `dev` job's `verify`) when it declares none; its `services` and its `env`.
 3. **The checkout**, in a sandbox at network `none`.
@@ -25,10 +26,13 @@ result in the store:
    test that the runner's report names (vitest, jest, pytest) is run again once, as in `verify`.
 
 What the factory cannot tell anything about rejects, and nothing is recorded: the forge or the container engine not answering,
-a `setup` that fails because a registry or the egress proxy did not answer (a connection refused or timed out, a 502, pip's or
-uv's connection or DNS error), even when it then says a dependency is missing or the command ran past its cap, the
-repository's variables that cannot be read from `factory.yml`, no sandboxes (`FACTORY_CONTAINER_CLI` and `FACTORY_RUNNER_IMAGE`
-are required). `sha`, when given, must be a full commit id: a branch name or a short sha is refused.
+a `setup` that fails or runs over its cap with a registry or the egress proxy not answering in its output (a connection refused
+or timed out, the relay's `ECONNREFUSED 127.0.0.1:3128` among them, a 502, pip's or uv's connection or DNS error, pip's
+`ProxyError`), even when it then says a dependency is missing. A setup that exited on a variable, or on a service
+refusing (`connect ECONNREFUSED` on the loopback, `could not connect to server`), is recorded red as such, past an installer's
+retry warning. A setup over its cap is a `failure`: a breakdown in its output rejects it, unless a service refusing is there too.
+Reading the repository's variables failing (its entry in `factory.yml` not looked up) rejects too, and so does a factory without
+sandboxes (`FACTORY_CONTAINER_CLI` and `FACTORY_RUNNER_IMAGE` are required). `sha`, when given, must be a full commit id: a branch name or a short sha is refused.
 
 ## What breaks
 
@@ -37,11 +41,11 @@ command, an excerpt of its output, and a detail line, classified as:
 
 | Kind | Read from | Example |
 |---|---|---|
-| `dependency` | a dependency missing or too recent: npm, pnpm, Yarn, uv and pip resolution errors, `Cannot find module` of a package (not of a path), `No module named`; in the `setup` only, an installer's 404, `ETARGET`, `ERESOLVE`, a lockfile out of sync, or a registry the egress proxy refuses (403) | `No matching version found for left-pad@9.9.9` |
-| `service` | a service declared under `services` that no sandbox backend provides (step `config`), or a connection refused on the loopback (but the egress proxy's relay, `:3128`) | `connect ECONNREFUSED 127.0.0.1:5432` |
-| `variable` | a variable the code asks for that `.factory/config.yml` does not declare under `env`. Without the word *variable* in the line, only a name with a `_` counts: `URL is not defined` is a global | `Missing environment variable: STRIPE_KEY` |
+| `dependency` | a dependency missing or too recent: npm, pnpm, Yarn, uv and pip resolution errors, `Cannot find module` of a package (by its npm name, or a path into `node_modules`), `No module named`; in the `setup` only, an installer's 404, `ETARGET`, `ERESOLVE`, a lockfile out of sync, or a registry the egress proxy refuses (403) | `No matching version found for left-pad@9.9.9` |
+| `service` | a service declared under `services` that no sandbox backend provides (step `config`), or a connection refused on the loopback (but a line naming the egress proxy's relay by its address, `127.0.0.1:3128`) | `connect ECONNREFUSED 127.0.0.1:5432` |
+| `variable` | a variable the code asks for and does not get: one `.factory/config.yml` does not declare under `env`, or one it declares that `factory.yml` gives no value (no entry for the repository there, or none for that name), said apart. Each name of the line is read; a secret declared under `setup_secrets` is never one of them, so a line that names only secrets is no variable's cause. Without the word *variable* in the line, only a name with a `_` counts: `URL is not defined` is a global | `Missing environment variable: STRIPE_KEY` |
 | `flaky` | a test that failed, then passed on its rerun. A test on the repository's known flaky list does not count | `src/a.test.ts > races failed, then passed on its rerun` |
-| `failure` | anything else: a `.factory/config.yml` refused, a `setup` command over its cap (a registry not answering aside), a test that fails again | its first error line |
+| `failure` | anything else: a `.factory/config.yml` refused, a `setup` command over its cap with no breakdown in its output, a test that fails again | its first error line |
 
 The classification reads text: what a tool prints in another form is a `failure`, with its first error line. A build or test
 command over its cap is classified by what it printed, as any other. A command that failed on its flaky tests alone has only
