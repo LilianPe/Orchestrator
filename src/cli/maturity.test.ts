@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -185,13 +186,21 @@ describe('the maturity report on what it reads only in part (ORC-454)', () => {
 
   it('a package.json that cannot be read (a directory) is said on the cards, never stops the report; pyproject.toml still read', () => {
     const v = valueOf(repoOf({ 'package.json/index.js': '', 'pyproject.toml': '[project]\ndependencies = ["psycopg>=3"]\n' }));
-    expect(v['stack']).toBe('Node (no lockfile), Python (no uv.lock); package.json not fully read (cannot be read: EISDIR): Stack, Services and Visual paths may miss some of its dependencies');
+    expect(v['stack']).toBe('Node (no lockfile), Python (no uv.lock); package.json not fully read (cannot be read: not a regular file): Stack, Services and Visual paths may miss some of its dependencies');
     expect(v['services']).toBe('postgres (dependency psycopg); package.json not fully read (see Stack): a dependency may be missing');
   });
 
   it('a compose file that cannot be read (a directory) is said on the Services card, never stops the report; the next compose file still read', () => {
-    expect(valueOf(repoOf({ 'docker-compose.yml/x': '' }))['services']).toBe('none; docker-compose.yml not read (cannot be read: EISDIR): a Postgres it runs may be missing');
+    expect(valueOf(repoOf({ 'docker-compose.yml/x': '' }))['services']).toBe('none; docker-compose.yml not read (cannot be read: not a regular file): a Postgres it runs may be missing');
     expect(valueOf(repoOf({ 'docker-compose.yml/x': '', 'compose.yaml': 'services:\n  db:\n    image: postgres:16\n' }))['services']).toBe('postgres (compose.yaml)');
+  });
+
+  it('a compose file or a manifest that is a named pipe is said on the cards, never read: the report does not hang', () => {
+    const repo = repoOf({});
+    for (const file of ['docker-compose.yml', 'package.json']) execFileSync('mkfifo', [join(repo, file)]);
+    const v = valueOf(repo);
+    expect(v['services']).toBe('none; docker-compose.yml not read (cannot be read: not a regular file): a Postgres it runs may be missing; package.json not fully read (see Stack): a dependency may be missing');
+    expect(v['stack']).toBe('Node (no lockfile); package.json not fully read (cannot be read: not a regular file): Stack, Services and Visual paths may miss some of its dependencies');
   });
 
   it('well-formed manifests add nothing to the cards', () => {
