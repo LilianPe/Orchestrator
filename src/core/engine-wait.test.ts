@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { defaultWorkflow } from '../presets/workflow.js';
 import type { AgentOutput } from './agent-output.js';
-import type { Decision } from './decision.js';
-import { decide, liftsOnWait } from './engine.js';
+import { liftsOnWait, type Decision } from './decision.js';
+import { decide } from './engine.js';
 import { ticketMeasures } from './measures.js';
 import { reduce } from './reduce.js';
 import { newTicketState, type EventPayloads, type EventType, type FactoryEvent, type PendingJob, type TicketState } from './types.js';
@@ -49,7 +49,7 @@ describe('the wait on a « blocked by » ticket not done (ORC-363)', () => {
     const out = decide(waiting(), e, workflow);
     expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'dev' }));
     // The wait's own start relaunches nothing (ORC-440).
-    expect(out.effects.find((x) => x.kind === 'start_run')).not.toHaveProperty('relaunches');
+    expect(starts(waiting(), e)[0]).not.toHaveProperty('relaunches');
     expect(out.effects).toContainEqual({ kind: 'activity', type: 'thought', body: expect.stringContaining('REL-2') });
     expect(after(waiting(), e).waitingOn ?? undefined).toBeUndefined();
   });
@@ -88,6 +88,8 @@ describe('the wait on a « blocked by » ticket not done (ORC-363)', () => {
       waiting({ logical: 'dev', blocked: true, blockReason: 'Which separator?', blockKind: 'question', blockedJob: 'dev', ...patch });
     const reply = event('session.prompted', { linearSessionId: 's1', body: 'Semicolons', author: 'L', ack: true, kind: 'instruction' });
     const done = event('blockers.done', { blockers: ['REL-2'] });
+    const mention = event('session.mentioned', { linearSessionId: 's-m', body: 'Semicolons', author: 'L', ack: true, kind: 'instruction' });
+    const comment = { ...event('ticket.commented', { body: 'Semicolons', author: 'L', kind: 'instruction' }, 'c'), actor: 'u-member', roles: ['team_member'] } as FactoryEvent;
 
     it('a reply keeps the block and starts nothing: the step it resumes waits for the blockers, the reply in the inbox', () => {
       const out = decide(blocked(), reply, workflow);
@@ -111,35 +113,31 @@ describe('the wait on a « blocked by » ticket not done (ORC-363)', () => {
     });
 
     it('a mention that answers the block waits as a reply does (ORC-426)', () => {
-      const mention = event('session.mentioned', { linearSessionId: 's-m', body: 'Semicolons', author: 'L', ack: true, kind: 'instruction' });
       const out = decide(blocked(), mention, workflow);
       expect(out.events.map((e) => e.type)).not.toContain('ticket.unblocked');
       expect(after(blocked(), mention)).toMatchObject({ blocked: true, waitingOn: { lift: { job: 'dev', input: 'feedback' } } });
     });
 
     it.each([
-      ['a mention that answers the block', event('session.mentioned', { linearSessionId: 's-m', body: 'Semicolons', author: 'L', ack: true, kind: 'instruction' })],
-      ['a comment', { ...event('ticket.commented', { body: 'Semicolons', author: 'L', kind: 'instruction' }), actor: 'u-member', roles: ['team_member'] } as FactoryEvent],
+      ['a mention that answers the block', mention],
+      ['a comment', comment],
     ])('%s the wait keeps is traced as a relaunch, no run started with it (ORC-440)', (_what, e) => {
-      const out = decide(blocked(), e, workflow);
-      expect(out.effects.some((x) => x.kind === 'start_run')).toBe(false);
-      expect(liftsOnWait(out.trace)).toBe(true);
+      expect(starts(blocked(), e)).toEqual([]);
+      expect(liftsOnWait(decide(blocked(), e, workflow).trace)).toBe(true);
     });
 
     it('an instruction kept by the wait on a ticket not blocked is no relaunch the wait keeps (ORC-440)', () => {
-      const mention = event('session.mentioned', { linearSessionId: 's-m', body: 'Semicolons', author: 'L', ack: true, kind: 'instruction' });
       const t = waiting({ logical: 'dev' });
       expect(liftsOnWait(decide(t, mention, workflow).trace)).toBe(false);
     });
 
     it('acceptance (ORC-440): a comment that relaunches the step, at once or at the end of the wait, is a rework of the merged ticket', () => {
-      const comment = { ...event('ticket.commented', { body: 'Semicolons', author: 'L', kind: 'instruction' }, 'c'), actor: 'u-member', roles: ['team_member'] } as FactoryEvent;
       const merged = event('pr.merged', { number: 1, url: 'u', branch: 'b' }, 'm');
-      // The facts the store keeps of these decisions: the journal, the outbox rows by event, the traces by event.
+      // The facts the store keeps of these decisions: the journal, the outbox rows by event, the relaunches the wait kept.
       const measured = (decided: [FactoryEvent, Decision][]) => {
         const rows = decided.flatMap(([e, d]) => d.effects.map((effect, i) => ({ id: `REL-1:${e.id}:${i}`, projectId: 'p', ticketId: 'REL-1', eventId: e.id, seq: 1, i, effect, status: 'done' as const, attempts: 1 })));
-        const traces = Object.fromEntries(decided.map(([e, d]) => [e.id, d.trace]));
-        return ticketMeasures('p', 'REL-1', { devSession: 's1', events: [...decided.map(([e]) => e), merged], runs: [], effects: rows, acks: {}, traces }).reworks;
+        const liftedOnWait = decided.flatMap(([e, d]) => (liftsOnWait(d.trace) ? [e.id] : []));
+        return ticketMeasures('p', 'REL-1', { devSession: 's1', events: [...decided.map(([e]) => e), merged], runs: [], effects: rows, acks: {}, liftedOnWait }).reworks;
       };
       const kept = blocked();
       const answered = after(kept, comment);

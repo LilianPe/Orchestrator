@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AttemptLabels } from '../../src/core/attempt-labels.js';
+import { LIFT_ON_WAIT } from '../../src/core/decision.js';
 import { newTicketState, TRUSTED, type FactoryEvent, type TicketState } from '../../src/core/types.js';
 import type { Baseline, BaselineValue } from '../../src/core/baseline.js';
 import type { DryRun } from '../../src/core/dry-run.js';
@@ -253,7 +254,7 @@ export function storeContract(store: () => Store | Promise<Store>): void {
 
   it("gathers a ticket's measure facts: journal in order, its attempts, its outbox, the first ack of its events (ORC-235)", async () => {
     const s = await store();
-    expect(await s.measureFacts('p', 'REL-1')).toEqual({ devSession: undefined, events: [], runs: [], effects: [], acks: {}, traces: {} });
+    expect(await s.measureFacts('p', 'REL-1')).toEqual({ devSession: undefined, events: [], runs: [], effects: [], acks: {}, liftedOnWait: [] });
     await s.appendInbox(delegatedEvent('e1', 'REL-1', 10));
     await s.appendInbox(delegatedEvent('e2', 'REL-1', 5));
     await s.appendInbox(delegatedEvent('o1', 'REL-2'));
@@ -267,7 +268,7 @@ export function storeContract(store: () => Store | Promise<Store>): void {
       await s.completeEffect(row.id, row.lease, 20);
     }
     // e2 is decided after e1, then the results of e1's effects: the journal keeps that order, not the order of `at`.
-    await s.decide(request(delegatedEvent('e2', 'REL-1', 5), { effects: [], trace: ['why e2'] }));
+    await s.decide(request(delegatedEvent('e2', 'REL-1', 5), { effects: [], trace: ['why e2', `${LIFT_ON_WAIT}: dev`] }));
     for (const e of await s.pendingInbox(10)) {
       if (e.ticketId !== 'REL-1') continue;
       await s.decide({ event: e as FactoryEvent, workflow: WF, decide: (t) => ({ ticket: t, effects: [], timers: [], clearTimers: false }) });
@@ -286,8 +287,8 @@ export function storeContract(store: () => Store | Promise<Store>): void {
       ['REL-1:1:2', 'done'],
     ]);
     expect(facts.acks).toEqual({ e1: 1_700_000_000_250 });
-    // The trace of each decision that traced something, by its event (ORC-440).
-    expect(facts.traces).toEqual({ e2: ['why e2'] });
+    // The events whose decision traced a relaunch the wait kept (ORC-440).
+    expect(facts.liftedOnWait).toEqual(['e2']);
   });
 
   it('finds the ticket and PR a merge or head commit belongs to, from the journaled merges of the project (ORC-278)', async () => {

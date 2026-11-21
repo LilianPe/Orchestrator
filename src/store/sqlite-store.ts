@@ -15,7 +15,7 @@ import type { KeptFinding, ReviewDefect } from '../core/audit.js';
 import type { Baseline, BaselineMeasure, BaselineValue } from '../core/baseline.js';
 import type { DryRun } from '../core/dry-run.js';
 import type { GhostJudgment, GhostReplay, GhostTicket } from '../ghost/replay.js';
-import type { OutboxEffect } from '../core/decision.js';
+import { LIFT_ON_WAIT, type OutboxEffect } from '../core/decision.js';
 import { findingRowId, type ReviewFinding } from '../core/review.js';
 import { claims, holds } from '../core/routing.js';
 import type { QueueName, FactoryEvent, TicketState } from '../core/types.js';
@@ -761,19 +761,20 @@ export class SqliteStore implements Store {
            AND id IN (SELECT id FROM events WHERE ticket_id = ? AND json_extract(data, '$.projectId') = ?)`,
       )
       .all(ticketId, projectId) as { id: string; acked_at: number }[];
-    const traced = this.db
+    const journal = events.map((r) => JSON.parse(r.data) as FactoryEvent);
+    const lifted = this.db
       .prepare(
-        `SELECT d.event_id AS id, json_extract(d.data, '$.trace') AS trace FROM decision_trace d JOIN events e ON e.id = d.event_id
-          WHERE e.ticket_id = ? AND json_extract(e.data, '$.projectId') = ? AND json_array_length(d.data, '$.trace') > 0`,
+        `SELECT event_id AS id FROM decision_trace WHERE event_id IN (SELECT value FROM json_each(?))
+          AND EXISTS (SELECT 1 FROM json_each(data, '$.trace') WHERE value LIKE ?)`,
       )
-      .all(ticketId, projectId) as { id: string; trace: string }[];
+      .all(JSON.stringify(journal.map((e) => e.id)), `${LIFT_ON_WAIT}:%`) as { id: string }[];
     return {
       devSession: this.ticketRow(projectId, ticketId)?.linearSessionId,
-      events: events.map((r) => JSON.parse(r.data) as FactoryEvent),
+      events: journal,
       runs: await this.ticketRuns(projectId, ticketId),
       effects: await this.listEffects(projectId, ticketId),
       acks: Object.fromEntries(acked.map((r) => [r.id, Number(r.acked_at)])),
-      traces: Object.fromEntries(traced.map((r) => [r.id, JSON.parse(r.trace) as string[]])),
+      liftedOnWait: lifted.map((r) => r.id),
     };
   }
 

@@ -7,7 +7,7 @@ import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDe
 import type { AgentOutput, ConflictCase } from './agent-output.js';
 import { blockFacts } from './block-comment.js';
 import { AGENT_QUESTION, causeOf, CLARIFY_EXPIRED, isTakenOver, NO_ASSESSMENT, PAUSED, STOPPED, TAKEN_OVER, type BlockKind } from './block-cause.js';
-import type { Decision, Effect } from './decision.js';
+import { LIFT_ON_WAIT, type Decision, type Effect } from './decision.js';
 import { CLASS_PATHS, needsRefreeze, type ClassifiedDiff } from './diff-class.js';
 import { asksForChange, awaitsAgent, commandOf, forAgent, STOP_COMMAND } from './human-message.js';
 import { factoryDefault } from '../presets/factory-default.js';
@@ -902,7 +902,7 @@ function blockersDone(out: Decision, event: FactoryEvent<'blockers.done'>, ticke
   const to = job.step !== undefined ? statusReached(workflow, job.step) : undefined;
   if (movesTo(ticket, to)) out.effects.push({ kind: 'move', to });
   // The relaunch the wait kept (`liftOnWait`) is made: the rework measure counts it here, not where it was kept (ORC-440).
-  startAs(out, event, ticket, job, start, lifting ? { relaunches: true } : {});
+  startAs(out, event, ticket, job, start, !!wait.lift);
   return out;
 }
 
@@ -1565,19 +1565,10 @@ function liftOnWait(out: Decision, event: FactoryEvent, ticket: TicketState, lif
   out.trace.push(`${LIFT_ON_WAIT}: ${lift.job}`);
 }
 
-/**
- * The trace of a relaunch the wait keeps (`liftOnWait`): no run starts with its decision, the rework measure reads it there, and
- * counts it once `blockers.done` starts it (ORC-440). Read back from the decisions stored: reworded, the past ones are no longer read.
- */
-export const LIFT_ON_WAIT = 'relaunch kept for the end of the wait';
-
-/** A decision's trace holds a relaunch the wait keeps (`liftOnWait`). */
-export const liftsOnWait = (trace: readonly string[] | undefined): boolean => !!trace?.some((line) => line.startsWith(`${LIFT_ON_WAIT}:`));
-
 /** Starts `job` as `pending` was set aside: its input and its restrictions. */
-function startAs(out: Decision, event: FactoryEvent, ticket: TicketState, job: JobSpec, pending: PendingJob, relaunch: { relaunches?: true } = {}): void {
+function startAs(out: Decision, event: FactoryEvent, ticket: TicketState, job: JobSpec, pending: PendingJob, relaunches = false): void {
   const { job: _, ...run } = pendingOf(pending);
-  startRun(out, event, ticket, job, { ...run, ...relaunch });
+  startRun(out, event, ticket, job, relaunches ? { ...run, relaunches } : run);
 }
 
 /**

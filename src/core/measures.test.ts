@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import type { MeasureFacts, OutboxRow, RunRecord } from '../store/types.js';
-import { LIFT_ON_WAIT } from './engine.js';
 import { ticketMeasures } from './measures.js';
 import { TRUSTED, type EventPayloads, type EventType, type FactoryEvent } from './types.js';
 
@@ -18,7 +17,7 @@ const run = (patch: Partial<RunRecord>): RunRecord => ({
   costUsd: 0, turns: 1, lastText: '', token: 't', cwd: '/w', ...patch,
 });
 
-const facts = (patch: Partial<MeasureFacts>): MeasureFacts => ({ devSession: undefined, events: [], runs: [], effects: [], acks: {}, traces: {}, ...patch });
+const facts = (patch: Partial<MeasureFacts>): MeasureFacts => ({ devSession: undefined, events: [], runs: [], effects: [], acks: {}, liftedOnWait: [], ...patch });
 
 describe('ticketMeasures (ORC-235)', () => {
   it('is empty for a ticket with no facts', () => {
@@ -209,6 +208,10 @@ describe('ticketMeasures (ORC-235)', () => {
         // Kept, then the end of a wait starts its own start, not a relaunch.
         comment('stale', 29),
         ev('done-start', 'blockers.done', 29, { blockers: ['REL-2'] }),
+        // Kept by a wait an undelegation ended: the end of a later wait, flagged, does not start it.
+        comment('ended', 30),
+        ev('u', 'ticket.undelegated', 30, {}),
+        ev('done-later', 'blockers.done', 31, { blockers: ['REL-2'] }),
         // Kept behind a wait on a ticket not blocked: no relaunch, its trace says only that it is not started.
         mention('kept', 30),
         // Its start says it relaunches nothing, whatever it reads.
@@ -223,14 +226,9 @@ describe('ticketMeasures (ORC-235)', () => {
         started('old', { job: 'dev-feedback', input: 'feedback' }),
         started('done', { job: 'dev', input: 'feedback', relaunches: true }),
         started('done-start', { job: 'dev' }),
+        started('done-later', { job: 'dev', relaunches: true }),
       ],
-      traces: {
-        waited: ['on.session.mentioned[0]', `${LIFT_ON_WAIT}: dev`, 'dev not started, waiting'],
-        'waited-comment': [`${LIFT_ON_WAIT}: dev-feedback`],
-        kept: ['dev-feedback not started, waiting'],
-        dropped: [`${LIFT_ON_WAIT}: dev`],
-        stale: [`${LIFT_ON_WAIT}: dev`],
-      },
+      liftedOnWait: ['waited', 'waited-comment', 'dropped', 'stale', 'ended'],
     }));
     expect(m.reworks.map((r) => r.id)).toEqual(['flagged', 'waited', 'waited-comment', 'old']);
   });

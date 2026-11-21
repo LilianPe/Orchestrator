@@ -329,8 +329,8 @@ export interface MeasureFacts {
   effects: OutboxRow[];
   /** Ack time of the ticket's inbox events that were acked (`markAcked`), by event id. */
   acks: Record<string, number>;
-  /** The trace of the decision of the ticket's events (`DecisionRecord.trace`), by event id: the decisions that traced something (ORC-440). */
-  traces: Record<string, string[]>;
+  /** The ticket's events whose decision traced a relaunch the wait keeps (`LIFT_ON_WAIT`, ORC-440), in no order. */
+  liftedOnWait: string[];
 }
 
 /**

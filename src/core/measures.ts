@@ -1,8 +1,8 @@
 import type { RedCause } from '../checks/red.js';
 import type { MeasureFacts, OutboxRow, RunRecord, SessionRole, Store } from '../store/types.js';
 import { allowed, DEFAULT_MATRIX } from './authz.js';
-import { isQuestionSession, liftsOnWait } from './engine.js';
-import { reduce } from './reduce.js';
+import { isQuestionSession } from './engine.js';
+import { endsWait, reduce } from './reduce.js';
 import { addTokens, newTicketState, NO_TOKENS, spentTokens, type FactoryEvent, type LogicalState, type MessageKind, type TicketState, type TokenUsage } from './types.js';
 import { upcast, type StoredEvent } from './upcast.js';
 
@@ -309,7 +309,7 @@ function rework(e: FactoryEvent, ticket: TicketState, relaunched: ReadonlySet<st
 
 /**
  * The events whose decision relaunched the ticket's work, as the engine marks it (ORC-440): a start flagged `relaunches`, or a
- * relaunch the wait kept (`liftsOnWait`) once the end of the wait starts it, flagged. A start without the flag, decided before
+ * relaunch the wait kept (`liftedOnWait`) once the end of the wait starts it, flagged. A start without the flag, decided before
  * it: one of the ticket's work, not the answer agent's, which reads the thread (ORC-433).
  */
 function relaunches(events: readonly FactoryEvent[], facts: MeasureFacts): Set<string> {
@@ -317,12 +317,12 @@ function relaunches(events: readonly FactoryEvent[], facts: MeasureFacts): Set<s
   const relaunched = new Set(starts.filter((r) => r.effect.relaunches ?? r.effect.input !== 'thread').map((r) => r.eventId));
   const lifted = new Set(starts.filter((r) => r.effect.relaunches === true).map((r) => r.eventId));
   // A relaunch the wait kept counts at the end of the wait that starts it: one dropped there, or with the wait, never ran.
+  const keeps = new Set(facts.liftedOnWait);
   let kept: string[] = [];
   for (const e of events) {
-    if (liftsOnWait(facts.traces[e.id])) kept.push(e.id);
-    if (e.type !== 'blockers.done') continue;
-    if (lifted.has(e.id)) for (const id of kept) relaunched.add(id);
-    kept = [];
+    if (keeps.has(e.id)) kept.push(e.id);
+    if (e.type === 'blockers.done' && lifted.has(e.id)) for (const id of kept) relaunched.add(id);
+    if (e.type === 'blockers.done' || endsWait(e)) kept = [];
   }
   return relaunched;
 }

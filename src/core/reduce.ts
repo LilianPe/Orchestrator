@@ -269,7 +269,7 @@ function movesOn(state: TicketState, next: TicketState, event: FactoryEvent | In
  * Whether `event` ends the wait on blockers (ORC-363): a block (a human's stop), an undelegation, or a dev run started all the
  * same. A move or a delegation again do not: the blockers still hold, and the wait holds back the run they would start.
  */
-function endsWait(event: FactoryEvent | InternalEvent): boolean {
+export function endsWait(event: FactoryEvent | InternalEvent): boolean {
   if (event.type === 'run.started') return event.queue === 'dev';
   return event.type === 'ticket.blocked' || event.type === 'ticket.undelegated';
 }

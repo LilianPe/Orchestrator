@@ -87,6 +87,15 @@ export type OutboxEffect = Effect | { kind: 'settle' };
  */
 export type Timer = TimerFired & { slot: string; ms: number };
 
+/**
+ * The trace of a relaunch the wait keeps (`liftOnWait`, ORC-440): no run starts with its decision, the rework measure reads it
+ * there, and counts it once `blockers.done` starts it. Read back from the decisions stored: reworded, the past ones are no longer read.
+ */
+export const LIFT_ON_WAIT = 'relaunch kept for the end of the wait';
+
+/** A decision's trace holds a relaunch the wait keeps (`liftOnWait`). */
+export const liftsOnWait = (trace: readonly string[]): boolean => trace.some((line) => line.startsWith(`${LIFT_ON_WAIT}:`));
+
 /** What `decide` returns: state changes for `reduce`, effects to run, timers to arm, and why. */
 export interface Decision {
   events: DecidedEvent[];
