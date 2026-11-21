@@ -16,6 +16,8 @@ import { appOptions, gate, gh, GITHUB_ENV, LiveForge, REPO } from './github-live
  */
 const CANARY = '.github/workflows/iso-canary.yml';
 const ENVIRONMENT = 'iso-canary';
+/** A run of the canary workflow, by its path (a reusable call adds `@ref`). */
+const isCanaryRun = (path: string) => path === CANARY || path.startsWith(`${CANARY}@`);
 
 const { skip, title } = gate('isolation 12: a factory PR sees no CI secret', GITHUB_ENV);
 
@@ -68,7 +70,7 @@ describe.skipIf(skip)(title, () => {
     for (let i = 0; i < 60; i++) {
       const listed = await gh(`/repos/${REPO}/actions/runs?head_sha=${commit.body.sha}`, token);
       expect(listed.status, 'the runs are unreadable: the App needs Actions: read').toBe(200);
-      runs = (listed.body.workflow_runs as Run[]).filter((r) => r.path === CANARY || r.path.startsWith(`${CANARY}@`));
+      runs = (listed.body.workflow_runs as Run[]).filter((r) => isCanaryRun(r.path));
       if (runs.some((r) => r.event === 'pull_request') && runs.every((r) => ['waiting', 'completed'].includes(r.status))) break;
       await new Promise((r) => setTimeout(r, 5000));
     }
@@ -85,4 +87,94 @@ describe.skipIf(skip)(title, () => {
       for (const run of runs) await gh(`/repos/${REPO}/actions/runs/${run.id}/cancel`, token, { method: 'POST' });
     }
   }, 420_000);
+});
+
+/**
+ * What `current_user_can_bypass` means for the App's token on the real GitHub (ORC-427): `doctor` credits a ruleset that
+ * requires a pull request only when it reads `never` there. The test repository holds two active rulesets, each with the
+ * rule "Require a pull request before merging" alone:
+ * - `iso-guarded`, on the branch `iso-protection/guarded`, with no bypass actor;
+ * - `iso-bypassed`, on the branch `iso-protection/bypassed`, with the test App as a bypass actor, "Always allow".
+ * The App cannot create them (no Administration permission): a human does, once (docs/tests.md). The test creates either
+ * branch when absent. For each, the oracle is GitHub itself: the App's token moves the branch without a pull request, and
+ * `doctor`'s verdict must be the one that push gives: accepted where GitHub refuses it, refused where it lands.
+ */
+const PROTECTION = [
+  { branch: 'iso-protection/guarded', ruleset: 'iso-guarded', bypassable: false },
+  { branch: 'iso-protection/bypassed', ruleset: 'iso-bypassed', bypassable: true },
+];
+
+const protectionGate = gate("isolation 12: doctor reads the branch protection the App's token really has", GITHUB_ENV);
+
+describe.skipIf(protectionGate.skip)(protectionGate.title, () => {
+  let token = '';
+  let live: GitHubAppApi;
+
+  /**
+   * The canary's runs on the test branches, which the pushes here start and its environment holds waiting: cancelled
+   * before and after, so they do not pile up (a run that shows up after the test goes with the next one).
+   */
+  const cancelCanaryRuns = async () => {
+    for (const { branch } of PROTECTION) {
+      const { body } = await gh(`/repos/${REPO}/actions/runs?branch=${encodeURIComponent(branch)}&event=push`, token);
+      const runs = ((body?.workflow_runs ?? []) as { id: number; path: string; status: string }[]).filter((r) => isCanaryRun(r.path) && r.status !== 'completed');
+      for (const run of runs) await gh(`/repos/${REPO}/actions/runs/${run.id}/cancel`, token, { method: 'POST' });
+    }
+  };
+
+  beforeAll(async () => {
+    token = await new LiveForge(appOptions()).token(REPO);
+    live = new GitHubAppApi(appOptions());
+    await cancelCanaryRuns();
+  }, 120_000);
+
+  afterAll(async () => {
+    if (token) await cancelCanaryRuns();
+  }, 120_000);
+
+  it.each(PROTECTION)('$branch ($ruleset): what doctor reads and judges matches a direct push of the App', async ({ branch, ruleset, bypassable }) => {
+    const ref = await gh(`/repos/${REPO}/git/ref/heads/${branch}`, token);
+    let head: string;
+    if (ref.status === 404) {
+      const { body: repo } = await gh(`/repos/${REPO}`, token);
+      const { body: base } = await gh(`/repos/${REPO}/commits/${repo.default_branch as string}`, token);
+      const created = await gh(`/repos/${REPO}/git/refs`, token, { method: 'POST', body: { ref: `refs/heads/${branch}`, sha: base.sha } });
+      expect(created.status, `cannot create ${branch}: create it by hand from the default branch (docs/tests.md)`).toBe(201);
+      head = base.sha as string;
+    } else {
+      expect(ref.status).toBe(200);
+      head = ref.body.object.sha as string;
+    }
+
+    // What doctor reads: the ruleset is there, and GitHub says whether the App may bypass it.
+    const protection = await live.protectionOf(REPO, branch);
+    expect(protection.pullRequestRulesets, `no active ruleset requires a pull request on ${branch}: create ${ruleset} (docs/tests.md)`).not.toEqual([]);
+    expect(protection.pullRequestRulesets.map((r) => r.bypass)).toEqual(protection.pullRequestRulesets.map(() => (bypassable ? 'always' : 'never')));
+
+    // What doctor judges, the other verdicts held accepted.
+    const host: HostReport = { verdict: 'accepted', reasons: ['held accepted'] };
+    const api = { listWorkflows: async () => [], listEnvironments: async () => [], branchProtection: async () => protection, installationPermissions: async () => ({}) };
+    const lines: string[] = [];
+    const code = await runDoctor({ repoPath: REPO, api, host, out: (l) => lines.push(l), json: true });
+    const report = JSON.parse(lines.join('\n')) as { branchProtection: { branch: string; verdict: string } };
+    expect(report.branchProtection, lines.join('\n')).toMatchObject({ branch, verdict: bypassable ? 'refused' : 'accepted' });
+    expect(code).toBe(bypassable ? 1 : 0);
+
+    // The oracle: the App's token moves the branch without a pull request, to a commit of the same tree.
+    const { body: commit } = await gh(`/repos/${REPO}/git/commits/${head}`, token);
+    const next = await gh(`/repos/${REPO}/git/commits`, token, { method: 'POST', body: { message: 'iso-12: a direct push (ORC-427)', tree: commit.tree.sha, parents: [head] } });
+    expect(next.status).toBe(201);
+    const push = await gh(`/repos/${REPO}/git/refs/heads/${branch}`, token, { method: 'PATCH', body: { sha: next.body.sha, force: false } });
+    try {
+      if (bypassable) expect(push.status, JSON.stringify(push.body)).toBe(200);
+      else {
+        // Refused by the ruleset, not for a missing permission: the bypassed branch shows the token may push.
+        expect(push.status, JSON.stringify(push.body)).toBe(422);
+        expect(String(push.body?.message)).toMatch(/rule/i);
+      }
+    } finally {
+      // A push that landed, expected or not, put back where it was, so the branch does not grow with each run.
+      if (push.status === 200) await gh(`/repos/${REPO}/git/refs/heads/${branch}`, token, { method: 'PATCH', body: { sha: head, force: true } });
+    }
+  }, 120_000);
 });
