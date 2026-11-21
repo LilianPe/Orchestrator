@@ -100,7 +100,7 @@ async function release(db: Database): Promise<void> {
 }
 
 if (PG_URL) {
-  useHarnessDatabases('postgres', pgDatabase);
+  useHarnessDatabases(pgDatabase);
 
   afterEach(async () => {
     const dbs = open;

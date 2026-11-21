@@ -11,6 +11,7 @@ import { MISSING_TEST_COMMAND } from '../config/repo-config.js';
 import { checkHost, runDoctor, runDoctorCommand, type DoctorApi, type HostReport } from './doctor.js';
 import { GITHUB_APP_PERMISSIONS } from './init.js';
 import { startFactory } from '../app/bootstrap.js';
+import { MemoryStore } from '../store/memory-store.js';
 import { saveInstance, type InstanceConfig } from '../config/instance.js';
 
 interface FakeOptions {
@@ -961,7 +962,8 @@ describe("the daemon's start refusals, each one doctor's", () => {
       else saveInstance(home, r.instance ?? local);
       if (r.factoryYml !== undefined) writeFileSync(join(home, 'factory.yml'), r.factoryYml);
       const env = r.env ?? {};
-      const started = await startFactory({ home, fakeRunner: true, log: () => {}, env }).then(
+      // On a MemoryStore: the refusal said, not the missing FACTORY_DATABASE_URL (ORC-178).
+      const started = await startFactory({ home, fakeRunner: true, log: () => {}, env, store: new MemoryStore() }).then(
         async (app) => {
           await app.stop();
           return undefined;

@@ -2,14 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { defaultWorkflow } from '../../presets/workflow.js';
 import { FakeClock } from '../../core/clock.js';
 import { newTicketState, TRUSTED, type FactoryEvent, type TicketState } from '../../core/types.js';
-import { SqliteStore } from '../../store/sqlite-store.js';
+import { MemoryStore } from '../../store/memory-store.js';
 import { FakeForge } from './fake.js';
 import { GithubReconciler } from './github-reconcile.js';
 
 describe('GithubReconciler', () => {
   it('emits opened, checks transitions and merged', async () => {
     const workflow = defaultWorkflow();
-    const store = new SqliteStore(':memory:');
+    const store = new MemoryStore();
     const forge = new FakeForge();
     const events: FactoryEvent[] = [];
     const clock = new FakeClock(100);
@@ -39,7 +39,7 @@ describe('GithubReconciler', () => {
   });
   function setup(submit?: (e: FactoryEvent) => void, log: (m: string) => void = () => {}) {
     const workflow = defaultWorkflow();
-    const store = new SqliteStore(':memory:');
+    const store = new MemoryStore();
     const forge = new FakeForge();
     const events: FactoryEvent[] = [];
     const clock = new FakeClock(100);

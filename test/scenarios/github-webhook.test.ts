@@ -1,15 +1,10 @@
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { GithubReconciler } from '../../src/adapters/forge/github-reconcile.js';
 import { measureTicket } from '../../src/core/measures.js';
-import { SqliteStore } from '../../src/store/sqlite-store.js';
 import { createHarness } from '../helpers/harness.js';
 import {
   BRANCH,
   checkRunBody,
-  crashAfterGithubAck,
   defaultPushBody,
   githubDelivery,
   githubIngest,
@@ -38,27 +33,11 @@ async function post(h: Harness, name: string, body: unknown, secret?: string) {
 
 const events = async (h: Harness, type: string) => (await h.store.recentEvents(100, 'REL-1')).filter((e) => e.type === type);
 
-/** ORC-134: GitHub webhooks are written to the inbox before the answer, and the engine decides what follows. */
+/**
+ * ORC-134: GitHub webhooks are written to the inbox before the answer, and the engine decides what follows. Criterion 1,
+ * a daemon killed with SIGKILL after its answer, is in test/integration/github-webhook-pg.test.ts.
+ */
 describe('GitHub webhooks', () => {
-  it('criterion 1: a webhook answered 200 by a daemon killed with SIGKILL is processed once at the next start', async () => {
-    const file = join(mkdtempSync(join(tmpdir(), 'factory-gh-inbox-')), 'factory.db');
-    const h = createHarness({ store: new SqliteStore(file) });
-    await delegated(h);
-    expect(await h.ticket()).toMatchObject({ logical: 'human_review', branch: BRANCH });
-
-    const { response, exited } = crashAfterGithubAck(file, 'pull_request', pullRequestBody('closed', { merged: true }));
-    expect(response).toEqual({ status: 200 });
-    expect(exited.status === 0 && exited.signal === null).toBe(false);
-    expect((await h.store.pendingInbox(10)).map((e) => e.id)).toEqual(['pr:REL-1:3:opened', 'pr:REL-1:3:merged']);
-
-    await h.restart();
-    expect(await h.ticket()).toMatchObject({ logical: 'done', prState: 'MERGED', prNumber: 3 });
-    expect(await h.store.pendingInbox(10)).toEqual([]);
-    // GitHub redelivering it changes nothing.
-    expect(await post(h, 'pull_request', pullRequestBody('closed', { merged: true }))).toEqual({ status: 200 });
-    expect(await events(h, 'pr.merged')).toHaveLength(1);
-  });
-
   it('criterion 2: a push on the agent branch by another identity than the App is a push.human in the inbox', async () => {
     const h = createHarness();
     await delegated(h);

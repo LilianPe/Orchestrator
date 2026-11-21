@@ -1,12 +1,8 @@
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { TRUSTED } from '../../src/core/types.js';
-import { SqliteStore } from '../../src/store/sqlite-store.js';
 import type { Store } from '../../src/store/types.js';
-import { createHarness, harnessStoreKind } from '../helpers/harness.js';
-import { crashAfterAck, linearIngest, signedDelegation } from '../helpers/linear-webhook.js';
+import { createHarness } from '../helpers/harness.js';
+import { linearIngest, signedDelegation } from '../helpers/linear-webhook.js';
 import { testPreset } from '../helpers/test-preset.js';
 
 const delegations = async (store: Store) => (await store.recentEvents(50, 'REL-1')).filter((e) => e.type === 'ticket.delegated');
@@ -14,37 +10,9 @@ const delegations = async (store: Store) => (await store.recentEvents(50, 'REL-1
 /**
  * ORC-147: the webhook answers once the event is in the inbox, and the orchestrator processes
  * events from the inbox. A daemon that dies between the two loses nothing: the next start
- * processes the event, once.
+ * processes the event, once: killed with SIGKILL in test/integration/inbox-pg.test.ts.
  */
 describe('inbox: written before the answer, processed from the inbox', () => {
-  // On a SQLite file; test/integration/inbox-pg.test.ts kills the daemon on Postgres.
-  it.skipIf(harnessStoreKind() === 'postgres')('processes once, after a restart, a delegation acked by a daemon killed with SIGKILL before processing it', async () => {
-    const file = join(mkdtempSync(join(tmpdir(), 'factory-inbox-')), 'factory.db');
-    const { response, exited } = crashAfterAck(file);
-    expect(response).toEqual({ status: 200 });
-    expect(exited.status === 0 && exited.signal === null).toBe(false);
-
-    const h = createHarness({ store: new SqliteStore(file) });
-    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
-    expect((await h.store.pendingInbox(10)).map((e) => e.type)).toEqual(['ticket.delegated']);
-    expect(await h.store.getTicket('p', 'REL-1')).toBeUndefined();
-
-    await h.restart();
-    expect(await h.ticket()).toMatchObject({ delegated: true });
-    expect(await delegations(h.store)).toHaveLength(1);
-    expect(await h.store.pendingInbox(10)).toEqual([]);
-    const runs = h.runner.requests.length;
-    expect(runs).toBeGreaterThan(0);
-
-    // Exactly once: neither another start nor Linear sending the webhook again processes it twice.
-    await h.restart();
-    const { raw, headers } = signedDelegation();
-    expect(await linearIngest((e) => h.orch.accept(e))(raw, headers)).toEqual({ status: 200 });
-    await h.orch.drained();
-    expect(await delegations(h.store)).toHaveLength(1);
-    expect(h.runner.requests).toHaveLength(runs);
-  });
-
   it('keeps in the inbox an event whose processing threw, and processes it once on the next start', async () => {
     const h = createHarness();
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });

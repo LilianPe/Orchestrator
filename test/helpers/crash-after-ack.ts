@@ -3,7 +3,7 @@
  * `linear-webhook.ts` to the inbox through the Linear ingestion, records the HTTP status it would
  * answer in `<statusFile>`, then kills itself with SIGKILL before any processing.
  *
- *   node --import tsx test/helpers/crash-after-ack.ts <sqlite file | postgres://…> <statusFile>
+ *   node --import tsx test/helpers/crash-after-ack.ts <postgres://…> <statusFile>
  */
 import { writeFileSync } from 'node:fs';
 import { linearIngest, signedDelegation } from './linear-webhook.js';

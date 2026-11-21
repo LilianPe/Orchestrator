@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { TRUSTED, type FactoryEvent } from '../core/types.js';
-import { SqliteStore } from '../store/sqlite-store.js';
+import { MemoryStore } from '../store/memory-store.js';
 import { REPAIR_USAGE, runRepair } from './repair.js';
 
 const ev = (id: string, ticketId?: string): FactoryEvent =>
   ({ ...TRUSTED, id, type: 'label.changed', at: 1, projectId: ticketId ? 'p' : '*', ...(ticketId ? { ticketId } : {}), payload: { label: 'x', change: 'added' } }) as FactoryEvent;
 
 async function withDeadLetters(...events: FactoryEvent[]) {
-  const store = new SqliteStore(':memory:');
+  const store = new MemoryStore();
   for (const e of events) {
     await store.appendInbox(e);
     await store.deadLetter(e, `boom ${e.id}`, 10);

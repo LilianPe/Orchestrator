@@ -10,7 +10,7 @@ export const CRASH_WORKFLOW: WorkflowOverrides = {
 };
 
 /**
- * Runs `crash-after-decision.ts` in a child process on `target` (a SQLite file or a Postgres URL),
+ * Runs `crash-after-decision.ts` in a child process on `target` (a Postgres URL),
  * killed before it claims outbox row number `killAt` (0: inside the decision transaction), or with
  * `acted:<n>`, after row `n` acted and before it is settled, under a lease of `leaseMs`. Returns how
  * it ended and the ids of the rows it completed before dying.

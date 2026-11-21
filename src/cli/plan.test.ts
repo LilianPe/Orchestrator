@@ -7,12 +7,12 @@ import type { Workflow } from '../core/workflow.js';
 import type { Tracker } from '../adapters/tracker/types.js';
 import { workflowWith } from '../../test/helpers/workflow-with.js';
 import { newTicketState } from '../core/types.js';
-import { SqliteStore } from '../store/sqlite-store.js';
+import { MemoryStore } from '../store/memory-store.js';
 import { formatPlan, planRows } from './plan.js';
 
 /** The preview of one project, `p` on `/r`, of team REL. */
 const planOf = (tracker: Pick<Tracker, 'listDelegated'>, workflow: Workflow, workspaces = new FakeWorkspaces()) =>
-  planRows({ tracker, store: new SqliteStore(':memory:'), projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], workspaces });
+  planRows({ tracker, store: new MemoryStore(), projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], workspaces });
 
 describe('plan', () => {
   it('lists a ticket of a team with several repos once, under its repo, or as not taken when it names none (ORC-291)', async () => {
@@ -22,7 +22,7 @@ describe('plan', () => {
     tracker.addIssue({ identifier: 'REL-2', delegateId: 'a' });
     const projects = ['web', 'api'].map((id) => ({ id, repoPath: `/${id}`, teamKey: 'REL', workflow }));
     tracker.addIssue({ identifier: 'REL-3', delegateId: 'a', labels: ['repo:api'] });
-    const store = new SqliteStore(':memory:');
+    const store = new MemoryStore();
     // Held by the first repo: it stays there, whatever its label says.
     await store.putTicket({ ...newTicketState('web', 'REL-3', 'T', 'dev', 1), delegated: true });
     const rows = await planRows({ tracker, store, projects, workspaces: new FakeWorkspaces() });
@@ -40,7 +40,7 @@ describe('plan', () => {
     tracker.addIssue({ identifier: 'REL-2', title: 'Urgent', delegateId: 'a', priority: 1 });
     tracker.addIssue({ identifier: 'REL-3', title: 'Flou', delegateId: 'a', priority: 2, description: 'court' });
     tracker.addIssue({ identifier: 'REL-4', title: 'En cours', delegateId: 'a', priority: 3 });
-    const store = new SqliteStore(':memory:');
+    const store = new MemoryStore();
     await store.putTicket(newTicketState('p', 'REL-4', 'En cours', 'dev', 1));
     const rows = await planRows({ tracker, store, projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], workspaces: new FakeWorkspaces() });
     expect(rows.map((r) => [r.identifier, r.status])).toEqual([
@@ -77,7 +77,7 @@ describe('plan', () => {
       return { pattern: 'agent/{id}', types: [], fallback: 'feat' };
     };
     const projects = [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }, { id: 'bad', repoPath: '/b', teamKey: 'BAD', workflow }];
-    const rows = await planRows({ tracker, store: new SqliteStore(':memory:'), projects, workspaces, naming });
+    const rows = await planRows({ tracker, store: new MemoryStore(), projects, workspaces, naming });
     expect(rows.map((r) => [r.identifier, r.status, r.reasons])).toEqual([
       ['REL-1', 'clarify', ['A branch of REL-1 already exists on origin.']],
       ['REL-2', 'taken', []],

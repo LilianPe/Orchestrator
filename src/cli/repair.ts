@@ -1,7 +1,6 @@
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
 import { repoRoot } from '../app/root.js';
-import { homePaths } from '../config/instance.js';
 import { REPAIR_ACTIONS, REPAIR_LABELS, type DeadLetter, type RepairAction } from '../core/dead-letter.js';
 import { SETTLES_RUN } from '../core/decision-plan.js';
 import type { EventType } from '../core/types.js';
@@ -86,14 +85,14 @@ export async function runRepair(o: RepairOptions): Promise<number> {
 }
 
 /** The command line: `factory run repair <target> [action] [event]`, on the instance's store. */
-export async function runRepairCommand(home: string, args: readonly string[]): Promise<number> {
+export async function runRepairCommand(args: readonly string[]): Promise<number> {
   const [target, action, eventId] = args;
   if (!target) {
     console.log(REPAIR_USAGE);
     return 1;
   }
   // The daemon migrates the schema; a repair only reads and writes rows.
-  const { store } = await openStore({ env: process.env, sqlitePath: homePaths(home).db, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
+  const store = await openStore({ env: process.env, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
   try {
     let by = 'cli';
     try {

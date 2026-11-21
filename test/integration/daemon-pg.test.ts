@@ -37,7 +37,7 @@ describe.skipIf(!PG_URL)('daemon on PgStore', () => {
 
   const harness = (opts: Parameters<typeof createHarness>[0] = {}) => createHarness({ ...opts, store: new PgStore({ pool }) });
 
-  it('writes the measures of the first run, the same as on SQLite (ORC-235)', async () => {
+  it('writes the measures of the first run, the same as on a MemoryStore (ORC-235)', async () => {
     expectFirstRunMeasures(await firstRun(harness()));
     const attempts = await pool.query<{ step: string; input_tokens: string | null }>(`select step, input_tokens from attempts order by started_at, id`);
     expect(attempts.rows.filter((r) => r.input_tokens !== null).map((r) => r.step).sort()).toEqual(['ask', 'dev', 'review']);

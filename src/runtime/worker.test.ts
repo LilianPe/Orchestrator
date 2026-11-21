@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { newTicketState, SCHEMA_VERSION, type FactoryEvent } from '../core/types.js';
 import type { StoredEvent } from '../core/upcast.js';
-import { SqliteStore } from '../store/sqlite-store.js';
+import { MemoryStore } from '../store/memory-store.js';
 import type { DecisionRequest, OutboxRow } from '../store/types.js';
 import { effectBackoff } from './outbox.js';
 import { Worker, type WorkerDeps } from './worker.js';
@@ -27,9 +27,9 @@ const twoComments = (e: FactoryEvent): DecisionRequest => ({
   }),
 });
 
-/** A worker over an in-memory SQLite store: each event decides two comments. */
+/** A worker over a MemoryStore: each event decides two comments. */
 function setup(patch: Partial<WorkerDeps> = {}) {
-  const store = new SqliteStore(':memory:');
+  const store = new MemoryStore();
   const logs: string[] = [];
   const executed: string[] = [];
   const worker = new Worker({
@@ -51,7 +51,7 @@ async function settled(worker: Worker): Promise<void> {
 }
 
 /** The rows decided, oldest first, without the results of their effects. */
-const decidedRows = async (store: SqliteStore) => (await store.recentEvents(50, 'REL-1')).map((e) => e.id).reverse().filter((id) => /^e\d$/.test(id));
+const decidedRows = async (store: MemoryStore) => (await store.recentEvents(50, 'REL-1')).map((e) => e.id).reverse().filter((id) => /^e\d$/.test(id));
 
 describe('Worker', () => {
   it('still runs the effects of a committed decision, and the next rows, when its follow-up throws', async () => {
