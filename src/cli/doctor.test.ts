@@ -915,14 +915,52 @@ jobs:
     });
 
     it('lists the warning in the JSON report, and only when there is one', async () => {
-      const report = async (relayWarnings?: string[]) => {
+      const report = async (startWarnings?: string[]) => {
         const json: string[] = [];
-        await runDoctor({ repoPath: '/repo', api: new FakeApi([]), host: goodHost, json: true, out: (line) => json.push(line), ...(relayWarnings ? { relayWarnings } : {}) });
+        await runDoctor({ repoPath: '/repo', api: new FakeApi([]), host: goodHost, json: true, out: (line) => json.push(line), ...(startWarnings ? { startWarnings } : {}) });
         return JSON.parse(json.join('\n')) as unknown;
       };
-      expect(await report(['Warning: relay: x'])).toMatchObject({ accepted: true, relayWarnings: ['Warning: relay: x'] });
-      expect(await report([])).not.toHaveProperty('relayWarnings');
+      expect(await report(['Warning: relay: x'])).toMatchObject({ accepted: true, startWarnings: ['Warning: relay: x'] });
+      expect(await report([])).not.toHaveProperty('startWarnings');
       expect((await cli(homeWith(''), true)).lines.filter((l) => l.startsWith('Warning: relay'))).toEqual([]);
+    });
+  });
+});
+
+// ORC-463: a SQLite file left from before Postgres (ORC-178), named by doctor as the start names it, never opened.
+describe('an old SQLite database in FACTORY_HOME (ORC-463)', () => {
+  const homeWithOldDatabases = () => {
+    const home = tempHome();
+    saveInstance(home, { port: 4160, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    // Not a SQLite file: a doctor that opened one would fail on it.
+    writeFileSync(join(home, 'relais.db'), 'not a database'); // transition, à retirer
+    writeFileSync(join(home, 'factory.db'), 'not a database either');
+    return home;
+  };
+
+  it("warns with the start's message, before it needs the GitHub App", async () => {
+    const home = homeWithOldDatabases();
+    const logs: string[] = [];
+    // On a MemoryStore: the start's warnings, not the missing FACTORY_DATABASE_URL.
+    await (await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {}, store: new MemoryStore() })).stop();
+    const started = logs.filter((m) => m.includes('left from the SQLite store'));
+    expect(started).toHaveLength(2);
+    const lines: string[] = [];
+    expect(await runDoctorCommand({ repoPath: '/repo', home, env: {}, out: (line) => lines.push(line) })).toBe(1);
+    const warned = lines.filter((l) => l.includes('left from the SQLite store'));
+    expect(warned).toEqual(started);
+    expect(warned[0]).toMatch(/archive it off the server, then delete it \(docs\/operations\.md\)$/);
+    expect(lines.indexOf(warned[1]!)).toBeLessThan(lines.findIndex((l) => l.includes('GitHub App not configured')));
+  });
+
+  it('lists them in the JSON report under startWarnings', async () => {
+    const home = homeWithOldDatabases();
+    const lines: string[] = [];
+    expect(await runDoctorCommand({ repoPath: '/repo', home, env: {}, json: true, out: (line) => lines.push(line) })).toBe(1);
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!)).toMatchObject({
+      error: expect.stringContaining('GitHub App not configured'),
+      startWarnings: [expect.stringMatching(/^relais\.db: left from the SQLite store/), expect.stringMatching(/^factory\.db: left from the SQLite store/)],
     });
   });
 });
@@ -1079,7 +1117,7 @@ describe('doctor --json on a refusal of the instance configuration (ORC-449)', (
     saveInstance(home, { port: 4160, host: '127.0.0.1', relay: { kind: 'smee', url: 'https://smee.io/abc' }, projects: [], limits: {} });
     const lines: string[] = [];
     expect(await runDoctorCommand({ repoPath: '/repo', home, env: { GH_APP_ID: '456' }, json: true, out: (line) => lines.push(line) })).toBe(1);
-    expect(JSON.parse(lines.join('\n'))).toMatchObject({ error: expect.stringMatching(/^Incomplete GitHub App configuration/), relayWarnings: [expect.stringContaining('smee')] });
+    expect(JSON.parse(lines.join('\n'))).toMatchObject({ error: expect.stringMatching(/^Incomplete GitHub App configuration/), startWarnings: [expect.stringContaining('smee')] });
   });
 
   it('stays JSON without the GitHub App', async () => {
