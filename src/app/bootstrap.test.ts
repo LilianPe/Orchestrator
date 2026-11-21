@@ -349,7 +349,12 @@ describe('bootstrap', () => {
       saveInstance(home, { port: 4171, host: '127.0.0.1', relay: smee, projects: [], limits: {}, ...(dev === undefined ? {} : { dev }) });
       const logs: string[] = [];
       const app = await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
-      await app.stop();
+      try {
+        // The relay runs: its channel refuses it, and it says so.
+        await vi.waitFor(() => expect(logs).toContain('relay: connection error, retrying'));
+      } finally {
+        await app.stop();
+      }
       return logs;
     };
 

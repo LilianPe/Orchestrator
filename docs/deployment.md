@@ -70,7 +70,7 @@ usine.exemple.fr {
 
 Both examples take `127.0.0.1:4100`: the port of `FACTORY_LOOPBACK_PORT` if it is set. To check it: `curl -sS https://usine.exemple.fr/health` answers `{"ok":…,"store":…,"takingTickets":…}` (from `factoryd`, not the proxy: open, the state alone, ORC-405) and `curl -sS https://usine.exemple.fr/api/state` 401 `{"error":"sign in with GitHub first"}`, and the deliveries of a Linear webhook (the application's page) and of a GitHub webhook (the App's *Advanced* tab) show a 200. A 401 there is the signature's (secret, clock), not the proxy's.
 
-**Smee and ngrok are for a workstation only, never the server** (ORC-221): `relay: { kind: none }` in production. The daemon starts a smee relay only with `dev: true`, which `factory init --dev` writes (ORC-444). A smee channel is public, and it relays a re-encoded body ([`linear.md`](linear.md#3-webhooks-production-and-development)).
+**Smee and ngrok are for a workstation only, never the server** (ORC-221): `relay: { kind: none }` in production. The daemon refuses to start a smee relay with `dev: false`, and warns of one without `dev: true`, the development mode `factory init --dev` writes (ORC-444). A smee channel is public, and it relays a re-encoded body ([`linear.md`](linear.md#3-webhooks-production-and-development)).
 
 ## Why the same paths on both sides
 

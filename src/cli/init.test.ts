@@ -341,6 +341,8 @@ describe('factory init: Smee only for development (ORC-411)', () => {
     expect(loadInstance(old.home)).toMatchObject({ dev: true, relay: { kind: 'smee', url: 'https://smee.io/old' } });
     expect(loadInstance((await initOnce()).home).dev).toBeUndefined();
     expect(loadInstance((await initOnce({ dev: true, config: { publicUrl: 'https://factory.example.com' } })).home).dev).toBeUndefined();
+    const server = await initOnce({ dev: true, config: { publicUrl: 'https://factory.example.com', relay: { kind: 'smee', url: 'https://smee.io/old' } } });
+    expect(loadInstance(server.home).dev).toBeUndefined();
   });
 
   it('with a public URL, gives its webhook URLs and creates no channel, even with --dev', async () => {
