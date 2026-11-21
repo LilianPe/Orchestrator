@@ -3,10 +3,11 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 // The first-run guide (ORC-429) must not drift from the CLI: every `factory` command it quotes, with its flags, is one
-// src/cli/factory.ts dispatches and lists in its usage.
+// src/cli/factory.ts dispatches and src/cli/usage.ts lists in its usage.
 const root = join(import.meta.dirname, '..');
 const guide = readFileSync(join(root, 'docs/first-run.md'), 'utf8');
-const cli = readFileSync(join(root, 'src/cli/factory.ts'), 'utf8');
+// The dispatch and its parseArgs options, then the usage (ORC-200).
+const cli = ['src/cli/factory.ts', 'src/cli/usage.ts'].map((f) => readFileSync(join(root, f), 'utf8')).join('\n');
 
 /** The commands of the CLI's usage, each with the flags its line names, and the flags `parseArgs` accepts. */
 function cliDefinitions(source: string) {

@@ -388,7 +388,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     // Nothing pauses or resumes the queue any more (ORC-200): a pause left from before would hold every launch for good.
     if (await daemon.isPaused()) {
       log('The queue was paused, and nothing pauses it any more (ORC-200): it is resumed.');
-      await accept({ ...TRUSTED, actor: 'factory:start', id: `start:resume:${clock.now()}`, type: 'control.resume', at: clock.now(), projectId: '*', payload: {} });
+      const at = clock.now();
+      await accept({ ...TRUSTED, actor: 'factory:start', id: `start:resume:${at}`, type: 'control.resume', at, projectId: '*', payload: {} });
     }
 
     const webhookSecret = () => linearSettings(o.home, yml)?.webhookSecret ?? '';

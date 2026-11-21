@@ -16,23 +16,7 @@ import { runReplayCommand } from './replay.js';
 import { runRepairCommand } from './repair.js';
 import { runValidateCommand } from './validate.js';
 import { PRODUCT_NAME } from '../product.js';
-
-const USAGE = `Usage: factory <command>
-  init [--dev]       set up ${PRODUCT_NAME} for the current repository (--dev: a smee.io relay for Linear's webhooks without a public URL, on a workstation)
-  validate [repo]    check .factory/config.yml against the baseline (it can only add)
-  doctor [repo] [--json] refuse a host without cgroup v2, a repository without a protected default branch or whose CI can expose secrets to the factory's branches
-  up                 start ${PRODUCT_NAME} (interface on http://localhost:4100)
-  status             state of the running instance
-  stop <ID>          stop a ticket's run
-  dry-run <project>  run the dry run of a project's default branch (setup, build, tests in the sandbox) and print what breaks
-  replay <journal>... replay exported journals (bit-for-bit regression, --what-if <preset>, --export <ID>)
-  run repair <ID> [replay|skip|force] [<event>]  repair an event set aside (dead letter)
-  flaky <project> [add <test> --reason <why> [--frozen] | remove <test>]  the known flaky tests verify marks indicative
-  baseline <project> --since <YYYY-MM-DD> [--replace]  freeze the 90 days before the start as the overview's baseline, from Linear and GitHub
-  ghost start|collect|judge|report|list  replay closed tickets without effects, and judge the PRs blind against the human ones`;
-
-/** The commands of the usage, the first word of each of its lines. */
-const COMMANDS = new Set(USAGE.split('\n').slice(1).map((line) => line.trim().split(' ')[0]!));
+import { COMMANDS, USAGE } from './usage.js';
 
 async function main(): Promise<number> {
   // Its own options, and no instance needed to replay a file (the CI has none).
@@ -90,8 +74,6 @@ async function main(): Promise<number> {
       return runDryRunCommand(control, arg);
     case 'run':
       if (arg === 'repair') return runRepairCommand(positionals.slice(2));
-      break;
-    default:
       break;
   }
   console.log(USAGE);
