@@ -32,12 +32,12 @@ const COMPOSE_FILES = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml
 /** The images of a Postgres, by their name without registry, owner, tag or digest: the official one and its common variants. */
 const POSTGRES_IMAGES = new Set(['postgres', 'postgresql', 'postgis', 'pgvector', 'timescaledb', 'timescaledb-ha']);
 
-/** The image an `image:` names: as written, or the default of a variable (`${VAR:-postgres:16}`); none for a variable without one. */
-const imageOf = (written: string): string | undefined => (written.startsWith('${') ? /^\$\{\w+:?-([^}]+)\}$/.exec(written)?.[1] : written);
+/** The image an `image:` names, each variable replaced by its default (`${VAR:-postgres:16}`), or by nothing without one. */
+const imageOf = (written: string): string => written.replace(/\$\{\w+(?::?-([^}]*))?\}/g, (_, fallback: string | undefined) => fallback ?? '');
 
 /** Whether a compose file runs a Postgres: an `image:` whose name, its registry and owner, tag and digest put aside, is one. */
 const runsPostgres = (compose: string): boolean =>
-  [...compose.matchAll(/^\s*image:\s*["']?([^\s"'#]+)/gm)].some((m) => POSTGRES_IMAGES.has((imageOf(m[1]!) ?? '').split('/').pop()!.split(/[:@]/)[0]!));
+  [...compose.matchAll(/^\s*image:\s*["']?([^\s"'#]+)/gm)].some((m) => POSTGRES_IMAGES.has(imageOf(m[1]!).split('/').pop()!.split(/[:@]/)[0]!));
 
 /** What the walk never enters: dependencies, builds and dot directories are not the repository's code. */
 const SKIPPED = new Set(['node_modules', 'dist', 'build', 'coverage', '__pycache__', 'venv']);
@@ -47,17 +47,22 @@ const TEST_FILE = /(?:\.(?:test|spec|cy)\.[cm]?[jt]sx?|^test_.*\.py|_test\.py|^t
 /** A walk stops past this many entries: init stays quick on a large repository, and says so. */
 const WALK_LIMIT = 20_000;
 
-/** The names of every dependency of the repository's package.json and pyproject.toml, and the manifests not read in full, with why. */
-function dependencies(repo: string): { deps: Set<string>; problems: string[] } {
-  const manifests = [['package.json', packageJsonDependencies], ['pyproject.toml', pyprojectDependencies]] as const;
-  const read = manifests.filter(([file]) => existsSync(join(repo, file))).map(([file, names]) => ({ file, ...names(readFileSync(join(repo, file), 'utf8')) }));
+/** The names of every dependency of the repository's package.json and pyproject.toml, and the manifests not read in full, with why (ORC-454). */
+interface Manifests {
+  deps: Set<string>;
+  problems: { file: string; why: string }[];
+}
+
+function dependencies(repo: string): Manifests {
+  const readers = [['package.json', packageJsonDependencies], ['pyproject.toml', pyprojectDependencies]] as const;
+  const read = readers.filter(([file]) => existsSync(join(repo, file))).map(([file, names]) => ({ file, ...names(readFileSync(join(repo, file), 'utf8')) }));
   return {
     deps: new Set(read.flatMap((r) => r.names)),
-    problems: read.filter((r) => r.problem !== undefined).map((r) => `${r.file} not fully read (${r.problem})`),
+    problems: read.flatMap(({ file, problem }) => (problem === undefined ? [] : [{ file, why: problem }])),
   };
 }
 
-function stack(repo: string, { deps, problems }: { deps: Set<string>; problems: string[] }): string {
+function stack(repo: string, { deps, problems }: Manifests): string {
   const parts: string[] = [];
   if (existsSync(join(repo, 'package.json'))) {
     const pm = existsSync(join(repo, 'package-lock.json')) ? 'npm' : existsSync(join(repo, 'pnpm-lock.yaml')) ? 'pnpm' : existsSync(join(repo, 'yarn.lock')) ? 'yarn' : 'no lockfile';
@@ -67,7 +72,7 @@ function stack(repo: string, { deps, problems }: { deps: Set<string>; problems: 
   if (!parts.length) return 'none detected (no package.json, no pyproject.toml)';
   const front = FRONT_ENDS.find(([pkg]) => deps.has(pkg));
   const found = [...parts, ...(front ? [front[1]] : [])].join(', ');
-  return problems.length ? `${found}; ${problems.join('; ')}: Stack, Services and Visual paths may miss some of ${problems.length > 1 ? 'their' : 'its'} dependencies` : found;
+  return problems.length ? `${found}; ${problems.map((p) => `${p.file} not fully read (${p.why})`).join('; ')}: Stack, Services and Visual paths may miss some of ${problems.length > 1 ? 'their' : 'its'} dependencies` : found;
 }
 
 function commands({ setup, commands, preview }: DetectedChecks): string {
@@ -75,17 +80,20 @@ function commands({ setup, commands, preview }: DetectedChecks): string {
   return lines.length ? lines.join('\n') : 'none found: verify would have no check to run';
 }
 
-function services(repo: string, deps: Set<string>): string {
+/** What a card read from the dependencies adds when a manifest was not read in full (ORC-454). */
+const unreadNote = ({ problems }: Manifests) => (problems.length ? `; ${problems.map((p) => p.file).join(' and ')} not fully read (see Stack): a dependency may be missing` : '');
+
+function services(repo: string, manifests: Manifests): string {
   const compose = COMPOSE_FILES.find((f) => existsSync(join(repo, f)) && runsPostgres(readFileSync(join(repo, f), 'utf8')));
   if (compose) return `postgres (${compose})`;
-  const pkg = POSTGRES_PACKAGES.find((p) => deps.has(p));
-  return pkg ? `postgres (dependency ${pkg})` : 'none';
+  const pkg = POSTGRES_PACKAGES.find((p) => manifests.deps.has(p));
+  return (pkg ? `postgres (dependency ${pkg})` : 'none') + unreadNote(manifests);
 }
 
-function visualPaths(repo: string, deps: Set<string>): string {
-  if (!FRONT_ENDS.some(([pkg]) => deps.has(pkg))) return 'none: no front-end framework detected';
+function visualPaths(repo: string, manifests: Manifests): string {
+  if (!FRONT_ENDS.some(([pkg]) => manifests.deps.has(pkg))) return 'none: no front-end framework detected' + unreadNote(manifests);
   const dirs = VISUAL_DIRS.filter((d) => existsSync(join(repo, d)));
-  return dirs.length ? dirs.map((d) => `${d}/**`).join(', ') : 'none: a front end, but none of its usual directories';
+  return (dirs.length ? dirs.map((d) => `${d}/**`).join(', ') : 'none: a front end, but none of its usual directories') + unreadNote(manifests);
 }
 
 /** The entries of `dir` the walk enters: none when it cannot be read; neither dot entries nor `SKIPPED`. */
@@ -146,14 +154,13 @@ export type MaturityReport = (lastDryRun?: DryRun) => MaturityPoint[];
  * its files only, never by running its code (`main` is the last dry run's, `lastDryRun`, when one is stored).
  */
 export function maturityReport(repo: string, detected: DetectedChecks, lastDryRun?: DryRun): MaturityPoint[] {
-  const read = dependencies(repo);
-  const { deps } = read;
+  const manifests = dependencies(repo);
   return [
-    { key: 'stack', title: 'Stack', value: stack(repo, read) },
+    { key: 'stack', title: 'Stack', value: stack(repo, manifests) },
     { key: 'commands', title: 'Commands', value: commands(detected) },
     { key: MAIN_CARD, title: 'main green or red', value: mainCardValue(lastDryRun) },
-    { key: 'services', title: 'Services', value: services(repo, deps) },
-    { key: 'visual_paths', title: 'Visual paths', value: visualPaths(repo, deps) },
+    { key: 'services', title: 'Services', value: services(repo, manifests) },
+    { key: 'visual_paths', title: 'Visual paths', value: visualPaths(repo, manifests) },
     { key: 'untested', title: 'Areas without tests', value: untested(repo) },
   ];
 }
