@@ -217,10 +217,13 @@ export function validatorWarnings(projects: readonly Pick<ProjectConfig, 'id' | 
  */
 export function relayWarnings(instance: Pick<InstanceConfig, 'relay' | 'dev' | 'publicUrl'>): string[] {
   if (instance.relay.kind !== 'smee') return [];
-  const useless = instance.publicUrl && `publicUrl: ${instance.publicUrl} brings Linear's webhooks already, set relay: { kind: none }`;
-  if (instance.dev && useless) throw new Error(`relay: { kind: smee } in config.yaml beside ${useless}, or remove publicUrl on a workstation.`);
-  if (instance.dev) return [];
-  const fix = useless || 'on a server, set publicUrl to its https:// address and relay: { kind: none }; on a workstation, run factory init --dev (it writes dev: true)';
+  const fix = instance.publicUrl
+    ? `publicUrl: ${instance.publicUrl} brings Linear's webhooks already, set relay: { kind: none }`
+    : 'on a server, set publicUrl to its https:// address and relay: { kind: none }; on a workstation, run factory init --dev (it writes dev: true)';
+  if (instance.dev) {
+    if (instance.publicUrl) throw new Error(`relay: { kind: smee } in config.yaml beside ${fix}, or remove publicUrl on a workstation.`);
+    return [];
+  }
   if (instance.dev === false) throw new Error(`relay: { kind: smee } in config.yaml outside the development mode (dev: false): a smee.io channel is public, for a workstation only: ${fix}.`);
   return [`Warning: relay: { kind: smee } in config.yaml without dev: true, the development mode factory init --dev writes: the daemon starts it as before that marker; ${fix}.`];
 }
