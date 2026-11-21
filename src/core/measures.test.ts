@@ -66,6 +66,7 @@ describe('ticketMeasures (ORC-235)', () => {
       events: [
         ev('d', 'ticket.delegated', 0, { linearSessionId: 'ls' }),
         ev('f', 'run.finished', 10, { runId: 'r1', job: 'dev', outcome: 'success', costUsd: 1, turns: 1, lastText: claim }),
+        ev('o', 'pr.opened', 15, { number: 1, url: 'u', branch: 'b' }),
         ev('ci', 'pr.checks_failed', 20, { number: 1, url: 'u', branch: 'b', failures: ['t'] }),
         ev('rc', 'pr.reviewed', 21, { number: 1, url: 'u', branch: 'b', kind: 'comment', author: 'h', body: 'pourquoi ?' }),
         ev('rv', 'pr.reviewed', 22, { number: 1, url: 'u', branch: 'b', kind: 'review', author: 'h', body: 'renomme', state: 'changes_requested' }),
@@ -81,6 +82,27 @@ describe('ticketMeasures (ORC-235)', () => {
       reworks: [{ cause: 'pr.checks_failed', id: 'ci' }, { cause: 'changes_requested', id: 'rv' }],
       tokens: { input: 1 },
     });
+  });
+
+  it('counts no red CI the engine ignored: of another PR, of a closed one, or of a head a push left behind (ORC-469)', () => {
+    const red = (id: string, number: number, headSha?: string) => ev(id, 'pr.checks_failed', 0, { number, url: 'u', branch: 'b', failures: ['t'], ...(headSha ? { headSha } : {}) });
+    const m = ticketMeasures('p', 'REL-1', facts({
+      events: [
+        red('before', 1),
+        ev('o1', 'pr.opened', 1, { number: 1, url: 'u', branch: 'b' }),
+        red('other', 2),
+        ev('pub', 'publish.done', 2, { runId: 'r1', job: 'dev', sha: 'new', before: 'old' }),
+        red('left', 1, 'old'),
+        red('current', 1, 'new'),
+        ev('c1', 'pr.closed', 3, { number: 1, url: 'u', branch: 'b' }),
+        red('closed', 1, 'new'),
+        // Reopened, the same PR: its red CI counts again.
+        ev('o2', 'pr.opened', 4, { number: 1, url: 'u', branch: 'b' }),
+        red('reopened', 1),
+        ev('m', 'pr.merged', 10, { number: 1, url: 'u', branch: 'b' }),
+      ],
+    }));
+    expect(m.reworks).toEqual([{ cause: 'pr.checks_failed', id: 'current' }, { cause: 'pr.checks_failed', id: 'reopened' }]);
   });
 
   it('counts only reworks before the merge, and a move to dev from todo is none', () => {

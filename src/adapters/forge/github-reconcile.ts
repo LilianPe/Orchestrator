@@ -66,6 +66,10 @@ export class GithubReconciler {
           type: "pr.opened",
           payload,
         });
+      // The same PR, recorded closed, read open: reopened, its webhook lost (ORC-469). Per pass, as the webhook's id is per
+      // reopening: until it is decided, the CI verdicts of a closed PR are ignored.
+      else if (t.prState === "CLOSED" && pr.state === "OPEN")
+        await this.d.submit({ ...base, id: `${prEventId(t.ticketId, pr.number, "reopened")}:${at}`, type: "pr.opened", payload });
       if (pr.state === "MERGED" || pr.state === "CLOSED") {
         // The merge commit, head and merge time the forge reads, as the webhook records them (ORC-278).
         const shas = {
@@ -96,7 +100,7 @@ export class GithubReconciler {
             payload: { ...payload, failures: pr.failedChecks, ...(pr.headSha ? { headSha: pr.headSha } : {}) },
           });
         else if (pr.checks === "pass")
-          await this.d.submit({ ...base, id, type: "pr.checks_passed", payload });
+          await this.d.submit({ ...base, id, type: "pr.checks_passed", payload: { ...payload, ...(pr.headSha ? { headSha: pr.headSha } : {}) } });
         await this.d.store.setMeta(metaKey, seen);
       }
     }

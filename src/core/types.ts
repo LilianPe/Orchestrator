@@ -279,7 +279,8 @@ export interface EventPayloads {
   /** `frozen`: for a `/refreeze`, the freeze at the branch's head, read before the decision (ORC-131); absent without a freeze or a branch. */
   command: { name: string; body: string; linearSessionId: string; author: string; commentId?: string; issue?: IssueSnapshot; ack?: true; kind?: MessageKind; masked?: true; frozen?: FrozenTests; repos?: string[]; waitedIn?: string };
   'pr.opened': PrPayload;
-  'pr.checks_passed': PrPayload;
+  /** `headSha`: the commit the checks ran on, when the source reads it (ORC-469), as for `pr.checks_failed`. */
+  'pr.checks_passed': PrPayload & { headSha?: string };
   /**
    * `headSha`: the commit the checks ran on, when the source reads it (ORC-466): a red CI of a head the PR left behind is
    * ignored. Optional: no version bump, older rows lack it.

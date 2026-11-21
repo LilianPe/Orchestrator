@@ -146,7 +146,8 @@ describe('mapGithubWebhook', () => {
     expect(await mapGithubWebhook('check_run', checkRunBody('success'), ctx(t, pr('pending')))).toEqual([]);
     expect(await mapGithubWebhook('check_run', checkRunBody('success'), ctx(t, pr('pass', 'head2')))).toEqual([]);
     expect(await mapGithubWebhook('check_run', checkRunBody('success'), ctx(t, pr('pass')))).toMatchObject([
-      { id: checksEventId('REL-1', 3, 'pass', 'head1'), type: 'pr.checks_passed', payload: { number: 3, url: 'https://pr/3' } },
+      // With the head the checks ran on: a green CI of a head the PR left behind is ignored (ORC-469).
+      { id: checksEventId('REL-1', 3, 'pass', 'head1'), type: 'pr.checks_passed', payload: { number: 3, url: 'https://pr/3', headSha: 'head1' } },
     ]);
   });
 

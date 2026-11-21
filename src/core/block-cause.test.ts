@@ -107,9 +107,9 @@ const blockedBy = (kind: BlockKind, extra: Partial<TicketState> = {}): TicketSta
 describe('a reworded reason changes no decision (ORC-345, criterion 1)', () => {
   it('a green CI lifts the red-CI bound by its kind, and only it', () => {
     const green = ev('pr.checks_passed', { number: 3, url: 'u', branch: 'b' });
-    expect(decide(blockedBy('ci_bound', { prNumber: 3 }), green, workflow).events).toContainEqual({ type: 'ticket.unblocked' });
+    expect(decide(blockedBy('ci_bound', { prNumber: 3, prState: 'OPEN' }), green, workflow).events).toContainEqual({ type: 'ticket.unblocked' });
     // The sentence of the bound on a block of another kind lifts nothing.
-    expect(decide(blockedBy('limit', { prNumber: 3, blockReason: 'CI still failing after 2 attempts of fix-ci.' }), green, workflow).events).not.toContainEqual({ type: 'ticket.unblocked' });
+    expect(decide(blockedBy('limit', { prNumber: 3, prState: 'OPEN', blockReason: 'CI still failing after 2 attempts of fix-ci.' }), green, workflow).events).not.toContainEqual({ type: 'ticket.unblocked' });
   });
 
   it('a stop settles the ticket by its kind, not by its sentence', () => {

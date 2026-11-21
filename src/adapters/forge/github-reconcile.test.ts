@@ -70,6 +70,23 @@ describe('GithubReconciler', () => {
     expect(events.filter((e) => e.type === 'pr.checks_failed').map((e) => e.payload)).toEqual([expect.objectContaining({ headSha: 'h7' }), expect.objectContaining({ headSha: 'h8' })]);
   });
 
+  it('reopens a PR it recorded closed and reads open again under the same number, a lost webhook (ORC-469)', async () => {
+    const { store, forge, events, reconciler } = setup();
+    await store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b', prNumber: 7, prState: 'CLOSED' });
+    forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', headSha: 'h7', checks: 'pass', failedChecks: [] });
+    await reconciler.once();
+    // Reopened first, so that the green CI after it is read on the open PR; with the head it was read on.
+    expect(events.map((e) => [e.id, e.type, e.payload])).toEqual([
+      ['pr:REL-1:7:reopened:100', 'pr.opened', { number: 7, url: 'u', branch: 'b' }],
+      ['pr:REL-1:7:checks:pass:h7', 'pr.checks_passed', { number: 7, url: 'u', branch: 'b', headSha: 'h7' }],
+    ]);
+    // Open already: no reopen.
+    await store.putTicket({ ...(await store.getTicket('p', 'REL-1'))!, prState: 'OPEN' });
+    forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', headSha: 'h8', checks: 'pass', failedChecks: [] });
+    await reconciler.once();
+    expect(events.map((e) => e.type)).toEqual(['pr.opened', 'pr.checks_passed', 'pr.checks_passed']);
+  });
+
   it('isolates a failing ticket and logs', async () => {
     const logs: string[] = [];
     const events: FactoryEvent[] = [];

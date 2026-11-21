@@ -49,7 +49,7 @@ describe('standard pack', () => {
     const names = readdirSync(join(pack, 'skills'));
     expect(names).toEqual(expect.arrayContaining(['tdd', 'debugging', 'verification', 'code-review', 'receiving-review']));
     for (const name of names) {
-      expect(name).toMatch(/^[a-z0-9-]+$/);
+      expect(name).toMatch(/^(?=.{1,64}$)[a-z0-9]+(-[a-z0-9]+)*$/);
       const text = readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8');
       expect(text, name).toMatch(new RegExp(`^---\\nname: ${name}\\ndescription: .+\\n---\\n`));
     }

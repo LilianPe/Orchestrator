@@ -17,7 +17,7 @@ export function verifyGithubSignature(raw: string, header: string | undefined, s
  * Id of a fact on a ticket's PR: the webhook and `GithubReconciler` name the same fact the same way, so the
  * inbox keeps it once whichever reports it first (ORC-134).
  */
-export function prEventId(ticketId: string, prNumber: number, fact: 'opened' | 'merged' | 'closed'): string {
+export function prEventId(ticketId: string, prNumber: number, fact: 'opened' | 'reopened' | 'merged' | 'closed'): string {
   return `pr:${ticketId}:${prNumber}:${fact}`;
 }
 
@@ -69,7 +69,7 @@ function pullRequest(body: any, t: TicketState): Draft[] {
   if (t.prNumber !== undefined && t.prNumber !== n && pr.state !== 'open') return [];
   if (body.action === 'reopened' && t.prNumber === n) {
     // Same PR, open again: `pr.opened` takes it back from `CLOSED`; the id is per reopening.
-    return [{ id: `pr:${t.ticketId}:${n}:reopened:${pr.updated_at ?? body.action}`, type: 'pr.opened', payload }];
+    return [{ id: `${prEventId(t.ticketId, n, 'reopened')}:${pr.updated_at ?? body.action}`, type: 'pr.opened', payload }];
   }
   const out = opened(t, payload);
   if (body.action === 'closed') {
@@ -144,7 +144,7 @@ async function checks(body: any, kind: 'check_run' | 'check_suite', repo: string
   const verdict: Draft =
     bucket === 'fail'
       ? { id: checksEventId(t.ticketId, read.number, 'fail', head), type: 'pr.checks_failed', payload: { ...read, failures: live?.failedChecks.length ? live.failedChecks : [name], headSha: head } }
-      : { id: checksEventId(t.ticketId, read.number, 'pass', head), type: 'pr.checks_passed', payload: read };
+      : { id: checksEventId(t.ticketId, read.number, 'pass', head), type: 'pr.checks_passed', payload: { ...read, headSha: head } };
   return { ticket: t, events: [...opened(t, read), verdict] };
 }
 

@@ -13,7 +13,7 @@ const plansSettle = (known: TicketState, event: FactoryEvent) => planDecision({ 
 
 describe('planDecision — a lifted block settles its pending job (ORC-362)', () => {
   const pendingJob = { job: 'dev-feedback', input: 'feedback' as const, resume: true };
-  const ticket = (patch: Partial<TicketState>): TicketState => ({ ...newTicketState('p', 'REL-1', 'Titre', 'human_review', 0), delegated: true, prNumber: 7, ...patch });
+  const ticket = (patch: Partial<TicketState>): TicketState => ({ ...newTicketState('p', 'REL-1', 'Titre', 'human_review', 0), delegated: true, prNumber: 7, prState: 'OPEN', ...patch });
   const green = ev('pr.checks_passed', { number: 7, url: 'https://forge/pr/7', branch: 'factory/rel-1-titre' });
 
   it('a green CI that lifts the red-CI bound over a pending job settles the ticket; with no pending job, or no lift, it does not', () => {

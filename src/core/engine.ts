@@ -987,7 +987,10 @@ export function staleRelaunch(ticket: TicketState, job: JobSpec, input: InputKin
 const refused = (ticket: TicketState | undefined, job: JobSpec): boolean => refusesDevWork(ticket, job) === 'merged';
 
 /** PR `number` is the ticket's open one: neither another PR nor a merged or closed one. */
-const isOpenPr = (ticket: TicketState | undefined, number: number): ticket is TicketState => ticket?.prNumber === number && ticket.prState === 'OPEN';
+export const isOpenPr = (ticket: TicketState | undefined, number: number): ticket is TicketState => ticket?.prNumber === number && ticket.prState === 'OPEN';
+
+/** `headSha`, when the source names it, is a head a push left behind since (ORC-466): its verdict says nothing of the PR. */
+export const isLeftHead = (ticket: TicketState, headSha: string | undefined): boolean => !!headSha && !!ticket.leftHeads?.includes(headSha);
 
 /**
  * Starts `job`, unless the ticket is delivered (traced only). Every `start_run` of `decide` goes through here, so the rule
@@ -2648,6 +2651,10 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         out.trace.push(`pr.conflicted: PR #${event.payload.number} is not the open PR of the ticket, nothing started`);
         return out;
       }
+      if (isLeftHead(ticket, event.payload.headSha)) {
+        out.trace.push(`pr.conflicted: head ${event.payload.headSha} of PR #${event.payload.number} was left behind by a push since, nothing started`);
+        return out;
+      }
       // A rebase already running or waiting takes the branch onto the base as it is then: a new head still in conflict asks no second one.
       if ([ticket.activeJob, ticket.pendingJob?.job].some((j) => j && stepOf(workflow, j) === REBASE)) {
         out.trace.push('pr.conflicted: a rebase is already running or waiting, nothing started');
@@ -2659,31 +2666,29 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // Facts for the measures (ORC-278): a revert of the ticket's PR, a CI run's duration. Nothing to decide.
       out.trace.push(`${event.type}: recorded for the measures`);
       return out;
-    case 'pr.checks_failed': {
-      // Red CI of the ticket's open PR only (ORC-466): another PR's, a merged or closed one's, starts no fix and counts no round;
-      // nor one of a head a push, the factory's or a human's, left behind since. A head the ticket never heard of may be a newer
-      // one whose push is not decided yet: it is read, as a red CI with no head (before ORC-466) is.
-      const { number, headSha } = event.payload;
-      if (!isOpenPr(ticket, number)) {
-        out.trace.push(`pr.checks_failed: PR #${number} is not the open PR of the ticket, ignored`);
-        return out;
-      }
-      if (headSha && ticket.leftHeads?.includes(headSha)) {
-        out.trace.push(`pr.checks_failed: head ${headSha} of PR #${number} was left behind by a push since, ignored`);
-        return out;
-      }
-      break;
-    }
+    case 'pr.checks_failed':
     case 'pr.checks_passed':
+      // A CI verdict of the ticket's open PR only (ORC-466, ORC-469): another PR's, a merged or closed one's, starts no fix,
+      // counts no round and lifts no block; nor one of a head a push, the factory's or a human's, left behind since. A head the
+      // ticket never heard of may be a newer one whose push is not decided yet: it is read, as a verdict with no head is.
+      if (!isOpenPr(ticket, event.payload.number)) {
+        out.trace.push(`${event.type}: PR #${event.payload.number} is not the open PR of the ticket, ignored`);
+        return out;
+      }
+      if (isLeftHead(ticket, event.payload.headSha)) {
+        out.trace.push(`${event.type}: head ${event.payload.headSha} of PR #${event.payload.number} was left behind by a push since, ignored`);
+        return out;
+      }
+      if (event.type === 'pr.checks_failed') break;
       // A ticket blocked by the red-CI bound is no longer blocked for a reason that holds: the block is lifted. The count of
       // the review and CI loop stays, one per run (ORC-184): a review that keeps finding would loop between its fix and green CI.
       // No reaction follows, but the step a run published during the block asked for (ORC-416).
-      if (ticket?.blocked && ticket.blockKind === 'ci_bound') {
+      if (ticket.blocked && ticket.blockKind === 'ci_bound') {
         out.events.push({ type: 'ticket.unblocked' });
         startHanded(out, event, ticket, workflow);
       }
       // The fix of a red CI the wait kept fixes nothing any more (ORC-464): the blockers done make the start it waited for.
-      if (ticket?.waitingOn?.round === 'red_ci' && event.payload.number === ticket.prNumber) {
+      if (ticket.waitingOn?.round === 'red_ci') {
         out.events.push({ type: 'ticket.patched', patch: { waitingOn: waitStart(ticket.waitingOn) } });
       }
       break;

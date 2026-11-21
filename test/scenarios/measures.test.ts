@@ -14,6 +14,8 @@ describe('measures of the MVP doc, from the first run (ORC-235)', () => {
     h.runner.enqueue({ events: [{ kind: 'text', text: 'Mergeable au premier essai.' }] });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     const pr = { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1-export-csv' };
+    // On the ticket's open PR: a red CI the engine ignores is no rework (ORC-469).
+    await h.send('pr.opened', pr);
     await h.send('pr.checks_failed', { ...pr, failures: ['test'] });
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'renomme la colonne', author: 'Lilian' });
     const before = await measureTicket(h.store, 'p', 'REL-1');
