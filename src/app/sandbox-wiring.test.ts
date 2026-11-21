@@ -97,8 +97,8 @@ describe('sandboxLimits', () => {
   });
 
   it('refuses a FACTORY_SANDBOX_MEMORY under 6m, the engines\' minimum, giving it (ORC-452)', () => {
-    for (const size of ['5m', '6143k', '6143K', '6291455', '6291455b', '1k', '1']) {
-      expect(sandboxLimits({ FACTORY_SANDBOX_MEMORY: size })).toEqual({ refused: `FACTORY_SANDBOX_MEMORY=${size}: at least 6m expected (the engines refuse less), or 0 / none for no limit.` });
+    for (const size of ['5m', '6143k', '6143K', '6291455', '6291455b', '512', '1k', '1']) {
+      expect(sandboxLimits({ FACTORY_SANDBOX_MEMORY: size })).toEqual({ refused: `FACTORY_SANDBOX_MEMORY=${size}: at least 6m expected, or 0 / none for no limit.` });
     }
     for (const size of ['6m', '6M', '6144k', '6291456', '6291456b', '1g']) {
       expect(sandboxLimits({ FACTORY_SANDBOX_MEMORY: size })).toEqual(expect.objectContaining({ memory: size }));

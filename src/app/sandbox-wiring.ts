@@ -140,7 +140,10 @@ export function visualProofLine(v: { image?: string; detail: string }): string {
 export function sandboxLimits(env: NodeJS.ProcessEnv): SandboxLimits | { refused: string } {
   const d = defaultLimits();
   const pids = limit(env, 'FACTORY_SANDBOX_PIDS', /^[1-9]\d*$/, 'a whole number of processes', d.pids, Number);
-  const memory = atLeastMinimum(limit(env, 'FACTORY_SANDBOX_MEMORY', /^[1-9]\d*[bkmg]?$/i, 'a size such as 4g or 512m', d.memory, String));
+  const memory = limit(env, 'FACTORY_SANDBOX_MEMORY', /^[1-9]\d*[bkmg]?$/i, 'a size such as 4g or 512m', d.memory, String, {
+    ok: (v) => bytes(v) >= bytes(MIN_MEMORY),
+    hint: `at least ${MIN_MEMORY}`,
+  });
   const cpus = limit(env, 'FACTORY_SANDBOX_CPUS', /^(\d+|\d*\.\d+)$/, 'a number of CPUs such as 2 or 0.5', d.cpus, Number);
   if (typeof pids === 'object') return pids;
   if (typeof memory === 'object') return memory;
@@ -148,20 +151,25 @@ export function sandboxLimits(env: NodeJS.ProcessEnv): SandboxLimits | { refused
   return { pids, memory, cpus };
 }
 
-function limit<T extends number | string>(env: NodeJS.ProcessEnv, name: string, ok: RegExp, hint: string, def: T | undefined, cast: (v: string) => T): T | undefined | { refused: string } {
+function limit<T extends number | string>(
+  env: NodeJS.ProcessEnv,
+  name: string,
+  ok: RegExp,
+  hint: string,
+  def: T | undefined,
+  cast: (v: string) => T,
+  floor?: { ok: (v: string) => boolean; hint: string },
+): T | undefined | { refused: string } {
   const v = env[name]?.trim();
   if (!v) return def;
   if (/^(0|none)$/i.test(v)) return undefined;
-  if (!ok.test(v) || !(Number.parseFloat(v) > 0)) return { refused: `${name}=${v}: ${hint} expected, or 0 / none for no limit.` };
+  const refused = (expected: string) => ({ refused: `${name}=${v}: ${expected} expected, or 0 / none for no limit.` });
+  if (!ok.test(v) || !(Number.parseFloat(v) > 0)) return refused(hint);
+  if (floor && !floor.ok(v)) return refused(floor.hint);
   return cast(v);
 }
 
 /** Docker and Podman refuse a `--memory` under 6 MiB: refused at the start, not at the first run (ORC-452). */
-const MIN_MEMORY = 6 * 1024 ** 2;
+const MIN_MEMORY = '6m';
 const MEMORY_UNITS: Record<string, number> = { b: 1, k: 1024, m: 1024 ** 2, g: 1024 ** 3 };
-
-function atLeastMinimum(memory: string | undefined | { refused: string }): string | undefined | { refused: string } {
-  if (typeof memory !== 'string') return memory;
-  const bytes = Number.parseInt(memory, 10) * (MEMORY_UNITS[memory.slice(-1).toLowerCase()] ?? 1);
-  return bytes < MIN_MEMORY ? { refused: `FACTORY_SANDBOX_MEMORY=${memory}: at least 6m expected (the engines refuse less), or 0 / none for no limit.` } : memory;
-}
+const bytes = (size: string): number => Number.parseInt(size, 10) * (MEMORY_UNITS[size.slice(-1).toLowerCase()] ?? 1);

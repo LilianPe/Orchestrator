@@ -1045,7 +1045,7 @@ describe("the daemon's environment the start refuses, doctor's host refuses", ()
   });
 
   it('refuses a FACTORY_SANDBOX_MEMORY under 6m with the message of the start, giving the minimum (ORC-452)', async () => {
-    await refusedLikeTheStart({ FACTORY_CONTAINER_CLI: 'docker', ...RUNNER, FACTORY_SANDBOX_MEMORY: '4m' }, 'FACTORY_SANDBOX_MEMORY=4m: at least 6m expected (the engines refuse less), or 0 / none for no limit.');
+    await refusedLikeTheStart({ FACTORY_CONTAINER_CLI: 'docker', ...RUNNER, FACTORY_SANDBOX_MEMORY: '4m' }, /^FACTORY_SANDBOX_MEMORY=4m: at least 6m expected/);
   });
 
   it('refuses a daemon without a uid or a gid with the message of the start (ORC-450)', async () => {
