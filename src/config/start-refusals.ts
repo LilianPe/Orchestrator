@@ -1,6 +1,6 @@
 import type { DashboardAccess } from '../adapters/forge/github-login.js';
 import { PRODUCT_NAME } from '../product.js';
-import { oldDatabaseWarnings } from '../store/open.js';
+import { oldDatabaseWarnings } from '../store/old-databases.js';
 import type { FactoryYml } from './factory-yml.js';
 import { githubOAuthClient } from './github-app.js';
 import { isLoopbackHost, relayWarnings, type InstanceConfig } from './instance.js';

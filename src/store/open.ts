@@ -1,5 +1,3 @@
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { Pool } from 'pg';
 import { migratePgStore } from './pg/migrate.js';
 import { listenForPoolErrors, PgStore } from './pg/pg-store.js';
@@ -37,17 +35,4 @@ export async function openStore(o: OpenStoreOptions): Promise<Store> {
     }
   }
   return new PgStore({ connectionString: url, onError });
-}
-
-/** The SQLite files of the stores before Postgres, Relais's and the factory's: never opened again (ORC-178; transition, à retirer). */
-export const OLD_DATABASES = ['relais.db', 'factory.db']; // transition, à retirer
-
-/**
- * What a start says of each SQLite file still in `home`: not read, its data not taken into Postgres, to archive off the
- * server then delete (docs/operations.md). Only its presence is looked at.
- */
-export function oldDatabaseWarnings(home: string): string[] {
-  return OLD_DATABASES.filter((name) => existsSync(join(home, name))).map(
-    (name) => `${name}: left from the SQLite store, not read (ORC-178): archive it off the server, then delete it (docs/operations.md)`,
-  );
 }
