@@ -57,6 +57,11 @@ async function main(): Promise<number> {
     options: { 'fake-runner': { type: 'boolean' }, json: { type: 'boolean' }, dev: { type: 'boolean' } },
   });
   const [cmd, arg] = positionals;
+  // `--dev` is init's alone: elsewhere it would be ignored without a word.
+  if (values.dev && cmd !== 'init') {
+    console.log(USAGE);
+    return 1;
+  }
   const home = factoryHome();
   // config.yaml only: factory.yml and its env: secrets are the daemon's, a plain shell may lack them.
   const cfg = loadInstance(home);

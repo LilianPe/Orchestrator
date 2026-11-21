@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -8,7 +8,7 @@ import type { Exec } from '../adapters/exec.js';
 import { loadFactoryLimits, parseFactoryYml } from '../config/factory-yml.js';
 import { loadInstance, loadSecrets, saveInstance, saveSecrets } from '../config/instance.js';
 import { MISSING_TEST_COMMAND, parseRepoConfig, testCommandWarnings } from '../config/repo-config.js';
-import { GITHUB_APP_PERMISSIONS, PROPOSAL_HEADER, PYTEST_BESIDE_TEST, runInit, type InitIO } from './init.js';
+import { GITHUB_APP_PERMISSIONS, NO_PUBLIC_URL, PROPOSAL_HEADER, PYTEST_BESIDE_TEST, runInit, type InitIO } from './init.js';
 import { runValidateCommand } from './validate.js';
 
 function scriptedIO(answers: string[]): InitIO & { printed: string[] } {
@@ -170,7 +170,7 @@ describe('factory init', () => {
       },
       print: () => {},
     };
-    await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec });
+    await runInit({ io, home, cwd: repo, dev: true, createSmee: async () => 'https://smee.io/abc', exec });
 
     expect(asked.filter((q) => q === 'Webhook signing secret')).toHaveLength(3);
     expect(loadSecrets(home).linear?.webhookSecret).toBe('whsecret');
@@ -236,8 +236,11 @@ describe('factory init: Smee only for development (ORC-411)', () => {
     expect(created).toBe(0);
     expect(loadInstance(home).relay).toEqual({ kind: 'none' });
     expect(out).not.toContain('https://smee.io');
-    expect(out).toContain('factory init --dev');
-    expect(out).toContain('publicUrl');
+    expect(out).toContain(NO_PUBLIC_URL);
+    // Linear gives its webhook secret only for a webhook URL: none asked, none stored.
+    expect(out).not.toContain('OAuth applications');
+    expect(loadSecrets(home).linear).toBeUndefined();
+    expect(loadInstance(home).projects).toEqual([expect.objectContaining({ linearTeamKey: 'REL' })]);
   });
 
   it('with --dev, creates the channel and gives it as the webhook URL', async () => {
@@ -289,12 +292,29 @@ describe('factory init: the GitHub App and factory.yml (ORC-411)', () => {
     expect(out).not.toContain('GH_WEBHOOK_SECRET');
   });
 
-  it('with a public URL, the App\'s webhook and its secret, a reference in factory.yml', async () => {
+  it('with a public URL, the App\'s webhook is optional: its secret is said to add, never written, as an unset variable would stop the daemon', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
     saveInstance(home, { port: 4100, host: '127.0.0.1', publicUrl: 'https://factory.example.com', relay: { kind: 'none' }, projects: [], limits: {} });
     const { out } = await initOnce({ home });
-    expect(parseFactoryYml(readFileSync(join(home, 'factory.yml'), 'utf8'), ENV).github?.webhookSecret).toBe('w');
-    expect(out).toContain('export GH_WEBHOOK_SECRET=');
+    expect(parseFactoryYml(readFileSync(join(home, 'factory.yml'), 'utf8'), { GH_APP_ID: '1', GH_APP_KEY: '/k', CLAUDE_CODE_OAUTH_TOKEN: 't' }).github?.webhookSecret).toBeUndefined();
+    expect(out).toContain('webhook_secret: env:GH_WEBHOOK_SECRET');
+  });
+
+  it('writes no factory.yml on an instance that runs without one: it would change how it runs', async () => {
+    const { home } = await initOnce({ dev: true });
+    rmSync(join(home, 'factory.yml'));
+    const { out } = await initOnce({ home, dev: true });
+    expect(existsSync(join(home, 'factory.yml'))).toBe(false);
+    expect(out).not.toContain('https://github.com/settings/apps/new');
+  });
+
+  it('replaces every entry of the repository an older init wrote in another form, keeping the first one\'s fields', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+    const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
+    const authz = { maintainers: [], validators: ['v'], githubLogins: {} };
+    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'a', repoPath: `${repo}/`, linearTeamKey: 'OLD', authz }, { id: 'b', repoPath: repo, linearTeamKey: 'OLD' }], limits: {} });
+    await initOnce({ home, repo });
+    expect(loadInstance(home).projects).toEqual([{ id: 'a', repoPath: repo, linearTeamKey: 'REL', authz }]);
   });
 
   it('leaves the GitHub App of config.yaml in place: no github in the factory.yml it writes, which would replace it', async () => {
@@ -332,13 +352,14 @@ describe('factory init: the GitHub App and factory.yml (ORC-411)', () => {
     expect(out).toContain('factory.yml kept');
   });
 
-  it('a new value replaces the stored one; another client ID drops the old tokens', async () => {
-    const { home, repo } = await initOnce();
+  it('a new value replaces the stored one; another client ID keeps nothing of the old application', async () => {
+    const { home, repo } = await initOnce({ dev: true });
     const s = loadSecrets(home);
     saveSecrets(home, { ...s, linear: { ...s.linear!, accessToken: 'at' } });
     await initOnce({ home, repo, answers: ['', '', 'csecret2', ''] });
     expect(loadSecrets(home).linear).toEqual({ clientId: 'cid', clientSecret: 'csecret2', webhookSecret: 'whsecret', accessToken: 'at' });
-    await initOnce({ home, repo, answers: ['', 'cid2', '', ''] });
-    expect(loadSecrets(home).linear).toEqual({ clientId: 'cid2', clientSecret: 'csecret2', webhookSecret: 'whsecret' });
+    // Its secrets are asked: an empty webhook secret is asked again, not taken from the old application.
+    await initOnce({ home, repo, answers: ['', 'cid2', 'cs3', '', 'wh3'] });
+    expect(loadSecrets(home).linear).toEqual({ clientId: 'cid2', clientSecret: 'cs3', webhookSecret: 'wh3' });
   });
 });

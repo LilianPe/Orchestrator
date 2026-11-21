@@ -15,7 +15,7 @@ Nothing below can be skipped for a real run: without a container engine nothing 
 | 3 | **Branch protection** on the default branch: a ruleset with *Require a pull request before merging* that the App cannot bypass | GitHub → repository → Settings → Rules → Rulesets ([`github.md`](github.md#branch-protection-required-by-factory-doctor)). `factory doctor` refuses without it. | GitHub |
 | 4 | **A test GitHub App** with the permissions of [`github-app-manifest.json`](github-app-manifest.json) (Contents, Pull requests, Checks write; Commit statuses, Actions, Metadata read), **its private key**, and **installed on the pilot repository** | `factory init` prints the steps, with the permissions (step 2); details in [`github.md`, "Creating the App"](github.md#creating-the-app). Locally, leave its webhook disabled: the factory polls the PRs every 30 s. Keep the `.pem` outside the repository, mode `0600`. | `factory.yml`, written by `factory init`: `github: { app_id: env:GH_APP_ID, private_key: env:GH_APP_KEY }`, with `GH_APP_ID` (the App ID) and `GH_APP_KEY` (the `.pem` path) in the daemon's environment. |
 | 5 | **A Linear OAuth application** (not a personal API key), created by a Linear workspace admin, with webhooks on | `factory init` prints the exact callback URL, webhook URL and categories (step 2); details in [`linear.md`](linear.md#1-create-the-oauth-application). | Client ID, client secret and webhook signing secret typed into `factory init` → `secrets.json`. The OAuth tokens come later, from « Connect Linear ». |
-| 6 | **A public URL for Linear's webhooks** | Locally, nothing to create: run **`factory init --dev`**, which creates a smee.io channel when `config.yaml` has neither `publicUrl` nor a relay (ORC-411: without `--dev`, `init` creates none, and Linear has nowhere to send the webhooks). Or a tunnel (`cloudflared tunnel --url http://localhost:4100`) in `publicUrl` before `factory init`, needed anyway if Linear refuses the `http://localhost` callback ([`linear.md`](linear.md#3-webhooks-production-and-development)). | `config.yaml`: `relay` (smee, written by `factory init --dev`) or `publicUrl` |
+| 6 | **A public URL for Linear's webhooks** | Locally, nothing to create: run **`factory init --dev`**, which creates a smee.io channel when `config.yaml` has neither `publicUrl` nor a relay (ORC-411: without `--dev`, `init` creates none and asks nothing of Linear, which has nowhere to send the webhooks). Or a tunnel (`cloudflared tunnel --url http://localhost:4100`) in `publicUrl` before `factory init`, needed anyway if Linear refuses the `http://localhost` callback ([`linear.md`](linear.md#3-webhooks-production-and-development)). | `config.yaml`: `relay` (smee, written by `factory init --dev`) or `publicUrl` |
 | 7 | **A Claude Code token** | `claude setup-token` on a machine logged in to the subscription account. | `factory.yml`: `claude.accounts[].token: env:CLAUDE_CODE_OAUTH_TOKEN` (any variable name), and that variable in the daemon's environment. In a sandbox the egress proxy sets it on the model calls; the agent only holds a placeholder. |
 | 8 | **Rootless Podman on Linux, cgroup v2**, with the systemd cgroup manager and the `cpu`, `memory` and `pids` controllers delegated to your user | `sudo loginctl enable-linger <user>`; check with `podman info --format json` (`host.cgroupVersion: v2`, `host.cgroupManager: systemd`, `host.security.rootless: true`). On Windows, inside WSL2 only: the sandboxes need a Linux daemon. `factory doctor` checks all of it (step 3). | `FACTORY_CONTAINER_CLI=podman` in the daemon's environment |
 | 9 | **The runner image**, built from this repository | `podman build -f docker/runner.Dockerfile -t localhost/factory-runner docker` | `FACTORY_RUNNER_IMAGE=localhost/factory-runner` |
@@ -40,7 +40,7 @@ cd <pilot repository>
 factory init --dev
 ```
 
-`--dev` is what a local run needs: with no `publicUrl` in `config.yaml`, it creates the smee.io channel that relays Linear's webhooks to your machine (item 6). Without it, `init` creates no channel and says `No public URL for Linear's webhooks: …`; with a `publicUrl`, `--dev` changes nothing. A channel already in `config.yaml` is kept either way.
+`--dev` is what a local run needs: with no `publicUrl` in `config.yaml`, it creates the smee.io channel that relays Linear's webhooks to your machine (item 6). Without it, `init` creates no channel, says `No public URL for Linear's webhooks: …` and skips the Linear application; with a `publicUrl`, `--dev` changes nothing. A channel already in `config.yaml` is kept either way.
 
 It asks the Linear team key, then prints what to create in Linear, with your instance's URLs:
 
@@ -66,7 +66,7 @@ commands:
 
 Commit that file on the default branch through a PR, merged: the daemon and `factory doctor` read it there (`origin/HEAD`, as the clone last fetched it), never in a working copy. Then `git pull` on the default branch in the clone: `factory validate` reads the working copy's file. If `init` warns that there is no `commands.test`, add one before going on.
 
-Then it prints the GitHub App's steps (item 4), and writes `FACTORY_HOME/factory.yml` when there is none:
+On a first setup (no project in `config.yaml`, no Linear values, no `factory.yml`), it then prints the GitHub App's steps (item 4) and writes `FACTORY_HOME/factory.yml`:
 
 ```text
 GitHub App of Orchestrator (it opens and updates the PRs):
@@ -78,7 +78,7 @@ GitHub App of Orchestrator (it opens and updates the PRs):
    keep the .pem outside the repository, mode 0600 (e.g. /home/<user>/.factory/github-app.pem).
 3. Install the App on the repository ("Install App").
 
-Wrote /home/<user>/.factory/factory.yml: its secrets are references; export them in the shell of `factory up` and `factory doctor`:
+Wrote /home/<user>/.factory/factory.yml: its secrets are references; export them in the shell of `factory up` and `factory doctor`, which refuse to start without them:
   export GH_APP_ID=<App ID>
   export GH_APP_KEY=<path of the .pem>
   export CLAUDE_CODE_OAUTH_TOKEN=<token of claude setup-token>
@@ -86,7 +86,7 @@ Wrote /home/<user>/.factory/factory.yml: its secrets are references; export them
 
 It ends with `Configuration written.` and its next steps. It wrote `FACTORY_HOME/config.yaml` (the project, the relay), `FACTORY_HOME/secrets.json` (mode `0600`) and `FACTORY_HOME/factory.yml`.
 
-Run again, `factory init` erases nothing (ORC-83): an empty answer keeps the team key and the stored Linear values (and « Connect Linear »'s tokens, as long as the client ID is the same), the project's roles stay, and an existing `factory.yml` is kept as it is (`… factory.yml kept as it is.`).
+Run again, `factory init` erases nothing (ORC-83): an empty answer keeps the team key and the stored Linear values (and « Connect Linear »'s tokens, as long as the client ID is the same), the project's roles stay, an existing `factory.yml` is kept as it is (`… factory.yml kept as it is.`), and an instance that already runs without one gets none. A new client ID asks for its secrets: nothing of the old application is kept.
 
 Now add by hand, in `config.yaml`, the roles of items 11 and 12:
 
@@ -115,13 +115,12 @@ claude:
       token: env:CLAUDE_CODE_OAUTH_TOKEN
   active: main
   default_model: claude-sonnet-5-5
-concurrency: 1
 budgets:
   per_step_tokens: off
   per_ticket_tokens: 5000000
 ```
 
-With a `publicUrl`, its `github` also has `webhook_secret: env:GH_WEBHOOK_SECRET`, and the App's steps give its webhook URL. The ticket cap is a first one, to calibrate (ORC-216).
+With a `publicUrl`, the App's steps give its webhook URL, optional: if you enable it, add `webhook_secret: env:GH_WEBHOOK_SECRET` under `github` and export it (`init` does not write it: an unset variable stops the daemon). `concurrency` is left to its default; `concurrency: 1` keeps a first run to one ticket at a time. The ticket cap is a first one, to calibrate (ORC-216).
 
 `claude.runtime` and `claude.default_model` are required once `claude` is there. The budgets: `factory validate` refuses a step cap left unset, and the daemon warns without a ticket cap; `per_step_tokens: off` with a ticket cap is the simplest accepted choice for a first run ([`configuration.md`](configuration.md#factoryyml-orc-209)).
 
