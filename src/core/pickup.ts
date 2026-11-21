@@ -66,6 +66,9 @@ export function pickupFailures(checks: PickupCheck[], issue: TrackerIssue, ownWo
   return out;
 }
 
+/** The question `clarify` asks after `intake` for the pickup checks that failed (ORC-210): a fact, the ticket's to complete. */
+export const completeTicketQuestion = (failures: string[]): string => `${failures.join(' ')} Can you complete the ticket, then reply here?`;
+
 /**
  * `intake`'s duplicate search (ORC-207), at its launch: every open PR with its files and the recent branches of the
  * repository, through the forge, and the tickets the tracker finds close to its title. `activeWork`, what intake reads to

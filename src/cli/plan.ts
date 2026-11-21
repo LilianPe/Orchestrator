@@ -2,7 +2,8 @@ import type { Tracker } from '../adapters/tracker/types.js';
 import type { WorkspaceManager } from '../adapters/workspace/types.js';
 import type { ProjectRuntime } from '../runtime/daemon.js';
 import { DEFAULT_BRANCH_NAMING, ownBranchMatcher, type BranchNaming } from '../core/naming.js';
-import { pickupFailures } from '../core/pickup.js';
+import { delegatedJob } from '../core/chain.js';
+import { completeTicketQuestion, pickupFailures } from '../core/pickup.js';
 import { repoLabel } from '../core/routing.js';
 import { routedIssues } from '../adapters/tracker/linear/reconcile.js';
 import type { Store } from '../store/types.js';
@@ -11,7 +12,8 @@ export interface PlanRow {
   identifier: string;
   title: string;
   priority: number;
-  status: 'taken' | 'already handled' | 'not taken';
+  /** `clarify`: the pickup checks fail, `intake` runs and `clarify` asks to complete the ticket (ORC-423). */
+  status: 'taken' | 'already handled' | 'clarify' | 'not taken';
   reasons: string[];
 }
 
@@ -64,7 +66,9 @@ export async function planRows(d: {
       }
       const own = naming && (await d.workspaces.remoteBranchExists(p.repoPath, ownBranchMatcher(issue.identifier, naming))) ? `A branch of ${issue.identifier} already exists on origin.` : undefined;
       const reasons = pickupFailures(checks, issue, own);
-      rows.push({ ...row, status: reasons.length ? 'not taken' : 'taken', reasons });
+      // A chain entered at `intake` asks for the failed checks in `clarify` (ORC-395); another's launch refuses the ticket.
+      const failed = delegatedJob(p.workflow)?.step === 'intake' ? 'clarify' : 'not taken';
+      rows.push({ ...row, status: reasons.length ? failed : 'taken', reasons });
     }
   }
   return rows.sort((a, b) => rank(a.priority) - rank(b.priority));
@@ -73,6 +77,13 @@ export async function planRows(d: {
 export function formatPlan(rows: PlanRow[]): string {
   if (!rows.length) return 'No ticket delegated to the agent.';
   return rows
-    .map((r) => `${r.identifier}  ${r.status}  ${r.title}${r.status === 'not taken' ? ` — ${r.reasons.join(' ')}` : r.status === 'already handled' ? ` (${r.reasons[0]})` : ''}`)
+    .map((r) => `${r.identifier}  ${r.status}  ${r.title}${detail(r)}`)
     .join('\n');
+}
+
+function detail(r: PlanRow): string {
+  if (r.status === 'not taken') return ` — ${r.reasons.join(' ')}`;
+  if (r.status === 'clarify') return ` — intake, then clarify asks: ${completeTicketQuestion(r.reasons)}`;
+  if (r.status === 'already handled') return ` (${r.reasons[0]})`;
+  return '';
 }

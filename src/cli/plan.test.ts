@@ -37,11 +37,11 @@ describe('plan', () => {
     const rows = await planRows({ tracker, store, projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], workspaces: new FakeWorkspaces() });
     expect(rows.map((r) => [r.identifier, r.status])).toEqual([
       ['REL-2', 'taken'],
-      ['REL-3', 'not taken'],
+      ['REL-3', 'clarify'],
       ['REL-4', 'already handled'],
       ['REL-1', 'taken'],
     ]);
-    expect(formatPlan(rows)).toContain('REL-3  not taken  Flou — The description is shorter than 30 characters.');
+    expect(formatPlan(rows)).toContain('REL-3  clarify  Flou — intake, then clarify asks: The description is shorter than 30 characters. Can you complete the ticket, then reply here?');
   });
 
   it('previews not_started on git, the daemon reading it on the forge (ORC-207)', async () => {
@@ -51,7 +51,7 @@ describe('plan', () => {
     const workspaces = new FakeWorkspaces();
     workspaces.remoteBranches.add('factory/rel-1-old');
     const rows = await planRows({ tracker, store: new SqliteStore(':memory:'), projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], workspaces });
-    expect(rows.map((r) => [r.status, r.reasons])).toEqual([['not taken', ['A branch of REL-1 already exists on origin.']]]);
+    expect(rows.map((r) => [r.status, r.reasons])).toEqual([['clarify', ['A branch of REL-1 already exists on origin.']]]);
   });
 
   it("previews by each repository's own branch naming, read once per project; an invalid one is that project's reason only (ORC-283)", async () => {
@@ -71,10 +71,29 @@ describe('plan', () => {
     const projects = [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }, { id: 'bad', repoPath: '/b', teamKey: 'BAD', workflow }];
     const rows = await planRows({ tracker, store: new SqliteStore(':memory:'), projects, workspaces, naming });
     expect(rows.map((r) => [r.identifier, r.status, r.reasons])).toEqual([
-      ['REL-1', 'not taken', ['A branch of REL-1 already exists on origin.']],
+      ['REL-1', 'clarify', ['A branch of REL-1 already exists on origin.']],
       ['REL-2', 'taken', []],
       ['BAD-1', 'not taken', ['.factory/config.yml refused:\n- branches.pattern: {id} is required']],
     ]);
     expect(reads.sort()).toEqual(['bad', 'p']);
+  });
+
+  it("shows a ticket whose pickup checks fail as going to intake's clarify, which asks to complete it, not as not taken (ORC-423)", async () => {
+    const workflow = defaultWorkflow();
+    const tracker = new FakeTracker();
+    tracker.addIssue({ identifier: 'REL-1', title: 'Flou', delegateId: 'a', description: 'court' });
+    const rows = await planRows({ tracker, store: new SqliteStore(':memory:'), projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], workspaces: new FakeWorkspaces() });
+    expect(rows.map((r) => [r.status, r.reasons])).toEqual([['clarify', ['The description is shorter than 30 characters.']]]);
+    expect(formatPlan(rows)).toBe(
+      'REL-1  clarify  Flou — intake, then clarify asks: The description is shorter than 30 characters. Can you complete the ticket, then reply here?',
+    );
+  });
+
+  it('keeps not taken for a chain whose entry is not intake: its launch refuses the ticket (ORC-423)', async () => {
+    const workflow = { ...defaultWorkflow(), entry: 'build' };
+    const tracker = new FakeTracker();
+    tracker.addIssue({ identifier: 'REL-1', title: 'Flou', delegateId: 'a', description: 'court' });
+    const rows = await planRows({ tracker, store: new SqliteStore(':memory:'), projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], workspaces: new FakeWorkspaces() });
+    expect(rows.map((r) => r.status)).toEqual(['not taken']);
   });
 });
