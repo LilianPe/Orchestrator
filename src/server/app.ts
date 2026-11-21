@@ -85,6 +85,8 @@ export interface ServerDeps {
   secrets?: () => string[];
   /** The dry run of a project's default branch (ORC-409), run and recorded, which `factory dry-run` asks for. Absent: none. */
   dryRun?: (projectId: string) => Promise<DryRun>;
+  /** The projects of the configuration (ORC-454): the maturity cards of another, removed since init, are neither listed nor approved. Absent: every project's. */
+  projects?: readonly string[];
   /** `audit.serious_defect` of factory.yml (ORC-153): absent, the defects of the audit sheets are kept, never counted (ORC-229). */
   seriousDefect?: string;
 }
@@ -517,8 +519,10 @@ export function createApp(d: ServerDeps): Hono {
   // The maturity cards `factory init` stored (ORC-410), every project's, and the approval of one by an operator, of the value
   // it was shown at: a detection that changes the value drops it, and an approval of a value no longer stored is refused.
   const approvalLimit = bodyLimit({ maxSize: 64 * 1024, onError: (c) => c.json({ error: 'approval over 64 KB' }, 413) });
-  app.get('/api/maturity', async (c) => c.json({ cards: await d.store.maturityCards() }));
+  const configured = (projectId: string) => d.projects === undefined || d.projects.includes(projectId);
+  app.get('/api/maturity', async (c) => c.json({ cards: (await d.store.maturityCards()).filter((card) => configured(card.projectId)) }));
   app.post('/api/maturity/:projectId/:key/approve', approvalLimit, async (c) => {
+    if (!configured(c.req.param('projectId'))) return c.json({ error: `no project ${c.req.param('projectId')} in the configuration` }, 404);
     const parsed = approvalEntry.safeParse(await c.req.json().catch(() => undefined));
     if (!parsed.success) return c.json({ error: 'expected { value }: the value approved' }, 400);
     const { value } = parsed.data;
