@@ -113,8 +113,8 @@ describe('standard pack', () => {
     for (const file of files) expect(readFileSync(join(pack, file), 'utf8'), file).not.toContain('mcp__factory__ask');
   });
 
-  it('names neither git push, gh, relais-agent, factory-agent nor --no-verify in a skill or the session-start hook: the factory publishes (ORC-125, ORC-191)', () => {
-    for (const [name, text] of instructions) expect(text, name).not.toMatch(/git push|(^|[^\w-])gh(?![\w-])|(relais|factory)-agent|--no-verify/m);
+  it('names neither git push, gh, the agent CLI under its old or new name nor --no-verify in a skill or the session-start hook: the factory publishes (ORC-125, ORC-191)', () => {
+    for (const [name, text] of instructions) expect(text, name).not.toMatch(/git push|(^|[^\w-])gh(?![\w-])|(relais|factory)-agent|--no-verify/m); // transition, à retirer
   });
 
   it('has no skill launch a subagent: the factory reviews and splits the work, the session is one loop (ORC-191)', () => {
