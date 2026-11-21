@@ -2,6 +2,8 @@
 
 This page covers installing Relais on a machine (dev workstation or server without Docker). For Docker, see [`deployment.md`](deployment.md).
 
+To take a first real ticket from delegation to its PR on your machine, follow [`first-run.md`](first-run.md): it starts with what to create (GitHub App, Linear application, Claude token, Podman, validators) and goes through `factory init`, `factory doctor` and `factory up`.
+
 ## Prerequisites
 
 | Tool | Version | Why |
@@ -41,7 +43,7 @@ cd <your repository>
 relais init
 ```
 
-The wizard is described in [`cli.md`](cli.md#relais-init) and creating the Linear application in [`linear.md`](linear.md). Then:
+The wizard is described in [`cli.md`](cli.md#relais-init) and creating the Linear application in [`linear.md`](linear.md); the whole first run, step by step, in [`first-run.md`](first-run.md). Then:
 
 ```bash
 relais up                 # http://localhost:4100, then « Connect Linear »
