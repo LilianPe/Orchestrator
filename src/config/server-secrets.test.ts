@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -88,22 +88,20 @@ describe("doctor's report of the server secrets (ORC-398)", () => {
     const expected = [{ key: 'secrets_key', reference: 'coffre:factory#key', inClear: false, rotatedAt: old.toISOString(), warnings: [] }];
     expect(await serverSecretReport(h, {}, { now: NOW, kinds: kindsWith({ 'factory#key': old }) })).toEqual(expected);
     // Off the loopback too: declared from a source, unread here, it is there all the same.
-    writeFileSync(join(h, 'config.yaml'), 'host: 0.0.0.0\n');
+    appendFileSync(join(h, 'factory.yml'), 'host: 0.0.0.0\n');
     expect(await serverSecretReport(h, {}, { now: NOW, kinds: kindsWith({ 'factory#key': old }) })).toEqual(expected);
   });
 
-  it('names a GitHub key left in config.yaml though factory.yml reads it from a source', async () => {
-    const h = home(YML);
-    writeFileSync(join(h, 'config.yaml'), 'github: { appId: 1, privateKey: /srv/app.pem }\n');
-    expect((await serverSecretReport(h, ENV, { now: NOW, kinds: kindsWith({}) })).map((r) => r.key)).toContain('github.privateKey');
+  it('never reads a config.yaml left from before factory.yml (ORC-199): neither its GitHub key nor its host', async () => {
+    const h = home('concurrency: 1\n');
+    writeFileSync(join(h, 'config.yaml'), 'host: 0.0.0.0\ngithub: { appId: 1, privateKey: /srv/app.pem }\n');
+    expect(await serverSecretReport(h, {}, { now: NOW })).toEqual([]);
   });
 
-  it('names a GitHub key and a secrets.json kept in clear on disk', async () => {
+  it('names a secrets.json kept in clear on disk', async () => {
     const h = home('concurrency: 1\n');
-    writeFileSync(join(h, 'config.yaml'), 'github: { appId: 1, privateKey: /srv/app.pem }\n');
     saveSecrets(h, { linear: { clientId: 'c', clientSecret: 's', webhookSecret: 'w', accessToken: 'a' } });
     expect(await serverSecretReport(h, {}, { now: NOW })).toEqual([
-      { key: 'github.privateKey', reference: 'config.yaml', inClear: true, warnings: ['in clear on disk: write github.private_key in factory.yml with a sealed source (systemd-creds)'] },
       { key: 'secrets.json', inClear: true, warnings: ['in clear on disk: set secrets_key in factory.yml to encrypt it'] },
     ]);
     saveSecrets(h, {}, 'k'.repeat(32));
@@ -112,12 +110,12 @@ describe("doctor's report of the server secrets (ORC-398)", () => {
 
   it('off the loopback, says a missing secrets_key stops the start, even before secrets.json exists', async () => {
     const h = home('concurrency: 1\n');
-    writeFileSync(join(h, 'config.yaml'), 'host: 0.0.0.0\n');
+    writeFileSync(join(h, 'factory.yml'), 'host: 0.0.0.0\n');
     expect(await serverSecretReport(h, {}, { now: NOW })).toEqual([
       { key: 'secrets_key', inClear: false, warnings: [`missing, the daemon refuses to start (host: 0.0.0.0): ${SECRETS_KEY_REQUIRED}`] },
     ]);
     // On the loopback, it stays optional: nothing to say without secrets.json.
-    writeFileSync(join(h, 'config.yaml'), 'host: 127.0.0.1\n');
+    writeFileSync(join(h, 'factory.yml'), 'host: 127.0.0.1\n');
     expect(await serverSecretReport(h, {}, { now: NOW })).toEqual([]);
   });
 

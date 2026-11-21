@@ -297,7 +297,7 @@ async function report(o: GhostOptions, id: string): Promise<number> {
 /** The daemon's GitHub App, which alone reads the human PRs (ORC-181: no `gh`). */
 async function githubForge(home: string): Promise<GitHubAppForge> {
   const { yml } = await loadSealedFactoryYml(home, process.env, { only: GITHUB_APP_SECRETS });
-  const forge = cliGithubForge(home, yml, 'ghost');
+  const forge = cliGithubForge(yml, 'ghost');
   if (typeof forge === 'string') throw new Error(forge);
   return forge;
 }

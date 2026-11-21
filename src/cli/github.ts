@@ -8,10 +8,10 @@ import { effectiveInstance } from '../config/instance.js';
  * The GitHub App for a command of the CLI (`baseline`, `ghost`), on the daemon's configuration: the only way it reads GitHub
  * (ORC-181, no `gh`). A message for the human without the App, or with an incomplete one.
  */
-export function cliGithubForge(home: string, yml: FactoryYml | undefined, command: string): GitHubAppForge | string {
+export function cliGithubForge(yml: FactoryYml | undefined, command: string): GitHubAppForge | string {
   let githubApp;
   try {
-    githubApp = resolveGithubApp(effectiveInstance(home, yml));
+    githubApp = resolveGithubApp(effectiveInstance(yml));
   } catch (err) {
     return (err as Error).message;
   }

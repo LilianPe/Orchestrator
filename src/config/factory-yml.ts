@@ -13,13 +13,46 @@ import { GITHUB_LOGIN, type DashboardAccess } from '../adapters/forge/github-log
 import type { Effort } from '../presets/preset.js';
 import type { StepSettings } from '../presets/workflow.js';
 
+/** A project (ORC-199, from config.yaml): one local repository and one Linear team, its roles and its kind, in factory.yml's `projects`. */
+export interface ProjectConfig {
+  id: string;
+  repoPath: string;
+  linearTeamKey: string;
+  /**
+   * The roles of a project no source gives (ORC-186), by Linear user id, until `.factory/config.yml` (ORC-209): designated
+   * maintainers (`/refreeze`) and spec validators, and the GitHub login of each Linear user whose rights on the repo count
+   * (Linear gives none the factory can read).
+   */
+  authz?: { maintainers: string[]; validators: string[]; githubLogins: Record<string, string> };
+  /** `none` (ORC-231): nothing of the project leaves the factory, its effects are kept as artifacts of its runs. */
+  effects?: 'none';
+  /** The preset its runs follow (ORC-231): `factory/fantome` replays closed tickets, at the Rapide level, always without effects. */
+  preset?: typeof FANTOME;
+}
+
+/** The preset of the replay of closed tickets (ORC-231), named here without loading the presets: `isFantome` reads `fantome.name`. */
+export const FANTOME = 'factory/fantome';
+
+/** Linear's webhook relay: a smee.io channel on a workstation in the development mode (ORC-444), none on a server. */
+export type Relay = z.infer<typeof relaySchema>;
+
 /**
- * `<FACTORY_HOME>/factory.yml` (ORC-209, part B): the server's configuration, optional, next to `config.yaml`
- * until ORC-199. Every secret is a reference `<source>:<path>`, never kept in the file: the server's are read at its start,
- * `env:NAME` from the environment (ORC-398); a repository's at each `setup` (ORC-308).
- * Read only: the daemon overlays it on what it reads (`effectiveInstance`, `linearSettings`), nothing saves it.
+ * `<FACTORY_HOME>/factory.yml` (ORC-209, part B): the server's configuration, required since ORC-199, which retired
+ * `config.yaml` into its instance keys (`port`, `host`, `public_url`, `dev`, `relay`, `projects`, `knowledge`). Every secret is
+ * a reference `<source>:<path>`, never kept in the file: the server's are read at its start, `env:NAME` from the environment
+ * (ORC-398); a repository's at each `setup` (ORC-308).
+ * The daemon only reads it; `factory init` writes its instance keys alone (`saveInstance`), the rest of the file kept.
  */
 export interface FactoryYml {
+  /** The instance (ORC-199): `effectiveInstance` gives each its default. */
+  port?: number;
+  host?: string;
+  publicUrl?: string;
+  /** The development mode (ORC-444), written by `factory init --dev` alone: the daemon starts the Smee relay only in it. */
+  dev?: boolean;
+  relay?: Relay;
+  projects?: ProjectConfig[];
+  knowledge?: { repoPath: string };
   linear?: { clientId?: string; clientSecret?: string; webhookSecret?: string };
   /** `clientId` and `clientSecret`: the App's OAuth client, for the dashboard's GitHub sign-in (ORC-399). */
   github?: { appId: string; privateKey: string; installationId?: string; webhookSecret?: string; clientId?: string; clientSecret?: string };
@@ -46,7 +79,7 @@ export interface FactoryYml {
   /** `off` disables the baseline of `factory/taille-du-diff` (ORC-381): only a repository's own `max_diff` bounds its diffs. */
   maxDiff?: 'off';
   /**
-   * `projects[].repoPath` of config.yaml stays the working copy until the runner clones (ORC-204). `env` holds the values of
+   * `projects[].repo_path` stays the working copy until the runner clones (ORC-204). `env` holds the values of
    * what the repository's `.factory/config.yml` declares (ORC-211); `secrets` their references, read at the setup (ORC-308).
    */
   repos?: { linearTeam: string; github: string; env?: Record<string, string>; secrets?: Record<string, SecretRef> }[];
@@ -230,6 +263,13 @@ export class FactoryYmlError extends Error {
 }
 
 const SECTIONS: Record<string, string[]> = {
+  port: [],
+  host: [],
+  public_url: [],
+  dev: [],
+  relay: [],
+  projects: [],
+  knowledge: [],
   linear: ['app_client_id', 'client_secret', 'webhook_secret'],
   github: ['app_id', 'private_key', 'installation_id', 'webhook_secret', 'client_id', 'client_secret'],
   dashboard: ['logins', 'org', 'team'],
@@ -249,6 +289,23 @@ const SECTIONS: Record<string, string[]> = {
   statuses: [],
   spec: ['publish', 'threshold'],
 };
+/** The instance keys (ORC-199): what `loadInstance` reads and `saveInstance` writes, without the rest of the file. */
+const INSTANCE_KEYS = ['port', 'host', 'public_url', 'dev', 'relay', 'projects', 'knowledge'];
+const projectSchema = z.strictObject({
+  id: z.string().min(1),
+  repo_path: z.string().min(1),
+  linear_team_key: z.string().min(1),
+  authz: z
+    .strictObject({
+      maintainers: z.array(z.string().min(1)).default([]),
+      validators: z.array(z.string().min(1)).default([]),
+      github_logins: z.record(z.string().min(1), z.string().min(1)).default({}),
+    })
+    .optional(),
+  effects: z.literal('none').optional(),
+  preset: z.literal(FANTOME).optional(),
+});
+const relaySchema = z.discriminatedUnion('kind', [z.strictObject({ kind: z.literal('smee'), url: z.string().url() }), z.strictObject({ kind: z.literal('none') })]);
 const effort = z.enum(['low', 'medium', 'high']);
 const counts = z.record(z.string(), z.number().int().positive());
 const REPO = /^[\w.-]+\/[\w.-]+$/;
@@ -259,6 +316,11 @@ const GITHUB_TEAM = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[\w.-]+$/;
 export function loadFactoryYml(home: string, env: NodeJS.ProcessEnv = process.env): FactoryYml | undefined {
   const text = factoryYmlText(home);
   return text === undefined ? undefined : parseFactoryYml(text, env);
+}
+
+/** The instance keys of a factory.yml's text alone (ORC-199), validated as the daemon validates them, its `env:` secrets left unresolved. */
+export function parseInstanceKeys(text: string): FactoryYml {
+  return parseSection(text, INSTANCE_KEYS) ?? {};
 }
 
 /**
@@ -330,6 +392,38 @@ export function parseFactoryYml(
     if (!res.success) violations.push(`${path}: ${expected}`);
     return res.success ? res.data : undefined;
   };
+
+  /** A value of a nested shape: each fault named by its own path (`projects[0].repo_path`). */
+  const shaped = <T>(path: string, v: unknown, schema: z.ZodType<T>): T | undefined => {
+    if (v === undefined || v === null) return undefined;
+    const res = schema.safeParse(v);
+    if (res.success) return res.data;
+    for (const i of res.error.issues) violations.push(`${path}${i.path.map((k) => (typeof k === 'number' ? `[${k}]` : `.${String(k)}`)).join('')}: ${i.message}`);
+    return undefined;
+  };
+
+  // The instance (ORC-199), in config.yaml before.
+  const port = leaf('port', r['port'], z.number().int().positive(), 'a positive integer is expected');
+  if (port !== undefined) out.port = port;
+  const host = leaf('host', r['host'], z.string().min(1), 'a non-empty text is expected');
+  if (host !== undefined) out.host = host;
+  const publicUrl = leaf('public_url', r['public_url'], z.string().url(), 'a URL is expected');
+  if (publicUrl !== undefined) out.publicUrl = publicUrl;
+  const dev = leaf('dev', r['dev'], z.boolean(), '`true` or `false` expected');
+  if (dev !== undefined) out.dev = dev;
+  const relay = shaped('relay', r['relay'], relaySchema);
+  if (relay) out.relay = relay;
+  const projects = shaped('projects', r['projects'], z.array(projectSchema));
+  if (projects) {
+    out.projects = projects.map(({ repo_path, linear_team_key, authz, ...p }) => ({
+      ...p,
+      repoPath: repo_path,
+      linearTeamKey: linear_team_key,
+      ...(authz ? { authz: { maintainers: authz.maintainers, validators: authz.validators, githubLogins: authz.github_logins } } : {}),
+    }));
+  }
+  const knowledge = shaped('knowledge', r['knowledge'], z.strictObject({ repo_path: z.string().min(1) }));
+  if (knowledge) out.knowledge = { repoPath: knowledge.repo_path };
 
   const secretRefs: Record<string, SecretRef> = {};
   /** An `env:NAME` secret, resolved now as before ORC-398, its reference kept for `doctor` and the masking. */

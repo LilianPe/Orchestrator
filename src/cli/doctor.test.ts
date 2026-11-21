@@ -1,5 +1,5 @@
 import { generateKeyPairSync } from 'node:crypto';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -13,7 +13,7 @@ import { GITHUB_APP_PERMISSIONS } from './init.js';
 import { startFactory } from '../app/bootstrap.js';
 import { MemoryStore } from '../store/memory-store.js';
 import { OLD_DATABASES, oldDatabaseWarnings } from '../store/old-databases.js';
-import { saveInstance, type InstanceConfig } from '../config/instance.js';
+import { oldInstanceFileWarnings, saveInstance, type InstanceConfig } from '../config/instance.js';
 
 interface FakeOptions {
   failWorkflows?: boolean;
@@ -131,9 +131,11 @@ const protectedEnvironment: EnvironmentProtection = { name: 'ci-protected', requ
 
 const tempDirs: string[] = [];
 
+/** A home with its factory.yml, empty: without one, doctor refuses as the start does (ORC-199). */
 function tempHome(): string {
   const dir = mkdtempSync(join(tmpdir(), 'factory-doctor-'));
   tempDirs.push(dir);
+  writeFileSync(join(dir, 'factory.yml'), '');
   return dir;
 }
 
@@ -453,10 +455,7 @@ jobs:
     const home = tempHome();
     const pemPath = join(home, 'github-app.pem');
     writeFileSync(pemPath, privatePem);
-    writeFileSync(
-      join(home, 'config.yaml'),
-      `github:\n  appId: "123"\n  privateKey: ${JSON.stringify(pemPath)}\n  installationId: "42"\n`,
-    );
+    writeFileSync(join(home, 'factory.yml'), 'github:\n  app_id: "123"\n  private_key: env:GH_APP_KEY\n  installation_id: "42"\n');
 
     const now = Date.parse('2026-10-22T10:00:00Z');
     const ci = 'on: pull_request\npermissions: read-all\njobs:\n  test:\n    steps:\n      - run: npm test\n';
@@ -505,7 +504,7 @@ jobs:
     const code = await runDoctorCommand({
       repoPath: '/repo',
       home,
-      env: { FACTORY_CONTAINER_CLI: 'docker', ...RUNNER },
+      env: { FACTORY_CONTAINER_CLI: 'docker', ...RUNNER, GH_APP_KEY: pemPath },
       out: (line) => lines.push(line),
       http,
       exec,
@@ -519,10 +518,10 @@ jobs:
     // No `.factory/config.yml` on the default branch: no `commands.test` either (ORC-412).
     expect(lines).toContain(MISSING_TEST_COMMAND);
     expect(gitCalls.some((a) => a.includes('fetch'))).toBe(false);
-    // The App's key in a file config.yaml names (ORC-398): said after the visual proof, never part of the verdict.
+    // The App's key in the daemon's environment (ORC-398): said after the visual proof, never part of the verdict.
     expect(lines.slice(1, 3)).toEqual([
       'Server secrets:',
-      '  github.privateKey (config.yaml): in clear — warning: in clear on disk: write github.private_key in factory.yml with a sealed source (systemd-creds)',
+      "  github.private_key (env:GH_APP_KEY): in clear — warning: in clear in the daemon's environment: a sealed source (systemd-creds) keeps it off the disk",
     ]);
   });
 
@@ -782,8 +781,7 @@ jobs:
   describe("the statuses factory.yml names that the Linear team lacks (ORC-382)", () => {
     const homeWith = (yml = '') => {
       const home = tempHome();
-      writeFileSync(join(home, 'config.yaml'), 'projects:\n  - id: app\n    repoPath: /repo\n    linearTeamKey: APP\n');
-      if (yml) writeFileSync(join(home, 'factory.yml'), yml);
+      writeFileSync(join(home, 'factory.yml'), `projects:\n  - id: app\n    repo_path: /repo\n    linear_team_key: APP\n${yml}`);
       return home;
     };
     const ORC_170 = ['Todo', 'In Progress', 'AI Review', 'Human Review', 'Done', 'Canceled'];
@@ -831,7 +829,7 @@ jobs:
       const home = tempHome();
       const authz = validators ? `\n    authz:\n      validators: ${JSON.stringify(validators)}` : '';
       const ghost = preset ? `\n    preset: ${preset}` : '';
-      writeFileSync(join(home, 'config.yaml'), `projects:\n  - id: app\n    repoPath: /repo\n    linearTeamKey: APP${authz}${ghost}\n`);
+      writeFileSync(join(home, 'factory.yml'), `projects:\n  - id: app\n    repo_path: /repo\n    linear_team_key: APP${authz}${ghost}\n`);
       return home;
     };
     const cli = async (home: string, repoPath = '/repo') => {
@@ -845,7 +843,7 @@ jobs:
       const lines = await cli(homeWith());
       const none = lines.filter((l) => l.includes('authz.validators'));
       expect(none).toHaveLength(1);
-      expect(none[0]).toMatch(/^Warning: app: no spec validator \(authz\.validators in config\.yaml\)/);
+      expect(none[0]).toMatch(/^Warning: app: no spec validator \(authz\.validators in factory\.yml\)/);
       expect(lines.indexOf(none[0]!)).toBeLessThan(lines.findIndex((l) => l.includes('GitHub App not configured')));
       expect(await warned(homeWith({ validators: [] }))).toEqual(none);
     });
@@ -853,7 +851,7 @@ jobs:
     it('warns of a lone validator, who cannot approve the tickets they delegate, one id twice counting once', async () => {
       const lone = await warned(homeWith({ validators: ['u-1'] }));
       expect(lone).toHaveLength(1);
-      expect(lone[0]).toMatch(/^Warning: app: one spec validator \(authz\.validators in config\.yaml\)/);
+      expect(lone[0]).toMatch(/^Warning: app: one spec validator \(authz\.validators in factory\.yml\)/);
       expect(await warned(homeWith({ validators: ['u-1', 'u-1'] }))).toEqual(lone);
     });
 
@@ -883,7 +881,7 @@ jobs:
   describe('the Smee relay outside the development mode (ORC-446)', () => {
     const homeWith = (extra: string) => {
       const home = tempHome();
-      writeFileSync(join(home, 'config.yaml'), `relay:\n  kind: smee\n  url: https://smee.io/abc\n${extra}projects:\n  - id: app\n    repoPath: /repo\n    linearTeamKey: APP\n`);
+      writeFileSync(join(home, 'factory.yml'), `relay:\n  kind: smee\n  url: https://smee.io/abc\n${extra}projects:\n  - id: app\n    repo_path: /repo\n    linear_team_key: APP\n`);
       return home;
     };
     const cli = async (home: string, json = false) => {
@@ -901,14 +899,14 @@ jobs:
     it('criterion 1: fails with dev: false, as factory up does, exit 1', async () => {
       const { code, lines, relay } = await cli(homeWith('dev: false\n'));
       expect(code).toBe(1);
-      expect(relay).toEqual([expect.stringMatching(/dev: false.*publicUrl.*factory init --dev/)]);
+      expect(relay).toEqual([expect.stringMatching(/dev: false.*public_url.*factory init --dev/)]);
       expect(lines.join('\n')).not.toContain('GitHub App not configured');
     });
 
-    it('criterion 2: fails with a publicUrl in the development mode, exit 1', async () => {
-      const { code, relay } = await cli(homeWith('dev: true\npublicUrl: https://f.example.com\n'));
+    it('criterion 2: fails with a public_url in the development mode, exit 1', async () => {
+      const { code, relay } = await cli(homeWith('dev: true\npublic_url: https://f.example.com\n'));
       expect(code).toBe(1);
-      expect(relay).toEqual([expect.stringMatching(/publicUrl: https:\/\/f\.example\.com.*relay: \{ kind: none \}/)]);
+      expect(relay).toEqual([expect.stringMatching(/public_url: https:\/\/f\.example\.com.*relay: \{ kind: none \}/)]);
     });
 
     it('says nothing in the development mode', async () => {
@@ -932,7 +930,7 @@ jobs:
 describe('an old SQLite database in FACTORY_HOME (ORC-463)', () => {
   const homeWithOldDatabases = () => {
     const home = tempHome();
-    saveInstance(home, { port: 4160, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    saveInstance(home, { port: 4160, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
     // Not a SQLite file: a doctor that opened one would fail on it.
     for (const name of OLD_DATABASES) writeFileSync(join(home, name), 'not a database');
     return home;
@@ -958,23 +956,40 @@ describe('an old SQLite database in FACTORY_HOME (ORC-463)', () => {
   });
 });
 
+// ORC-199: a file of the instance from before factory.yml, named by doctor as the start names it, never read.
+describe('a config.yaml left in FACTORY_HOME (ORC-199)', () => {
+  it("warns with the start's message, in text and in the JSON report", async () => {
+    const home = tempHome();
+    writeFileSync(join(home, 'config.yaml'), 'port: nope\n');
+    const warned = oldInstanceFileWarnings(home);
+    expect(warned).toEqual([expect.stringMatching(/^config\.yaml: left from before factory\.yml, not read/)]);
+    const lines: string[] = [];
+    expect(await runDoctorCommand({ repoPath: '/repo', home, env: {}, out: (line) => lines.push(line) })).toBe(1);
+    expect(lines).toContain(warned[0]);
+    const json: string[] = [];
+    await runDoctorCommand({ repoPath: '/repo', home, env: {}, json: true, out: (line) => json.push(line) });
+    expect(JSON.parse(json[0]!)).toMatchObject({ error: expect.stringContaining('GitHub App not configured'), startWarnings: warned });
+  });
+});
+
 // ORC-448: every refusal of the daemon's start that its configuration decides, said by doctor, which fails with the same message.
 describe("the daemon's start refusals, each one doctor's", () => {
-  const local: InstanceConfig = { port: 4160, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} };
+  const local: InstanceConfig = { port: 4160, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] };
   const exposed: InstanceConfig = { ...local, host: '0.0.0.0', publicUrl: 'https://factory.example' };
   const smee = { kind: 'smee' as const, url: 'https://smee.io/abc' };
   const client = { GH_APP_CLIENT_ID: 'Iv1.client', GH_APP_CLIENT_SECRET: 'client-secret' };
   const signIn = 'dashboard: { logins: [armand] }\n';
   interface Refusal {
     instance?: InstanceConfig;
-    configYaml?: string;
+    noFactoryYml?: boolean;
     factoryYml?: string;
     env?: NodeJS.ProcessEnv;
     /** What identifies the refusal in the start's message: the start refuses for this reason, not another. */
     reason: RegExp;
   }
   const refusals: Record<string, Refusal> = {
-    'an invalid config.yaml': { configYaml: 'port: nope\n', reason: /^invalid config\.yaml: port/ },
+    'no factory.yml': { noFactoryYml: true, reason: /^no factory\.yml in FACTORY_HOME: .*never config\.yaml \(ORC-199\)/ },
+    'an invalid instance key in factory.yml': { factoryYml: 'knowledge: nope\n', reason: /^invalid factory\.yml:\n- knowledge: / },
     'an invalid factory.yml': { factoryYml: 'github: { app_id: 456, private_key: env:GH_APP_KEY }\n', reason: /github\.private_key: the environment variable GH_APP_KEY/ },
     'a GitHub App secret its source cannot read': {
       factoryYml: 'secret_sources: { creds: { kind: systemd-creds } }\ngithub: { app_id: 456, private_key: creds:github-key }\n',
@@ -983,10 +998,10 @@ describe("the daemon's start refusals, each one doctor's", () => {
     'half the OAuth client': { env: { GH_APP_CLIENT_ID: 'Iv1.client' }, reason: /^Incomplete GitHub sign-in/ },
     'exposed without the OAuth client': { instance: exposed, reason: /^host: 0\.0\.0\.0 exposes .*github\.client_id/ },
     'exposed without who may sign in': { instance: exposed, env: client, reason: /^host: 0\.0\.0\.0 exposes .*dashboard: \{ logins, org, team \}/ },
-    'exposed without an HTTPS publicUrl': { instance: { ...exposed, publicUrl: 'http://factory.example' }, factoryYml: signIn, env: client, reason: /^host: 0\.0\.0\.0 exposes .*set publicUrl to its https:\/\/ address/ },
+    'exposed without an HTTPS publicUrl': { instance: { ...exposed, publicUrl: 'http://factory.example' }, factoryYml: signIn, env: client, reason: /^host: 0\.0\.0\.0 exposes .*set public_url to its https:\/\/ address/ },
     'exposed without secrets_key': { instance: exposed, factoryYml: signIn, env: client, reason: /^host: 0\.0\.0\.0 exposes .*: set secrets_key in factory\.yml/ },
     'the Smee relay with dev: false': { instance: { ...local, relay: smee, dev: false }, reason: /^relay: \{ kind: smee \}.*\(dev: false\)/ },
-    'the Smee relay beside a publicUrl in the development mode': { instance: { ...local, relay: smee, dev: true, publicUrl: 'https://f.example.com' }, reason: /^relay: \{ kind: smee \} in config\.yaml beside publicUrl/ },
+    'the Smee relay beside a publicUrl in the development mode': { instance: { ...local, relay: smee, dev: true, publicUrl: 'https://f.example.com' }, reason: /^relay: \{ kind: smee \} in factory\.yml beside public_url/ },
     'half the GitHub App': { env: { GH_APP_ID: '456' }, reason: /^Incomplete GitHub App configuration/ },
     'a status no step shows': { factoryYml: 'statuses: { nope: Todo }\n', reason: /^factory\.yml: statuses\.nope: is not a step/ },
     'a step setting of no agent step': { factoryYml: 'budgets: { max_turns: { nope: 3 } }\n', reason: /^factory\.yml: budgets\.max_turns\.nope: not an agent step/ },
@@ -996,9 +1011,9 @@ describe("the daemon's start refusals, each one doctor's", () => {
   it('fails doctor with the message the start refuses with, exit 1, for each refusal', async () => {
     for (const [name, r] of Object.entries(refusals)) {
       const home = tempHome();
-      if (r.configYaml !== undefined) writeFileSync(join(home, 'config.yaml'), r.configYaml);
+      if (r.noFactoryYml) rmSync(join(home, 'factory.yml'));
       else saveInstance(home, r.instance ?? local);
-      if (r.factoryYml !== undefined) writeFileSync(join(home, 'factory.yml'), r.factoryYml);
+      if (r.factoryYml !== undefined) appendFileSync(join(home, 'factory.yml'), r.factoryYml);
       const env = r.env ?? {};
       // On a MemoryStore: the refusal said, not the missing FACTORY_DATABASE_URL (ORC-178).
       const started = await startFactory({ home, fakeRunner: true, log: () => {}, env, store: new MemoryStore() }).then(
@@ -1019,12 +1034,12 @@ describe("the daemon's start refusals, each one doctor's", () => {
     const home = tempHome();
     saveInstance(home, exposed);
     const claude = 'claude: { runtime: claude-code, default_model: claude-opus-5-5, active: main, accounts: [{ name: main, token: creds:claude }] }\n';
-    writeFileSync(join(home, 'factory.yml'), `secret_sources: { creds: { kind: systemd-creds } }\nsecrets_key: creds:secrets-key\n${claude}${signIn}`);
+    appendFileSync(join(home, 'factory.yml'), `secret_sources: { creds: { kind: systemd-creds } }\nsecrets_key: creds:secrets-key\n${claude}${signIn}`);
     const lines: string[] = [];
     // The daemon would take the active account's token, never this one.
     await runDoctorCommand({ repoPath: '/repo', home, env: { ...client, CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-x\r\nX-Injected: 1' }, out: (line) => lines.push(line) });
     expect(lines.filter((l) => l.startsWith('host: 0.0.0.0') || l.startsWith('CLAUDE_CODE_OAUTH_TOKEN'))).toEqual([]);
-    expect(lines).toContain('GitHub App not configured: `factory doctor` needs github.appId and github.privateKey (or GH_APP_ID and GH_APP_KEY) to read the workflows and the environments.');
+    expect(lines).toContain('GitHub App not configured: `factory doctor` needs github.app_id and github.private_key in factory.yml (or GH_APP_ID and GH_APP_KEY) to read the workflows and the environments.');
   });
 });
 
@@ -1032,7 +1047,7 @@ describe("the daemon's start refusals, each one doctor's", () => {
 describe("the daemon's environment the start refuses, doctor's host refuses", () => {
   const started = async (env: NodeJS.ProcessEnv): Promise<string> => {
     const home = tempHome();
-    saveInstance(home, { port: 4160, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    saveInstance(home, { port: 4160, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
     return startFactory({ home, log: () => {}, env }).then(
       async (app) => {
         await app.stop();
@@ -1097,17 +1112,17 @@ describe("the daemon's environment the start refuses, doctor's host refuses", ()
 describe('doctor --json on a refusal of the instance configuration (ORC-449)', () => {
   it('stays JSON, the refusal under error', async () => {
     const home = tempHome();
-    writeFileSync(join(home, 'config.yaml'), 'port: nope\n');
+    writeFileSync(join(home, 'factory.yml'), 'port: nope\n');
     const lines: string[] = [];
     const code = await runDoctorCommand({ repoPath: '/repo', home, env: {}, json: true, out: (line) => lines.push(line) });
     expect(code).toBe(1);
     expect(lines).toHaveLength(1);
-    expect(JSON.parse(lines[0]!)).toMatchObject({ repoPath: '/repo', accepted: false, error: expect.stringMatching(/^invalid config\.yaml: port/), visualProof: { available: false } });
+    expect(JSON.parse(lines[0]!)).toMatchObject({ repoPath: '/repo', accepted: false, error: expect.stringMatching(/^invalid factory\.yml:\n- port/), visualProof: { available: false } });
   });
 
   it('keeps the warnings said before the refusal, as the text says them', async () => {
     const home = tempHome();
-    saveInstance(home, { port: 4160, host: '127.0.0.1', relay: { kind: 'smee', url: 'https://smee.io/abc' }, projects: [], limits: {} });
+    saveInstance(home, { port: 4160, host: '127.0.0.1', relay: { kind: 'smee', url: 'https://smee.io/abc' }, projects: [] });
     const lines: string[] = [];
     expect(await runDoctorCommand({ repoPath: '/repo', home, env: { GH_APP_ID: '456' }, json: true, out: (line) => lines.push(line) })).toBe(1);
     expect(JSON.parse(lines.join('\n'))).toMatchObject({ error: expect.stringMatching(/^Incomplete GitHub App configuration/), startWarnings: [expect.stringContaining('smee')] });

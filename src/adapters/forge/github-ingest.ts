@@ -70,7 +70,7 @@ export function githubMapContext(d: {
 }
 
 export interface GithubIngestDeps {
-  /** `github.webhookSecret` of config.yaml, or `GH_WEBHOOK_SECRET`; empty refuses every webhook. */
+  /** `github.webhook_secret` of factory.yml, or `GH_WEBHOOK_SECRET`; empty refuses every webhook. */
   secret: () => string;
   ctx: GithubMapContext;
   /** Writes an event to the inbox (ORC-147); resolves once committed, `false` for an id already there. */

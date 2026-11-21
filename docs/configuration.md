@@ -4,12 +4,13 @@ The factory is configured at these levels:
 
 | Level | File | Scope | Doc |
 |---|---|---|---|
-| Instance | `<FACTORY_HOME>/config.yaml` | The daemon: port, host, projects, webhook relay, knowledge base. | this page |
-| Secrets | `<FACTORY_HOME>/secrets.json` | Linear credentials. | this page |
-| Server | `<FACTORY_HOME>/factory.yml` | Secrets as references, the GitHub App, Claude accounts, budgets, tools, repositories' variables and secrets (ORC-209). | [below](#factoryyml-orc-209) |
+| Server | `<FACTORY_HOME>/factory.yml`, **required** | The instance (port, host, public URL, projects, webhook relay, knowledge base, ORC-199), secrets as references, the GitHub App, Claude accounts, budgets, tools, repositories' variables and secrets (ORC-209). | [instance](#the-instance-in-factoryyml-orc-199), [the rest](#factoryyml-orc-209) |
+| Secrets | `<FACTORY_HOME>/secrets.json` | Linear's OAuth tokens, which the daemon writes itself, encrypted at rest with `secrets_key` (ORC-398); the Linear credentials `factory init` asks. | this page |
 | Project | `.factory/config.yml` in each repository, read on its default branch | Its setup, its checks, its sensitive paths and limits; it can only tighten the preset. A `.factory/workflow.yml` is ignored since ORC-388: the workflow is the `factory/default` preset ([`preset.md`](preset.md)). | [`repository-configuration.md`](repository-configuration.md) |
 
 The instance files are read **at startup** of `factory up`: restart after a change (but `claude.active` of `factory.yml`, ORC-215).
+
+**`config.yaml` is retired (ORC-199).** Its keys are in `factory.yml`, under their snake_case names: `port`, `host`, `public_url`, `relay`, `dev`, `projects` (`repo_path`, `linear_team_key`, `authz.github_logins`…), `knowledge.repo_path`, and the GitHub App under `github`, its key a reference. Nothing is migrated: write `factory.yml` (or run `factory init`) and delete the old file. The daemon never reads `config.yaml`; without `factory.yml` it refuses to start (`no factory.yml in FACTORY_HOME: … never config.yaml (ORC-199)`), and `factory doctor` refuses alike. A `config.yaml`, a `run-settings.json` or a `logs/` folder left in `FACTORY_HOME` is never read: the start and `factory doctor` name each one to delete, like an old SQLite database (ORC-178). The factory no longer creates `logs/`.
 
 ## Environment variables
 
@@ -48,21 +49,21 @@ Variables reserved for tests (no effect on the daemon): `LINEAR_API_KEY` (live t
 
 Variables **set by the factory** in each run's environment (do not set them yourself): `FACTORY_API` and `FACTORY_RUN_TOKEN` (the factory MCP's address and credential), `FACTORY_TICKET`, `FACTORY_REFUSALS_LOG` when the daemon has it (in a sandbox, always, pointing to the run's directory), `FACTORY_READ_MAX_LINES` when `factory.yml` declares `read_guard.max_lines`, `FACTORY_FULL_READ_PATHS` when a file must be read in full, `FACTORY_TOOLS` with the run's built-in tools (the hook refuses any other, ORC-383) and, for a run in the ticket's worktree, `PORT`. See ["What does not leave the daemon"](#what-does-not-leave-the-daemon). In a container, these paths are the container's, and its `PATH` is its image's, never the host's. Of the factory's install, only the pack (`/factory/pack`) and the run settings (`/factory/settings.json`) are mounted in a sandbox, read-only; nothing is put on its `PATH` since the agent's CLI is gone (ORC-192).
 
-## `config.yaml`
+## The instance in `factory.yml` (ORC-199)
 
-Written by `factory init`, editable by hand. Missing file = all default values. An invalid field prevents startup with `invalid config.yaml: <field>: <message>`.
+Written by `factory init` (`projects`, `relay`, `dev`, when their value changed; the rest of the file, and the comments of what did not change, kept as they are), editable by hand. Missing key = its default value. An invalid key prevents startup with `invalid factory.yml:` followed by the path of each offending key (`projects[0].repo_path: …`); an unknown key is refused, `limits` included (empty since ORC-216).
 
 | Key | Type | Default | Effect |
 |---|---|---|---|
 | `port` | integer > 0 | `4100` | HTTP server port (UI, API, webhooks, OAuth). Also the port the CLI queries (`http://127.0.0.1:<port>`). |
-| `host` | text | `127.0.0.1` | Listen address. Any value other than loopback (`localhost`, `127.x.x.x`, `::1`) puts the interface behind a GitHub sign-in (ORC-399): it requires the App's OAuth client, `dashboard` in `factory.yml`, an `https://` `publicUrl` and `secrets_key` (ORC-398), see [`interface-and-security.md`](interface-and-security.md#network-exposure-and-github-sign-in). In Docker: `0.0.0.0`. |
-| `publicUrl` | URL | — | Public HTTPS URL of the factory: the server's domain, behind its reverse proxy ([`deployment.md`](deployment.md#tls-and-webhooks)), or a development tunnel. If set, it is used as the base for the OAuth callback URL (`<publicUrl>/oauth/callback`) and the webhook URL (`<publicUrl>/webhooks/linear`), and `factory init --dev` does not create a smee channel. Without it: `http://localhost:<port>`. |
-| `relay` | `{ kind: smee, url: <URL> }` or `{ kind: none }` | `{ kind: none }` | Linear webhook relay, for a workstation only: `none` on the server. `factory init --dev` creates a smee.io channel when there is neither `publicUrl` nor a relay; without `--dev`, `init` creates none (ORC-411). The daemon starts it with `dev: true`, refuses it with `dev: false` or with `dev: true` beside a `publicUrl`, and warns without the key (ORC-444, ORC-446, see `dev`); `factory doctor` says the same. See [`linear.md`](linear.md#3-webhooks-production-and-development). |
-| `dev` | boolean | — | The development mode (ORC-444), written `true` by `factory init --dev` alone, beside a `smee` relay: the daemon starts a `smee` relay only in it. `dev: false` with a `smee` relay refuses the start, naming `publicUrl` and `factory init --dev`; `dev: true` with a `smee` relay and a `publicUrl` refuses it too, naming `relay: { kind: none }`: a `publicUrl`, a server's or a tunnel's, brings Linear's webhooks already (ORC-446). A `config.yaml` without the key, written before it, starts with a warning to run `factory init --dev` again. `factory doctor` warns and refuses as the start does (ORC-446). |
-| `projects` | list of `{ id, repoPath, linearTeamKey, authz?, effects?, preset? }` | `[]` | One project = one local repository + one Linear team. See [`projects-and-workspaces.md`](projects-and-workspaces.md). `authz`: see [Authorization](#authorization). `effects: none`: nothing of the project leaves the factory, its effects kept as artifacts; `preset: factory/fantome`: the replay of closed tickets, always without effects, whose tickets only the daemon delegates, never Linear (ORC-231, ORC-376, [ghost-replay.md](ghost-replay.md)). |
-| `limits` | `{}` | `{}` | Empty since ORC-216: the daily budget in dollars (`perDayUsd`) is gone, a file that still has it loads without it, and nothing counts a day in dollars, not even for display (ORC-194). Budgets count tokens and turns: `budgets` of `factory.yml`. |
-| `knowledge.repoPath` | path | — | Local clone of the knowledge base repository. Read only, by the server: pulled at each launch, its index in the session's system prompt, its notes searched by the factory MCP's `kb_search` (ORC-232); no job writes to it (ORC-193); the factory itself commits there the start recipes it validated, `notes/preview/`, and pushes them (ORC-386, [preset.md](preset.md#jobs)). Absent: no index, and `kb_search` says there is no knowledge base. |
-| `github` | `{ appId, privateKey, installationId?, webhookSecret? }` | — | The daemon's GitHub App. Absent: the factory reads and publishes nothing on GitHub (ORC-181). See [GitHub App](#github-app). |
+| `host` | text | `127.0.0.1` | Listen address. Any value other than loopback (`localhost`, `127.x.x.x`, `::1`) puts the interface behind a GitHub sign-in (ORC-399): it requires the App's OAuth client, `dashboard`, an `https://` `public_url` and `secrets_key` (ORC-398), see [`interface-and-security.md`](interface-and-security.md#network-exposure-and-github-sign-in). In Docker: `0.0.0.0`. |
+| `public_url` | URL | — | Public HTTPS URL of the factory: the server's domain, behind its reverse proxy ([`deployment.md`](deployment.md#tls-and-webhooks)), or a development tunnel. If set, it is used as the base for the OAuth callback URL (`<public_url>/oauth/callback`) and the webhook URL (`<public_url>/webhooks/linear`), and `factory init --dev` does not create a smee channel. Without it: `http://localhost:<port>`. |
+| `relay` | `{ kind: smee, url: <URL> }` or `{ kind: none }` | `{ kind: none }` | Linear webhook relay, for a workstation only: `none` on the server. `factory init --dev` creates a smee.io channel when there is neither `public_url` nor a relay; without `--dev`, `init` creates none (ORC-411). The daemon starts it with `dev: true`, refuses it with `dev: false` or with `dev: true` beside a `public_url`, and warns without the key (ORC-444, ORC-446, see `dev`); `factory doctor` says the same. See [`linear.md`](linear.md#3-webhooks-production-and-development). |
+| `dev` | boolean | — | The development mode (ORC-444), written `true` by `factory init --dev` alone, beside a `smee` relay: the daemon starts a `smee` relay only in it. `dev: false` with a `smee` relay refuses the start, naming `public_url` and `factory init --dev`; `dev: true` with a `smee` relay and a `public_url` refuses it too, naming `relay: { kind: none }`: a `public_url`, a server's or a tunnel's, brings Linear's webhooks already (ORC-446). A `smee` relay without the key starts with a warning to run `factory init --dev` again. `factory doctor` warns and refuses as the start does (ORC-446). |
+| `projects` | list of `{ id, repo_path, linear_team_key, authz?, effects?, preset? }` | `[]` | One project = one local repository + one Linear team. See [`projects-and-workspaces.md`](projects-and-workspaces.md). `authz`: see [Authorization](#authorization). `effects: none`: nothing of the project leaves the factory, its effects kept as artifacts; `preset: factory/fantome`: the replay of closed tickets, always without effects, whose tickets only the daemon delegates, never Linear (ORC-231, ORC-376, [ghost-replay.md](ghost-replay.md)). |
+| `knowledge.repo_path` | path | — | Local clone of the knowledge base repository. Read only, by the server: pulled at each launch, its index in the session's system prompt, its notes searched by the factory MCP's `kb_search` (ORC-232); no job writes to it (ORC-193); the factory itself commits there the start recipes it validated, `notes/preview/`, and pushes them (ORC-386, [preset.md](preset.md#jobs)). Absent: no index, and `kb_search` says there is no knowledge base. |
+
+The daemon's GitHub App is factory.yml's `github` section ([below](#github-app)). The budgets in dollars are gone (ORC-216, ORC-194): budgets count tokens and turns, `budgets` of `factory.yml`.
 
 Example:
 
@@ -75,49 +76,49 @@ relay:
   url: https://smee.io/AbCdEf123 # the workstation relay's channel (factory init --dev)
 projects:
   - id: mon-app
-    repoPath: /home/moi/code/mon-app
-    linearTeamKey: APP
+    repo_path: /home/moi/code/mon-app
+    linear_team_key: APP
     authz: # optional, see "Authorization"
       maintainers: [6f1c2e0a-0000-4000-8000-000000000001]
       validators: [6f1c2e0a-0000-4000-8000-000000000002]
-      githubLogins:
+      github_logins:
         6f1c2e0a-0000-4000-8000-000000000001: lilian-gh
         6f1c2e0a-0000-4000-8000-000000000002: armand-gh
 knowledge:
-  repoPath: /home/moi/.factory/knowledge
+  repo_path: /home/moi/.factory/knowledge
 github:
-  appId: "123456"
-  privateKey: /home/moi/.factory/github-app.pem
-  installationId: "987654" # optional
+  app_id: "123456"
+  private_key: env:GH_APP_KEY  # the PEM, or the path of the .pem file
+  installation_id: "987654"    # optional
 ```
 
 ### GitHub App
 
-The `github` section configures the **daemon**'s identity on GitHub. It is optional, but without it the factory reads no PR, publishes nothing and merges nothing: it has no other way to GitHub since ORC-181 ( [`github.md`](github.md#without-a-github-app)).
+The `github` section of `factory.yml` configures the **daemon**'s identity on GitHub. It is optional, but without it the factory reads no PR, publishes nothing and merges nothing: it has no other way to GitHub since ORC-181 ( [`github.md`](github.md#without-a-github-app)). Its secrets are references (`env:NAME`, or a source of [Server secrets](#server-secrets-orc-398)).
 
 | Key | Type | Default | Effect |
 |---|---|---|---|
-| `github.appId` | text or integer | — | App ID of the GitHub App. |
-| `github.privateKey` | text | — | PEM private key **inline**, or path to a `.pem` file (recommended, mode `0600`). |
-| `github.installationId` | text or integer | discovered per repository | Installation to use. Absent: the daemon calls `GET /repos/{owner}/{repo}/installation`. |
-| `github.webhookSecret` | text | `GH_WEBHOOK_SECRET` | GitHub webhook secret (`POST /webhooks/github`, signature `X-Hub-Signature-256`). Absent: the `GH_WEBHOOK_SECRET` variable; without either, every GitHub webhook is refused (401). See [`github.md`](github.md#github-webhooks). |
-| `github.clientId`, `github.clientSecret` | text | `GH_APP_CLIENT_ID`, `GH_APP_CLIENT_SECRET` | The App's OAuth client, for the dashboard's GitHub sign-in off the loopback (ORC-399). One without the other prevents startup. In `factory.yml`: `client_id`, `client_secret: env:NAME`. |
+| `github.app_id` | text or integer | — | App ID of the GitHub App. |
+| `github.private_key` | reference | — | PEM private key, or path to a `.pem` file (mode `0600`), read from its reference. |
+| `github.installation_id` | text or integer | discovered per repository | Installation to use. Absent: the daemon calls `GET /repos/{owner}/{repo}/installation`. |
+| `github.webhook_secret` | reference | `GH_WEBHOOK_SECRET` | GitHub webhook secret (`POST /webhooks/github`, signature `X-Hub-Signature-256`). Absent: the `GH_WEBHOOK_SECRET` variable; without either, every GitHub webhook is refused (401). See [`github.md`](github.md#github-webhooks). |
+| `github.client_id`, `github.client_secret` | text, reference | `GH_APP_CLIENT_ID`, `GH_APP_CLIENT_SECRET` | The App's OAuth client, for the dashboard's GitHub sign-in off the loopback (ORC-399). One without the other prevents startup. |
 
-The `GH_APP_ID`, `GH_APP_KEY` and `GH_APP_INSTALLATION_ID` variables serve as a fallback, field by field. A partial configuration (`appId` without a key, or the reverse) prevents startup.
+The `GH_APP_ID`, `GH_APP_KEY` and `GH_APP_INSTALLATION_ID` variables serve as a fallback, field by field. A partial configuration (an App id without a key, or the reverse) prevents startup.
 
 The daemon exchanges an RS256 JWT for an **installation token limited to the requested repository**, keeps it in memory for at most an hour (60 s safety margin) and never passes it to runs. Permissions, creating the App and key rotation: [`github.md`](github.md#github-app-recommended).
 
-> The section still lives in `config.yaml`, and the `github` section of `factory.yml` replaces it key by key ([below](#factoryyml-orc-209), ORC-209). The environment variables remain the fallback for Docker and existing installations.
+> The environment variables remain the fallback for Docker and existing installations.
 
 ### Authorization
 
-`projects[].authz` gives the roles of the [authorization matrix](linear.md#authorizations-who-can-do-what) that no source provides (ORC-186). Everything is written as **Linear user ids** (UUID, for example `query { users { nodes { id name } } }` in Linear's GraphQL explorer): these are the ids that signed webhooks carry.
+`projects[].authz` of `factory.yml` gives the roles of the [authorization matrix](linear.md#authorizations-who-can-do-what) that no source provides (ORC-186). Everything is written as **Linear user ids** (UUID, for example `query { users { nodes { id name } } }` in Linear's GraphQL explorer): these are the ids that signed webhooks carry.
 
 | Key | Type | Default | Effect |
 |---|---|---|---|
 | `authz.maintainers` | list of Linear ids | `[]` | Designated maintainers: only they will be able to `/refreeze` (wired by ORC-131). |
 | `authz.validators` | list of Linear ids | `[]` | Designated validators: only they will be able to validate a spec, never one from a run they launched: `/approve`, `/changes`, `/reject` of the spec gate (ORC-212). Every delegation goes through that gate (ORC-395): with none designated, or with a delegator as the only one, no ticket gets past its spec. |
-| `authz.githubLogins` | map Linear id → GitHub login | `{}` | The GitHub login of each Linear user whose permissions on the repository matter. Without an entry, a user has no GitHub permissions, and therefore cannot trigger the agent nor (with ORC-148) merge through *Done*. |
+| `authz.github_logins` | map Linear id → GitHub login | `{}` | The GitHub login of each Linear user whose permissions on the repository matter. Without an entry, a user has no GitHub permissions, and therefore cannot trigger the agent nor (with ORC-148) merge through *Done*. |
 
 A project whose `authz.validators` is empty, or holds a single id, cannot get every spec approved: the initiator of a run never approves its spec, so with none every ticket stops at the spec gate, and with one the tickets that validator delegates. `factory doctor`, for the repository it checks, and the daemon's start, for every project, warn of it, naming `authz.validators` (ORC-421); a project on `factory/fantome` approves its own specs.
 
@@ -166,7 +167,7 @@ Rerunning `factory init` with the **same** client ID keeps the tokens; with a di
 
 ## `factory.yml` (ORC-209)
 
-`<FACTORY_HOME>/factory.yml` is the factory's server configuration. It is **optional** and coexists with `config.yaml` and `secrets.json` until they are removed (ORC-199). Every secret is written there as a reference `<source>:<path>`: `env:NAME` reads the daemon's environment, another source is read at the start (see [Server secrets](#server-secrets-orc-398)); a plaintext secret is refused. A repository's secrets (`repos[].secrets`) are references too, read at each `setup` (see [Repository secrets](#repository-secrets-orc-308)). It is read **once, at startup**: an invalid file prevents `factory up` from starting, with the path of the offending key, and a change made while the daemon is running only counts at the next startup. Only `factory up`, `factory doctor` (GitHub App) and `factory plan` (Linear credentials) read it, with the daemon's environment; the other commands (`status`, `stop`, `init`…) do without it, and therefore work in a shell that does not have its variables.
+`<FACTORY_HOME>/factory.yml` is the factory's server configuration. It is **required** (ORC-199): without it the daemon refuses to start, and it holds the instance ([above](#the-instance-in-factoryyml-orc-199)); `secrets.json` stays beside it for the tokens the daemon writes. Every secret is written there as a reference `<source>:<path>`: `env:NAME` reads the daemon's environment, another source is read at the start (see [Server secrets](#server-secrets-orc-398)); a plaintext secret is refused. A repository's secrets (`repos[].secrets`) are references too, read at each `setup` (see [Repository secrets](#repository-secrets-orc-308)). It is read **once, at startup**: an invalid file prevents `factory up` from starting, with the path of the offending key, and a change made while the daemon is running only counts at the next startup. Only `factory up`, `factory doctor` (GitHub App) and `factory plan` (Linear credentials) read it whole, with the daemon's environment; the other commands (`status`, `stop`, `init`…) read its instance keys alone, its secrets unresolved, and therefore work in a shell that does not have its variables.
 
 ```yaml
 linear:   { app_client_id: env:LINEAR_CLIENT_ID, client_secret: env:LINEAR_CLIENT_SECRET, webhook_secret: env:LINEAR_WEBHOOK_SECRET }
@@ -199,14 +200,14 @@ egress: { max_versions_per_package: 10, max_assets_per_repo: 5 }   # caps of the
 
 | Section | Effect today |
 | -- | -- |
-| `github` | **Applied**: its keys replace those of `github` in `config.yaml`; a key it does not declare (`installation_id`, `webhook_secret`, `client_id`, `client_secret`) stays the one from `config.yaml`. `client_id` and `client_secret` are the App's OAuth client of the dashboard's GitHub sign-in (ORC-399). |
+| `github` | **Applied**: the daemon's GitHub App ([above](#github-app)), the `GH_APP_*` variables as fallback. `client_id` and `client_secret` are the App's OAuth client of the dashboard's GitHub sign-in (ORC-399). |
 | `dashboard` | **Applied** (ORC-399), off the loopback: who may sign in to the dashboard with GitHub. `logins` (a list of GitHub logins, compared whatever their case), `org` (its active members) and `team` (`<org>/<team-slug>`, its active members): any of them lets a person in, and at least one must be given. An org or a team asks the App for the organization permission *Members: read* ([`github.md`](github.md#creating-the-app)). Required when `host` is not a loopback address; ignored on the loopback. Read at each sign-in; a change counts from the next startup. |
 | `linear` | **Applied**: `app_client_id`, `client_secret` and `webhook_secret` replace those in `secrets.json`. The OAuth tokens stay in `secrets.json`, written by « Connect Linear ». |
 | `claude` | **`accounts` and `active` applied** (ORC-211): the active account's token is the runner's only credential. **`effort` applied** (ORC-136): `per_step` replaces a preset step's effort, `default` is used for jobs outside the preset (`ask`). **A change of `active` counts from the next launch, without a restart** (ORC-215): the `claude` section alone is validated again at each launch, so an invalid key elsewhere in the file does not stop a switch (a file that is no longer YAML does); a section that no longer parses, or a file gone, keeps the last account, with a `Warning: factory.yml: the Claude account is not read again, <name> stays active: …` in the daemon's log. A run keeps the account it was launched on: a usage limit it hits holds that account, whatever is active by then. The tokens are read from the daemon's environment, so a new account's variable must be set before the daemon starts. |
 | `concurrency` | **Applied** (ORC-203): capacity of the `dev` queue, 3 by default; the workflow's `limits.parallel_sessions` is no longer read (ORC-390). The `questions` queue has a fixed capacity of 2. |
 | `budgets` | **`max_turns` and `per_step_tokens` applied** (ORC-136), per step: `max_turns` can only lower the step's turns, `per_step_tokens` is a per-attempt cap, with no default value. An attempt stopped at its token or turn cap blocks the ticket with the kind `budget` (cause `limit` in the Flow) and the standard comment: « The run <job> spent its token budget (budgets.per_step_tokens, or what the ticket had left). » or « … its turn budget (max_turns of its step). » (ORC-216). **`per_ticket_tokens` applied** (ORC-340): the tokens of the ticket's code runs (the `dev` queue; questions such as `ask` do not count; cache reads left out). Once spent, the next code run is refused before any workspace is prepared, and the ticket is blocked (kind `budget`, ORC-216) with `Token budget of the ticket reached: <spent> tokens spent of <cap> by its code runs (budgets.per_ticket_tokens).`. The block message says when a raised cap takes effect: `factory.yml` is read once, so its cap counts after a daemon restart, while the repository's cap is read again at each launch. A run never gets more than what is left, and keeps that cap if the daemon restarts under it. The repository's `budgets.per_ticket_tokens` can only lower it. **`on_usage_limit: wait` applied** (ORC-340): a run that did not succeed because the subscription's usage limit stopped it (a rejected `rate_limit_event` that neither a model turn nor an `allowed` event followed, or the result `Claude AI usage limit reached|<reset>`) neither blocks the ticket nor counts as an attempt. The limit belongs to the active Claude account (`claude.active`): until the announced reset, no run on that account starts, for any ticket, and the queues wait. The wait is never shorter than 5 minutes after the run's end, and an hour when no reset was announced: a result sent after a long stop holds nothing once that is past. The hold is also kept in the daemon's memory: a store that fails to record it still holds that daemon's launches. The stop is visible in three places: `factory up` logs `usage limit of the Claude account <name> reached ...: launches held until <time>`, the cut ticket's Linear session says `Usage limit reached; resuming at <time>.`, and the dashboard shows a banner until the reset. The cut code step waits in the queue as a relaunch after a cut (ORC-357), and runs at the first tick past the reset (each minute), reading what the cut run read, in the session of its role. Its launch refuses it as any other start: on a ticket undelegated, blocked or whose PR is merged since. The ticket's other steps requested meanwhile wait behind it in the queue. A step the limit cuts more than 3 times in a row is blocked (cause `limit`). A question the limit stopped is told `The usage limit is reached: I will answer after <time>.` and is asked again at the reset, in its thread, at most 3 times in a row. After that, its thread is told `The usage limit is still reached; ask again later.` once. A step waits only on a delegated, undelivered, unblocked ticket, and a human relaunch resets the relaunch count. Without the key, such a run blocks the ticket like any failure. `factory validate` computes the preset's worst case from these caps and refuses it over `per_ticket_tokens`, or while a cap is unset (ORC-216, see [`cli.md`](cli.md#factory-validate-repo)). **`off` disables a token cap** (ORC-381): `per_step_tokens: off`, `per_ticket_tokens: off`, or `budgets: off` for both. Unlike a cap left unset, `factory validate` accepts it. Without `per_step_tokens` there is no worst case in tokens. A repository's `per_ticket_tokens` still lowers a ticket cap that is `off`, and its `.factory/config.yml` cannot set `off`. `max_turns` keeps the step's own turns, and `on_usage_limit` is no cap of the factory's: the usage limit of the Claude subscription still holds launches until its reset. |
 | `max_diff` | **Applied** (ORC-381): only `off` exists. It disables the baseline of `factory/taille-du-diff` (15 files, 400 lines outside tests) in `verify`: a diff is then bounded only where the repository's own `max_diff` sets a bound. Without it, the baseline applies. A repository's `.factory/config.yml` cannot set `off`. |
-| `repos` | **`env` and `secrets` applied** (ORC-211), the entry being found through the project's `origin` remote; `secrets` are read at each `setup` (ORC-308, [below](#repository-secrets-orc-308)): see [`repository-configuration.md`](repository-configuration.md#variables-and-secrets). For the rest, `projects[].repoPath` in `config.yaml` remains the working copy as long as the runner does not clone by itself (ORC-204). |
+| `repos` | **`env` and `secrets` applied** (ORC-211), the entry being found through the project's `origin` remote; `secrets` are read at each `setup` (ORC-308, [below](#repository-secrets-orc-308)): see [`repository-configuration.md`](repository-configuration.md#variables-and-secrets). For the rest, `projects[].repo_path` remains the working copy as long as the runner does not clone by itself (ORC-204). |
 | `audit` | **Applied** (ORC-229): `serious_defect` is the definition of a serious defect, as written (a non-empty text). Absent by default, and until ORC-153 decides it: the defects entered on the audit sheets are kept but none is counted, and the Overview shows the AI reviewers' miss rate as **not counted**, with why ([interface](interface-and-security.md)). Each defect is kept with the definition in force when it was entered; only those entered under the definition in force are counted. It counts from the next startup. |
 | `tools` | **Applied** (ORC-383): `per_step` gives an agent step its built-in tools in place of the preset's ([tools per step](preset.md#the-agents-tools-per-step-orc-383)). The daemon refuses to start on a list that gives a step more than it may have: a write tool or a shell to a read-only step (`intake`, `clarify`, `spec_draft`, `review`), `WebFetch` to a step below network `limited`, `WebSearch`, or a tool the factory does not know. A repository's `.factory/config.yml` can only restrict the list. It counts from the next startup, for the tickets that start then. |
 | `acknowledge` | **Applied** (ORC-380): `comment` (the default) or `reaction`. With `reaction`, a human message gets 👀 on its Linear comment in place of the ack's comment; a message with no comment to react on, or a reaction Linear refuses, gets the comment, logged. A delegation has no message: it keeps its comment « Got it. ». The session's `thought` stays in both modes. See [`linear.md`](linear.md#triggering). It counts from the next startup. |
@@ -251,9 +252,9 @@ secrets_key: creds:factory-secrets-key
 
 - Switching sources is a change of `factory.yml`, not of the code. An option of a source written `env:NAME` is resolved at the start and masked.
 - A Claude account read from another source than `env` keeps the value read at the start; one added since waits for the next start.
-- `factory doctor` says, before the workflows, each server secret in clear (`env`, a GitHub key in `config.yaml` or `GH_APP_KEY`, `secrets.json` without `secrets_key`) and the rotation date of the sealed ones (a warning past 180 days, or when unknown). Never part of its verdict.
+- `factory doctor` says, before the workflows, each server secret in clear (`env`, a GitHub key in `GH_APP_KEY`, `secrets.json` without `secrets_key`) and the rotation date of the sealed ones (a warning past 180 days, or when unknown). Never part of its verdict.
 
-`factory.yml` is only ever read: `init` and token writing never copy any of its values into `config.yaml` or `secrets.json`. Its secrets are masked in the runs' transcripts, like those of `secrets.json`.
+`init` writes the instance keys of `factory.yml` alone, the rest of the file kept, never a secret; token writing never copies any of its values into `secrets.json`. Its secrets are masked in the runs' transcripts, like those of `secrets.json`.
 
 ## What does not leave the daemon
 
