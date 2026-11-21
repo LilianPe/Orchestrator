@@ -594,6 +594,14 @@ describe('classifyBreak', () => {
     expect(unreachable(line)).toBeUndefined();
   });
 
+  it.each([
+    ['libpq 14+', 'psql: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: No such file or directory\n\tIs the server running locally and accepting connections on that socket?'],
+    ['libpq before 14', 'psql: error: could not connect to server: No such file or directory\n\tIs the server running locally and accepting\n\tconnections on Unix domain socket "/var/run/postgresql/.s.PGSQL.5432"?'],
+  ])('libpq refused on its Unix socket is a service: the socket is local: %s', (_, output) => {
+    for (const step of ['setup', 'command'] as const) expect(classifyBreak(output, step, declared).kind).toBe('service');
+    expect(unreachable(output)).toBeUndefined();
+  });
+
   it('a client refused by a host off the loopback is no service of the repository\'s', () => {
     expect(classifyBreak("HTTPSConnectionPool(host='pypi.org', port=443): Failed to establish a new connection: [Errno 111] Connection refused", 'setup', declared).kind).toBe('failure');
     expect(classifyBreak('psql: error: could not connect to server: Connection timed out\n\tIs the server running on host "db.acme.com" (10.0.0.5) and accepting\n\tTCP/IP connections on port 5432?', 'command', declared).kind).toBe('failure');

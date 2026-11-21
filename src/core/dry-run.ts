@@ -198,13 +198,15 @@ const refusedOn = (line: string) => (REFUSAL.test(line) ? LOOPBACK_PORT.exec(lin
 const relayRefused = (line: string) => refusedOn(line) === RELAY_PORT;
 /**
  * On the loopback, where the services listen: a port refusing there that is not the relay's, or what libpq says of a server
- * there, the host on the line (`Is the server running on host "localhost"`): of a remote one, a breakdown of the network.
+ * there, the host on the line (`Is the server running on host "localhost"`): of a remote one, a breakdown of the network. Its
+ * Unix socket is local whatever the line names (`Is the server running locally`, `connection to server on socket "….s.PGSQL.5432"`).
  */
 const LOOPBACK_HOST = new RegExp(String.raw`${LOOPBACK}\b`);
 const LIBPQ_SERVER = /could not connect to (?:server|database)|Is the server running/i;
+const LIBPQ_SOCKET = /Is the server running locally|on (?:Unix domain )?socket "[^"]*\.s\.PGSQL\./i;
 const serviceLine = (line: string) => {
   const port = refusedOn(line);
-  return port ? port !== RELAY_PORT : LOOPBACK_HOST.test(line) && LIBPQ_SERVER.test(line);
+  return port ? port !== RELAY_PORT : (LOOPBACK_HOST.test(line) && LIBPQ_SERVER.test(line)) || LIBPQ_SOCKET.test(line);
 };
 /** The reasons of a 502, 503 and 504, as HTTP says them. */
 const GATEWAY = 'Bad Gateway|Service Unavailable|Gateway Time-?out';
