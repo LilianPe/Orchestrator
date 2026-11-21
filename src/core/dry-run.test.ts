@@ -613,6 +613,7 @@ describe('classifyBreak', () => {
     ['Node', 'Error: connect ETIMEDOUT 127.0.0.1:6379', '6379'],
     ['Go', 'dial tcp 127.0.0.1:5432: i/o timeout', '5432'],
     ['Prisma', "Error: P1001: Can't reach database server at `localhost`:`5432`", '5432'],
+    ['MySQL', "ERROR 2003 (HY000): Can't connect to MySQL server on '127.0.0.1:3306' (111)", '3306'],
   ])('a service of the loopback that does not answer, timed out or unreachable, is a service, never a breakdown: %s', (_, line, port) => {
     expect(classifyBreak(line, 'setup', declared)).toMatchObject({ kind: 'service', detail: expect.stringContaining(port) });
     expect(unreachable(line)).toBeUndefined();

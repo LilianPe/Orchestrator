@@ -188,9 +188,9 @@ const LOOPBACK = String.raw`(?<![\w.:])(?:127\.0\.0\.1|localhost|::1|\[::1\])`;
 const LOOPBACK_PORT = new RegExp(String.raw`${LOOPBACK}['"\`]?\)?(?::|,\s*(?:port[ =]?\s*)?|\s+port[ =]?\s*)\`?(\d{1,5})\b`);
 /**
  * A connection refused or not answered, whatever the tool's words: Node's, curl's, Go's, wget's, apt's, Maven's, Python's,
- * Prisma's. On the loopback, a service of the repository's that does not answer is its own, whether it refuses or times out.
+ * Prisma's, MySQL's. On the loopback, a service of the repository's that does not answer is its own, whether it refuses or times out.
  */
-const REFUSAL = /ECONNREFUSED|ETIMEDOUT|connection refused|connection timed out|i\/o timeout|failed to connect|could(?:n't| not) connect|connect call failed|can't reach database server/i;
+const REFUSAL = /ECONNREFUSED|ETIMEDOUT|connection refused|connection timed out|i\/o timeout|failed to connect|could(?:n't| not) connect|can't connect to|connect call failed|can't reach database server/i;
 /** The egress proxy's relay, where the setup's tools reach the registries. */
 const RELAY_PORT = String(EGRESS_RELAY_PORT);
 const refusedOn = (line: string) => (REFUSAL.test(line) ? LOOPBACK_PORT.exec(line)?.[1] : undefined);
