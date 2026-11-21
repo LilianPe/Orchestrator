@@ -1,5 +1,6 @@
 import type { DashboardAccess } from '../adapters/forge/github-login.js';
 import { PRODUCT_NAME } from '../product.js';
+import { oldDatabaseWarnings } from '../store/old-databases.js';
 import type { FactoryYml } from './factory-yml.js';
 import { githubOAuthClient } from './github-app.js';
 import { isLoopbackHost, relayWarnings, type InstanceConfig } from './instance.js';
@@ -14,12 +15,14 @@ export interface StartChecks {
 
 /**
  * The refusals of the daemon's start that config.yaml and factory.yml decide before anything opens, for the start and
- * `factory doctor` alike (ORC-448): the first one throws, with the message the start gives; the Smee relay's warnings are
- * returned (ORC-446). The App's OAuth client whole (ORC-399); off the loopback, the dashboard's GitHub sign-in (that client,
- * who may sign in, an HTTPS publicUrl GitHub calls back to) and `secrets_key`, which encrypts secrets.json at rest (ORC-398).
+ * `factory doctor` alike (ORC-448): the first one throws, with the message the start gives. The App's OAuth client whole
+ * (ORC-399); off the loopback, the dashboard's GitHub sign-in (that client, who may sign in, an HTTPS publicUrl GitHub calls
+ * back to) and `secrets_key`, which encrypts secrets.json at rest (ORC-398).
+ * `warnings`: the Smee relay's (ORC-446), and each SQLite file left in `home` from before Postgres, looked at by its presence
+ * alone, never opened (ORC-178, ORC-463).
  * `signIn`: what the dashboard's sign-in is built from, off the loopback alone.
  */
-export function startRefusals(instance: InstanceConfig, yml: FactoryYml | undefined, env: NodeJS.ProcessEnv): StartChecks {
+export function startRefusals(home: string, instance: InstanceConfig, yml: FactoryYml | undefined, env: NodeJS.ProcessEnv): StartChecks {
   const client = githubOAuthClient(instance, env);
   let signIn: StartChecks['signIn'];
   if (!isLoopbackHost(instance.host)) {
@@ -34,5 +37,5 @@ export function startRefusals(instance: InstanceConfig, yml: FactoryYml | undefi
     if (!yml.secretsKey && !yml.secretRefs?.['secrets_key']) throw new Error(`host: ${instance.host} exposes ${PRODUCT_NAME} outside this machine: ${SECRETS_KEY_REQUIRED}.`);
     signIn = { client, access: yml.dashboard, publicUrl: instance.publicUrl };
   }
-  return { warnings: relayWarnings(instance), ...(client ? { oauthClient: client } : {}), ...(signIn ? { signIn } : {}) };
+  return { warnings: [...relayWarnings(instance), ...oldDatabaseWarnings(home)], ...(client ? { oauthClient: client } : {}), ...(signIn ? { signIn } : {}) };
 }

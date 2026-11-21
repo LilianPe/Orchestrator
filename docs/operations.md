@@ -87,7 +87,7 @@ The Postgres schema is in `src/store/pg/schema.ts` and its migrations in `drizzl
 
 > **Transition note** (ORC-178): the SQLite files of before Postgres, to archive once per server.
 >
-> Postgres is the only store since ORC-178, and its data started from zero: nothing of `relais.db` (Relais), `factory.db` (the factory before Postgres), `transcripts/` nor `workspaces/` of that time is taken into Postgres. They are archived off the server, as a dated copy, then deleted. A human operation, done once per server, the daemon stopped (the daemon never deletes them, and never reads them: it only names a `relais.db` or `factory.db` it finds in `FACTORY_HOME` at its start; a `relais.db` still in Relais's old home, `~/.relais` by default, is found by hand).
+> Postgres is the only store since ORC-178, and its data started from zero: nothing of `relais.db` (Relais), `factory.db` (the factory before Postgres), `transcripts/` nor `workspaces/` of that time is taken into Postgres. They are archived off the server, as a dated copy, then deleted. A human operation, done once per server, the daemon stopped (the daemon never deletes them, and never reads them: it only names a `relais.db` or `factory.db` it finds in `FACTORY_HOME` at its start, as `factory doctor` does (ORC-463); a `relais.db` still in Relais's old home, `~/.relais` by default, is found by hand).
 >
 > On the server, the daemon stopped (`systemctl stop factory` or `docker compose stop`), with `SQLITE_HOME` the folder holding the files (`FACTORY_HOME`, `~/.factory` by default, or Relais's old home for `relais.db`):
 >
