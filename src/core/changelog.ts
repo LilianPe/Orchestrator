@@ -13,6 +13,13 @@ export function lastPushed(events: readonly FactoryEvent[]): EventPayloads['publ
   return events.findLast((e): e is FactoryEvent<'publish.done'> => e.type === 'publish.done' && !e.payload.empty)?.payload;
 }
 
+/** The commits the factory pushed, oldest first: one per `publish.done` that reached the forge, a commit published twice in a row once. */
+export function pushedHeads(events: readonly FactoryEvent[]): string[] {
+  return events
+    .flatMap((e) => (e.type === 'publish.done' && !e.payload.empty ? [e.payload.sha] : []))
+    .filter((sha, i, all) => sha !== all[i - 1]);
+}
+
 /**
  * The work the merged PR carries, as the ticket's journal has it: the green verdict of the merged head when GitHub names it
  * (a human's push verified since, ORC-159), else of the commit the factory published last (ORC-125), else the last green verdict.

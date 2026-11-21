@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { changelogEntry, deliveredBody, mergedWork, type MergedPr } from './changelog.js';
+import { changelogEntry, deliveredBody, mergedWork, pushedHeads, type MergedPr } from './changelog.js';
 import { TRUSTED, type EventPayloads, type EventType, type FactoryEvent } from './types.js';
 
 const ev = <T extends EventType>(type: T, payload: EventPayloads[T]) => ({ ...TRUSTED, id: `${type}:${JSON.stringify(payload).length}`, type, at: 1, projectId: 'p', ticketId: 'REL-1', payload }) as FactoryEvent;
@@ -44,5 +44,13 @@ describe('the changelog entry of a merged PR (ORC-197)', () => {
   it('mentions the requester by their profile, or no one', () => {
     expect(deliveredBody({ id: 'u', name: 'L', url: 'https://linear.app/x/profiles/l' }, pr)).toBe('Delivered, https://linear.app/x/profiles/l: [PR #3](https://gh/pr/3) is merged.');
     expect(deliveredBody(undefined, pr)).toBe('Delivered: [PR #3](https://gh/pr/3) is merged.');
+  });
+});
+
+describe('the commits the factory pushed (ORC-281)', () => {
+  it('takes one per publication that reached the forge, oldest first, a commit published twice in a row once', () => {
+    const done = (runId: string, sha: string, empty?: true) => ev('publish.done', { runId, job: 'dev', sha, ...(empty ? { empty } : {}) });
+    expect(pushedHeads([done('r1', 'a'), passed('r2', 'x'), done('r2', 'a'), done('r3', 'e', true), done('r4', 'b'), done('r5', 'a')])).toEqual(['a', 'b', 'a']);
+    expect(pushedHeads([])).toEqual([]);
   });
 });

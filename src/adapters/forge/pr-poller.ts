@@ -1,9 +1,12 @@
 import type { Clock } from "../../core/clock.js";
+import { pushedHeads } from "../../core/changelog.js";
 import type { ProjectRuntime } from "../../runtime/daemon.js";
 import { TRUSTED, type FactoryEvent, type TicketState } from "../../core/types.js";
+import { isTakenOver } from "../../core/block-cause.js";
+import { upcast } from "../../core/upcast.js";
 import type { Store } from "../../store/types.js";
-import { checksEventId, prEventId } from "./github-webhook.js";
-import type { Forge } from "./types.js";
+import { checksEventId, prEventId, pushEventId, UNKNOWN_PUSHER } from "./github-webhook.js";
+import type { Forge, PrInfo } from "./types.js";
 
 export class PrPoller {
   private handle: NodeJS.Timeout | undefined;
@@ -75,6 +78,8 @@ export class PrPoller {
         return;
       }
       if (done) return;
+      // A failed judgement of the head holds back no CI verdict: it is tried again at the next pass.
+      await this.lostPush(t, pr, at).catch((err) => this.d.log(`pr poll ${t.ticketId}: ${(err as Error).message}`));
       const metaKey = `checks:${t.projectId}:${t.ticketId}`;
       if (pr.checks === "none") return;
       const last = await this.d.store.getMeta(metaKey);
@@ -93,6 +98,48 @@ export class PrPoller {
         await this.d.store.setMeta(metaKey, pr.checks);
       }
     }
+  }
+
+  /**
+   * A head of the open PR the factory neither published, verified, nor heard of is a human's push whose webhook got lost
+   * (ORC-281), under the webhook's id. A head is judged at each pass that reads it, against the ticket's journal then.
+   */
+  private async lostPush(pass: TicketState, pr: PrInfo, at: number): Promise<void> {
+    const head = pr.headSha;
+    if (!head) return;
+    // The factory's push is on the forge before its event: the ticket as it is now, read after the PR, knows the commit it verified.
+    const t = (await this.d.store.getTicket(pass.projectId, pass.ticketId)) ?? pass;
+    // A take-over's bundle is pushed before its `push.human`, under the human's name, is accepted (ORC-234): read once it ends.
+    if (isTakenOver(t)) return;
+    if (head === t.verifiedSha || head === t.humanHead) return;
+    const heads = pushedHeads((await this.d.store.ticketJournal(t.projectId, t.ticketId)).map((j) => upcast(j.event)));
+    const published = heads.at(-1);
+    // With no publication, there is nothing to compare with: the head read then is kept, and the forge may still read the PR
+    // on it just after the first publication.
+    if (heads.length <= 1) {
+      const unpublishedKey = `lost-push:${t.projectId}:${t.ticketId}`;
+      const unpublished = await this.d.store.getMeta(unpublishedKey);
+      if (!published) {
+        if (unpublished !== head) await this.d.store.setMeta(unpublishedKey, head);
+        return;
+      }
+      if (unpublished === head) return;
+    }
+    // The last commit it pushed, and the one before, which the forge may still read just after a push. A branch put back on
+    // an older one is a human's push, as the webhook reports it.
+    if (heads.slice(-2).includes(head)) return;
+    await this.d.submit({
+      ...TRUSTED,
+      // What the push brought was verified by no one in the factory (I12).
+      taint: "untrusted",
+      at,
+      projectId: t.projectId,
+      ticketId: t.ticketId,
+      id: pushEventId(t.ticketId, head),
+      type: "push.human",
+      // The PR names no pusher; `before`, the head last known, so that only the commits since are the human's (ORC-338).
+      payload: { branch: pr.branch, sha: head, author: UNKNOWN_PUSHER, before: t.humanHead ?? published },
+    });
   }
 
   start(intervalMs = 30_000): void {

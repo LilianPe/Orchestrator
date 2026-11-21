@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { FREEZE_CHECK } from '../../src/checks/freeze.js';
 import { HUMAN_COMMITS_CHECK, type CleanVerifyRequest } from '../../src/core/clean-verify.js';
 import type { VerifyFailure } from '../../src/core/types.js';
+import { PrPoller } from '../../src/adapters/forge/pr-poller.js';
 import { createHarness } from '../helpers/harness.js';
 import { BRANCH, githubDelivery, githubIngest, pushBody, sha } from '../helpers/github-webhook.js';
 
@@ -132,5 +133,61 @@ describe('a human push on the agent branch (ORC-159)', () => {
     await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
     expect(h.forge.merges).toEqual([]);
     expect(comments(h).at(-1)).toMatch(/no reviewed commit/);
+  });
+});
+
+/**
+ * ORC-281: a human push whose webhook got lost. The project's GitHub reconciliation reads the PR head; a head the factory
+ * neither pushed nor heard of is a human's push, written to the inbox under the webhook's id.
+ */
+describe('a human push caught up by the GitHub reconciliation (ORC-281)', () => {
+  const reconcile = async (h: Harness) => {
+    await new PrPoller({ store: h.store, forge: h.forge, projects: [h.project], submit: (e) => h.orch.accept(e), clock: h.clock, log: () => {} }).pollOnce('p');
+    await h.orch.drained();
+  };
+  const humanPushEvents = async (h: Harness) => (await h.store.recentEvents(100, 'REL-1')).filter((e) => e.type === 'push.human');
+  const published = async () => {
+    const { h, asked } = harness();
+    h.runner.enqueue({});
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', verifiedSha: AGENT });
+    expect((await h.forge.findPr('/repo', BRANCH))?.headSha).toBe(AGENT);
+    return { h, asked };
+  };
+  const pushedByHand = async (h: Harness) => {
+    const pr = (await h.forge.findPr('/repo', BRANCH))!;
+    h.forge.setPr(BRANCH, { ...pr, headSha: HUMAN });
+  };
+
+  it('criterion 1: a push whose webhook got lost is written to the inbox at the next pass, and the agent pauses', async () => {
+    const { h, asked } = await published();
+    await pushedByHand(h);
+    await reconcile(h);
+    expect(await humanPushEvents(h)).toMatchObject([{ id: `push:REL-1:${HUMAN}`, taint: 'untrusted', payload: { branch: BRANCH, sha: HUMAN, before: AGENT } }]);
+    expect(asked.filter((r) => r.head).map((r) => r.head)).toEqual([HUMAN]);
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockKind: 'human_push', humanPushes: [{ before: AGENT, after: HUMAN }] });
+  });
+
+  it("criterion 2: the factory's own push is no human push", async () => {
+    const { h, asked } = await published();
+    await reconcile(h);
+    await reconcile(h);
+    expect(await humanPushEvents(h)).toEqual([]);
+    expect(asked.filter((r) => r.head)).toEqual([]);
+    expect(await h.ticket()).toMatchObject({ blocked: false, logical: 'human_review' });
+  });
+
+  it('criterion 3: a push the webhook brought, before or after the pass, has its effects once', async () => {
+    for (const order of ['webhook first', 'pass first'] as const) {
+      const { h, asked } = await published();
+      await pushedByHand(h);
+      if (order === 'webhook first') await humanPushes(h);
+      await reconcile(h);
+      if (order === 'pass first') await humanPushes(h);
+      await reconcile(h);
+      expect(await humanPushEvents(h), order).toHaveLength(1);
+      expect(asked.filter((r) => r.head), order).toHaveLength(1);
+      expect(comments(h).filter((c) => c.includes(HUMAN.slice(0, 12))), order).toHaveLength(1);
+    }
   });
 });
