@@ -83,8 +83,9 @@ export class GithubReconciler {
       await this.lostPush(t, pr, at).catch((err) => this.d.log(`github reconcile ${t.ticketId}: ${(err as Error).message}`));
       const metaKey = `checks:${t.projectId}:${t.ticketId}`;
       if (pr.checks === "none") return;
-      const last = await this.d.store.getMeta(metaKey);
-      if (pr.checks !== last) {
+      // The verdict per head (ORC-466): a red CI the engine ignored, of a head left behind, hides not the next head's.
+      const seen = pr.headSha ? `${pr.checks}:${pr.headSha}` : pr.checks;
+      if (seen !== (await this.d.store.getMeta(metaKey))) {
         // Per head SHA, as the GitHub webhook names it (ORC-134): the reconciliation and the webhook report the same verdict once.
         const id = checksEventId(t.ticketId, pr.number, pr.checks, pr.headSha ?? String(at));
         if (pr.checks === "fail")
@@ -96,7 +97,7 @@ export class GithubReconciler {
           });
         else if (pr.checks === "pass")
           await this.d.submit({ ...base, id, type: "pr.checks_passed", payload });
-        await this.d.store.setMeta(metaKey, pr.checks);
+        await this.d.store.setMeta(metaKey, seen);
       }
     }
   }

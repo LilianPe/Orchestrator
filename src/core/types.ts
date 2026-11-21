@@ -621,6 +621,11 @@ export interface TicketState {
   /** The pushes humans made to the ticket's branch (`push.human`, ORC-338): the commits of each are theirs, not the agent's. */
   humanPushes?: { before?: string; after: string }[];
   /**
+   * The heads the ticket's branch left behind (ORC-466): the head each push, the factory's or a human's, went over, until a later
+   * push puts the branch back on it. A red CI of one says nothing of the PR. Newest last, bounded. Absent before ORC-466.
+   */
+  leftHeads?: string[];
+  /**
    * The last commit a human pushed to the branch that no publication of the factory carries yet (ORC-159): every check
    * refuses a commit without it. `null` once a publication carried it, or the branch went back to the commit verified last.
    */

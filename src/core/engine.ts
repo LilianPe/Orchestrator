@@ -2658,16 +2658,16 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       out.trace.push(`${event.type}: recorded for the measures`);
       return out;
     case 'pr.checks_failed': {
-      // Red CI of the ticket's open PR on its current head only (ORC-466): another PR's, a merged or closed one's, or one of a head
-      // a publication or a human's push replaced since, starts no fix and counts no round. A red CI with no head (before ORC-466) is read.
+      // Red CI of the ticket's open PR only (ORC-466): another PR's, a merged or closed one's, starts no fix and counts no round;
+      // nor one of a head a push, the factory's or a human's, left behind since. A head the ticket never heard of may be a newer
+      // one whose push is not decided yet: it is read, as a red CI with no head (before ORC-466) is.
       const { number, headSha } = event.payload;
-      const head = ticket?.humanHead ?? ticket?.verifiedSha;
       if (ticket?.prNumber !== number || ticket.prState !== 'OPEN') {
         out.trace.push(`pr.checks_failed: PR #${number} is not the open PR of the ticket, ignored`);
         return out;
       }
-      if (headSha && head && headSha !== head) {
-        out.trace.push(`pr.checks_failed: head ${headSha} is not the head of PR #${number} (${head}), ignored`);
+      if (headSha && ticket.leftHeads?.includes(headSha)) {
+        out.trace.push(`pr.checks_failed: head ${headSha} of PR #${number} was left behind by a push since, ignored`);
         return out;
       }
       break;

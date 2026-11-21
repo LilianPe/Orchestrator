@@ -867,24 +867,25 @@ describe('decide — built-ins', () => {
       expect(out.events).toContainEqual({ type: 'ticket.patched', patch: { ciFixAttempts: 0 } });
     });
 
-    it('ignores, with a trace, a red CI of another PR or of a head the PR left behind: no fix-ci, no count (ORC-466)', () => {
-      const open = inReview({ verifiedSha: 'new' });
+    it('ignores, with a trace, a red CI of another PR or of a head a push left behind: no fix-ci, no count (ORC-466)', () => {
+      const failed = (number: number, headSha?: string) => ev('pr.checks_failed', { number, url: 'u', branch: 'b', failures: ['test'], ...(headSha ? { headSha } : {}) });
       const ignored = (t: TicketState, e: FactoryEvent, why: string) => {
         const out = decide(t, e, workflow);
         expect(out).toEqual(decision());
         expect(out.trace).toContainEqual(expect.stringContaining(why));
       };
-      ignored(open, ev('pr.checks_failed', { number: 2, url: 'u2', branch: 'b', failures: ['test'] }), 'PR #2 is not the open PR of the ticket');
-      ignored({ ...open, prState: 'CLOSED' }, red, 'PR #3 is not the open PR of the ticket');
-      ignored(open, ev('pr.checks_failed', { number: 3, url: 'u', branch: 'b', failures: ['test'], headSha: 'old' }), 'head old is not the head of PR #3');
-      // A human's push replaced the verified head: the red CI of the verified one is stale, the human's own is acted on.
-      const pushed = { ...open, humanHead: 'human' };
-      ignored(pushed, ev('pr.checks_failed', { number: 3, url: 'u', branch: 'b', failures: ['test'], headSha: 'new' }), 'head new is not the head of PR #3');
-      expect(decide(pushed, ev('pr.checks_failed', { number: 3, url: 'u', branch: 'b', failures: ['test'], headSha: 'human' }), workflow).events).toEqual([{ type: 'ticket.patched', patch: { ciFixAttempts: 1 } }]);
-      // The current head, or a red CI recorded before ORC-466 with no head, is acted on.
-      for (const e of [ev('pr.checks_failed', { number: 3, url: 'u', branch: 'b', failures: ['test'], headSha: 'new' }), red]) {
-        expect(decide(open, e, workflow).events).toEqual([{ type: 'ticket.patched', patch: { ciFixAttempts: 1 } }]);
-      }
+      const counted = (t: TicketState, e: FactoryEvent) => expect(decide(t, e, workflow).events).toEqual([{ type: 'ticket.patched', patch: { ciFixAttempts: 1 } }]);
+      // The factory published `new` over `old`, then a human pushed `human` over `new`.
+      const pushed = [ev('publish.done', { runId: 'r1', job: 'fix-ci', sha: 'new', before: 'old' }), ev('push.human', { branch: 'b', sha: 'human', author: 'L', before: 'new' })];
+      const open = pushed.reduce((t, e) => reduce(t, e)!, inReview());
+      ignored(open, failed(2, 'human'), 'PR #2 is not the open PR of the ticket');
+      ignored({ ...open, prState: 'CLOSED' }, failed(3, 'human'), 'PR #3 is not the open PR of the ticket');
+      ignored(open, failed(3, 'old'), 'head old of PR #3 was left behind by a push since');
+      ignored(open, failed(3, 'new'), 'head new of PR #3 was left behind by a push since');
+      // The current head, a head not heard of yet (a push whose event is late), or a red CI recorded before ORC-466 with no head, is acted on.
+      for (const e of [failed(3, 'human'), failed(3, 'later'), failed(3)]) counted(open, e);
+      // A branch a human puts back on a head left behind makes it the PR's head again.
+      counted(reduce(open, ev('push.human', { branch: 'b', sha: 'new', author: 'L', before: 'human' }))!, failed(3, 'new'));
     });
 
     it('counts nothing when no fix-ci starts: no rule, or a merged PR', () => {

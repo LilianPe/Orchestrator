@@ -63,6 +63,11 @@ describe('GithubReconciler', () => {
     forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', headSha: 'h7', checks: 'fail', failedChecks: ['t'] });
     await reconciler.once();
     expect(events.find((e) => e.type === 'pr.checks_failed')!.payload).toEqual({ number: 7, url: 'u', branch: 'b', failures: ['t'], headSha: 'h7' });
+    // The next head red at the next pass, no pending read between: its own red CI, which a stale one ignored does not hide.
+    await store.putTicket({ ...(await store.getTicket('p', 'REL-1'))!, verifiedSha: 'h8' });
+    forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', headSha: 'h8', checks: 'fail', failedChecks: ['t'] });
+    await reconciler.once();
+    expect(events.filter((e) => e.type === 'pr.checks_failed').map((e) => e.payload)).toEqual([expect.objectContaining({ headSha: 'h7' }), expect.objectContaining({ headSha: 'h8' })]);
   });
 
   it('isolates a failing ticket and logs', async () => {
