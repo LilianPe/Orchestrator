@@ -63,7 +63,7 @@ export function chaosEvents(random: () => number, count: number, tickets: number
     } else if (r < 0.65) {
       event = { ...base, type: 'session.mentioned', payload: { linearSessionId: `${linearSessionId}-q${n}`, body: `question ${n}`, author: 'L' } };
     } else if (r < 0.75) {
-      event = { ...base, type: 'label.changed', payload: { label: 'agent:stop', change: 'added' } };
+      event = { ...base, type: 'session.stopped', payload: { linearSessionId } };
     } else if (r < 0.85) {
       event = { ...base, type: 'ticket.commented', payload: { body: `reprends ${n}`, author: 'L', kind: 'instruction' } };
     } else {

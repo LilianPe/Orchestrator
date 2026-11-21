@@ -6565,13 +6565,12 @@
     {
       "event": {
         "id": "t-5",
-        "type": "label.changed",
+        "type": "session.stopped",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "payload": {
-          "label": "agent:stop",
-          "change": "added"
+          "linearSessionId": "ls-1"
         },
         "schemaVersion": 3,
         "taint": "trusted"
@@ -6741,7 +6740,7 @@
         "timers": [],
         "clearTimers": true,
         "trace": [
-          "on.label.changed[0]"
+          "on.session.stopped[0]"
         ]
       }
     },

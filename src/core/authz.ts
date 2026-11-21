@@ -102,7 +102,7 @@ export const DEFAULT_MATRIX: AuthzMatrix = {
     what: 'sending review feedback to the agent on the PR',
     who: 'humans with write access to the repository',
   },
-  // A run's inspection (ORC-301). Stopping from Linear (`agent:stop`, removing the delegation) stays outside the matrix.
+  // A run's inspection (ORC-301). Stopping from Linear (the session's stop, removing the delegation) stays outside the matrix.
   pause_run: dashboardRow('pausing a run'),
   stop_run: dashboardRow('stopping a run'),
   /** Wired by ORC-234, which brings the take-over itself. */
