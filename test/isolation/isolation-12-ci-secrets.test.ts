@@ -107,8 +107,25 @@ const protectionGate = gate("isolation 12: doctor reads the branch protection th
 describe.skipIf(protectionGate.skip)(protectionGate.title, () => {
   let token = '';
 
+  /**
+   * The canary's runs on the test branches, which the pushes here start and its environment holds waiting: cancelled
+   * before and after, so they do not pile up (a run that shows up after the test goes with the next one).
+   */
+  const cancelCanaryRuns = async () => {
+    for (const { branch } of PROTECTION) {
+      const { body } = await gh(`/repos/${REPO}/actions/runs?branch=${encodeURIComponent(branch)}&event=push`, token);
+      const runs = ((body?.workflow_runs ?? []) as { id: number; path: string; status: string }[]).filter((r) => r.path.startsWith(CANARY) && r.status !== 'completed');
+      for (const run of runs) await gh(`/repos/${REPO}/actions/runs/${run.id}/cancel`, token, { method: 'POST' });
+    }
+  };
+
   beforeAll(async () => {
     token = await new LiveForge(appOptions()).token(REPO);
+    await cancelCanaryRuns();
+  }, 120_000);
+
+  afterAll(async () => {
+    if (token) await cancelCanaryRuns();
   }, 120_000);
 
   it.each(PROTECTION)('$branch ($ruleset): what doctor reads and judges matches a direct push of the App', async ({ branch, ruleset, bypassable }) => {
@@ -143,14 +160,16 @@ describe.skipIf(protectionGate.skip)(protectionGate.title, () => {
     const next = await gh(`/repos/${REPO}/git/commits`, token, { method: 'POST', body: { message: 'iso-12: a direct push (ORC-427)', tree: commit.tree.sha, parents: [head] } });
     expect(next.status).toBe(201);
     const push = await gh(`/repos/${REPO}/git/refs/heads/${branch}`, token, { method: 'PATCH', body: { sha: next.body.sha, force: false } });
-    if (bypassable) {
-      expect(push.status, JSON.stringify(push.body)).toBe(200);
-      // Back where it was, so the branch does not grow with each run; the App bypasses the ruleset for this too.
-      expect((await gh(`/repos/${REPO}/git/refs/heads/${branch}`, token, { method: 'PATCH', body: { sha: head, force: true } })).status).toBe(200);
-    } else {
-      // Refused by the ruleset, not for a missing permission: the bypassed branch shows the token may push.
-      expect(push.status, JSON.stringify(push.body)).toBe(422);
-      expect(String(push.body?.message)).toMatch(/rule/i);
+    try {
+      if (bypassable) expect(push.status, JSON.stringify(push.body)).toBe(200);
+      else {
+        // Refused by the ruleset, not for a missing permission: the bypassed branch shows the token may push.
+        expect(push.status, JSON.stringify(push.body)).toBe(422);
+        expect(String(push.body?.message)).toMatch(/rule/i);
+      }
+    } finally {
+      // A push that landed, expected or not, put back where it was, so the branch does not grow with each run.
+      if (push.status === 200) await gh(`/repos/${REPO}/git/refs/heads/${branch}`, token, { method: 'PATCH', body: { sha: head, force: true } });
     }
   }, 120_000);
 });

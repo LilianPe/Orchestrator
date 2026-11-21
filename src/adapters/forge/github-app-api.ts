@@ -146,7 +146,7 @@ export class GitHubAppApi extends GitHubAppAuth {
     const repo = await this.repo(repoPath);
     const token = await this.installationToken(repo);
     const base = repoApi(repo);
-    const branch = named ?? (await this.read('GET', base, token, isRepository, 'a repository with its default branch')).default_branch;
+    const branch = named || (await this.read('GET', base, token, isRepository, 'a repository with its default branch')).default_branch;
     const [{ protection: { enabled: classic } }, rules] = await Promise.all([
       this.read('GET', `${base}/branches/${segment(branch)}`, token, isBranch, 'a branch with its classic protection flag'),
       this.allPages(`${base}/rules/branches/${segment(branch)}`, null, 'a list of branch rules', isRule, token),

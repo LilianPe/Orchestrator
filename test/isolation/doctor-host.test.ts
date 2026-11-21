@@ -3,12 +3,13 @@ import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { execCmd, type Exec } from '../../src/adapters/exec.js';
 import { checkHost } from '../../src/cli/doctor.js';
+import { podmanCli } from '../../src/adapters/sandbox/docker-rootless.js';
 import { enabled, image, podman } from './helpers.js';
 
 /**
  * `doctor`'s host check on the real engines (ORC-427), not on the fakes of src/cli/doctor.test.ts: the fields it reads of
  * `podman info` and `docker info` exist and say what the cgroup tree says, and an accepted host does apply the limits.
- * - Rootless Podman: its controllers are the ones delegated to its user's systemd session, and a container gets its
+ * - Rootless Podman: never a controller its user's systemd session is not delegated, and a container gets its
  *   `--cpus`, `--memory` and `--pids-limit` in its cgroup.
  * - The `docker` CLI on that Podman's socket (the compat API): never a controller the user lacks, never accepted where
  *   Podman itself is refused.
@@ -46,14 +47,15 @@ describe.skipIf(!enabled || !podman)("doctor's host check on the real rootless P
   /** The controllers systemd delegates to the user's session: what a rootless engine can limit through. */
   const delegatedFile = `/sys/fs/cgroup/user.slice/user-${uid}.slice/user@${uid}.service/cgroup.controllers`;
 
-  it("reads the fields doctor reads, and its controllers are the user's session's", async () => {
+  it("reads the fields doctor reads, never a controller the user's session lacks, and accepts the CI's host", async () => {
     const info = JSON.parse(run('podman', ['info', '--format', 'json'])) as { host: Record<string, any> };
     expect(info.host).toMatchObject({ cgroupVersion: 'v2', cgroupManager: 'systemd', security: { rootless: true } });
     expect(Array.isArray(info.host['cgroupControllers'])).toBe(true);
     expect(existsSync(delegatedFile), `${delegatedFile}: no systemd session for uid ${uid}`).toBe(true);
 
     const report = await checkHost({ FACTORY_CONTAINER_CLI: 'podman' });
-    expect(required(report.controllers)).toEqual(required(controllersOf(delegatedFile)));
+    // Podman reads the controllers of its own process's cgroup, under the session's: a subset of what it delegates.
+    for (const controller of required(report.controllers)) expect(controllersOf(delegatedFile), `podman info says ${controller}`).toContain(controller);
     expect(report).toMatchObject({ engine: 'podman', cgroupV2: true, rootless: true });
     // The CI's session delegates cpu, memory and pids (isolation n° 9 needs them): accepted.
     expect(report.verdict, report.reasons.join('; ')).toBe('accepted');
@@ -65,10 +67,13 @@ describe.skipIf(!enabled || !podman)("doctor's host check on the real rootless P
 
   it("the docker CLI on Podman's socket never claims a controller the user lacks, nor accepts what Podman refuses", async (ctx) => {
     if (!answers(() => run('docker', ['--version']))) return ctx.skip('no docker CLI on this host');
-    // The socket unit, started if it is not: the compat API answers there.
+    if (await podmanCli(execCmd, 'docker')) return ctx.skip("this host's docker is Podman's shim, which ignores DOCKER_HOST");
+    // The socket unit, started if it is not (and stopped after): the compat API answers there.
+    const wasActive = answers(() => run('systemctl', ['--user', 'is-active', '--quiet', 'podman.socket']));
     if (!answers(() => run('systemctl', ['--user', 'start', 'podman.socket']))) return ctx.skip('podman.socket does not start in this session');
-    const socket = run('podman', ['info', '--format', '{{.Host.RemoteSocket.Path}}']);
-    const host = `unix://${socket}`;
+    if (!wasActive) ctx.onTestFinished(() => void answers(() => run('systemctl', ['--user', 'stop', 'podman.socket'])));
+    // A path, or already a URI on some Podman versions.
+    const host = `unix://${run('podman', ['info', '--format', '{{.Host.RemoteSocket.Path}}']).replace(/^unix:\/\//, '')}`;
     const info = JSON.parse(run('docker', ['info', '--format', '{{json .}}'], { DOCKER_HOST: host })) as Record<string, unknown>;
     for (const field of ['CpuCfsQuota', 'MemoryLimit', 'PidsLimit']) expect(typeof info[field], `${field} in the compat API's info`).toBe('boolean');
     expect(info['CgroupVersion']).toBe('2');
