@@ -983,6 +983,8 @@ describe("the daemon's start refusals, each one doctor's", () => {
     instance?: InstanceConfig;
     noFactoryYml?: boolean;
     factoryYml?: string;
+    /** A secrets.json, written as it is. */
+    secretsJson?: string;
     env?: NodeJS.ProcessEnv;
     /** What identifies the refusal in the start's message: the start refuses for this reason, not another. */
     reason: RegExp;
@@ -1000,6 +1002,9 @@ describe("the daemon's start refusals, each one doctor's", () => {
     'exposed without who may sign in': { instance: exposed, env: client, reason: /^host: 0\.0\.0\.0 exposes .*dashboard: \{ logins, org, team \}/ },
     'exposed without an HTTPS publicUrl': { instance: { ...exposed, publicUrl: 'http://factory.example' }, factoryYml: signIn, env: client, reason: /^host: 0\.0\.0\.0 exposes .*set public_url to its https:\/\/ address/ },
     'exposed without secrets_key': { instance: exposed, factoryYml: signIn, env: client, reason: /^host: 0\.0\.0\.0 exposes .*: set secrets_key in factory\.yml/ },
+    // ORC-470: on the loopback too, beside Linear.
+    'a linear section without secrets_key': { factoryYml: 'linear: { app_client_id: cid }\n', reason: /^Linear's tokens and credentials are kept in secrets\.json, never in clear: set secrets_key in factory\.yml/ },
+    'a secrets.json without secrets_key': { secretsJson: '{"linear":{"clientId":"cid","clientSecret":"canary-client-secret-470","webhookSecret":"w"}}', reason: /^Linear's tokens and credentials are kept in secrets\.json, never in clear: set secrets_key in factory\.yml/ },
     'the Smee relay with dev: false': { instance: { ...local, relay: smee, dev: false }, reason: /^relay: \{ kind: smee \}.*\(dev: false\)/ },
     'the Smee relay beside a publicUrl in the development mode': { instance: { ...local, relay: smee, dev: true, publicUrl: 'https://f.example.com' }, reason: /^relay: \{ kind: smee \} in factory\.yml beside public_url/ },
     'half the GitHub App': { env: { GH_APP_ID: '456' }, reason: /^Incomplete GitHub App configuration/ },
@@ -1014,6 +1019,7 @@ describe("the daemon's start refusals, each one doctor's", () => {
       if (r.noFactoryYml) rmSync(join(home, 'factory.yml'));
       else saveInstance(home, r.instance ?? local);
       if (r.factoryYml !== undefined) appendFileSync(join(home, 'factory.yml'), r.factoryYml);
+      if (r.secretsJson !== undefined) writeFileSync(join(home, 'secrets.json'), r.secretsJson);
       const env = r.env ?? {};
       // On a MemoryStore: the refusal said, not the missing FACTORY_DATABASE_URL (ORC-178).
       const started = await startFactory({ home, fakeRunner: true, log: () => {}, env, store: new MemoryStore() }).then(

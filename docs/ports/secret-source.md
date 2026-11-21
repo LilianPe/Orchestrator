@@ -3,10 +3,10 @@
 Where the daemon reads a repository's secrets (`repos[].secrets` of `factory.yml`), at each `setup` that gets them (ORC-308), and the server's own secrets (`github.private_key`, the Claude tokens, `secrets_key`…), at its start (ORC-398).
 
 - Interface: `SecretSource` (`src/adapters/secrets/types.ts`), with `SecretSourceKind`, an adapter as `secret_sources.<name>.kind` names it.
-- Implementations: `env`, the daemon's environment (`src/adapters/secrets/env.ts`, built in, never declared), `systemd-creds` (`src/adapters/secrets/systemd-creds.ts`, ORC-398), `FakeSecretSource` (`src/adapters/secrets/fake.ts`, the harness's secret manager, with `fakeSecretKind`).
-- Registry: `SECRET_SOURCE_KINDS` (`src/adapters/secrets/registry.ts`): `env` and `systemd-creds`. No adapter that needs a network credential (a cloud KMS, Vault) yet: it waited for `verify` and the runs to leave the host (ORC-151, ORC-179), whose code could read the daemon's environment, so a manager's credential, worth far more than one secret; they now come with ORC-418. `systemd-creds` needs none.
+- Implementations: `env`, the daemon's environment (`src/adapters/secrets/env.ts`, built in, never declared), `systemd-creds` (`src/adapters/secrets/systemd-creds.ts`, ORC-398), `file` (`src/adapters/secrets/file.ts`, ORC-470), `FakeSecretSource` (`src/adapters/secrets/fake.ts`, the harness's secret manager, with `fakeSecretKind`).
+- Registry: `SECRET_SOURCE_KINDS` (`src/adapters/secrets/registry.ts`): `env`, `systemd-creds` and `file`. No adapter that needs a network credential (a cloud KMS, Vault) yet: it waited for `verify` and the runs to leave the host (ORC-151, ORC-179), whose code could read the daemon's environment, so a manager's credential, worth far more than one secret; they now come with ORC-418. `systemd-creds` and `file` need none.
 - Reader: `SecretReader` (`src/adapters/secrets/reader.ts`) reads a setup's references from the opened sources, checks the minimal length (8 characters, below which sealing would purge too many files), and keeps what it read for the masking.
-- Suite: `test/contracts/secret-source.contract.ts`, run by `src/adapters/secrets/env.test.ts`, `src/adapters/secrets/systemd-creds.test.ts` and `src/adapters/secrets/fake.test.ts`.
+- Suite: `test/contracts/secret-source.contract.ts`, run by `src/adapters/secrets/env.test.ts`, `src/adapters/secrets/systemd-creds.test.ts`, `src/adapters/secrets/file.test.ts` and `src/adapters/secrets/fake.test.ts`.
 
 ## References
 
@@ -77,6 +77,20 @@ LoadCredentialEncrypted=github-app-key
 - `store`, optional, an absolute path: the folder of the encrypted files (`systemd-creds encrypt --name=github-app-key key.pem /etc/credstore.encrypted/github-app-key.cred`). `describe` gives the date of `<store>/<name>.cred`, else `<store>/<name>`, as its rotation date: re-encrypting a rotated key dates it. Without it, the rotation date is unknown.
 - `read` drops one final line break: `echo … | systemd-creds encrypt` keeps it, and a webhook secret must not.
 - Out of the service (`CREDENTIALS_DIRECTORY` not set), `read` rejects: `CREDENTIALS_DIRECTORY is not set: the daemon does not run as a systemd service with LoadCredentialEncrypted=<name>`.
+
+### `file`
+
+A value held in a file of `dir`, for the `secrets_key` `factory init --dev` draws on a workstation (ORC-470), beside the `secrets.json` it encrypts but never in it. In clear on that disk, its owner's alone: `factory doctor` says it `in clear`; a server keeps its secrets in a sealed source. No network credential.
+
+```yaml
+secret_sources:
+  factory_home: { kind: file, dir: /home/<user>/.factory }
+secrets_key: factory_home:secrets.key
+```
+
+- `dir`, required, an absolute path. A path is a file name of that folder: letters, digits, `_`, `.`, `-`, never starting with a dot, never a path.
+- `read` refuses a file others than its owner can read on POSIX (`the file <name> is readable by others than its owner: chmod 600 it`), and a symbolic link or anything but a regular file (`the file <name> is not a regular file`); it drops one final line break. A missing file: `no file <name> in its folder`. Windows has no mode bits: the folder's ACL keeps it ([`installation.md`](../installation.md)).
+- `describe` gives the file's modification date as its rotation date (`doctor` never warns of the rotation of `secrets_key`, which nothing re-encrypts yet).
 
 ## Known gaps
 

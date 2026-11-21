@@ -1,11 +1,15 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { parse, stringify } from 'yaml';
 import type { Exec } from '../adapters/exec.js';
 import { isRecord } from '../adapters/graphql-pages.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { factoryYmlText } from '../config/factory-yml.js';
-import { loadInstance, loadSecrets, samePath, saveInstance, saveSecrets } from '../config/instance.js';
+import { fileSecretKind } from '../adapters/secrets/file.js';
+import { loadInstance, loadSecrets, samePath, saveInstance, saveSecrets, secretsText, type SecretsKeyFile } from '../config/instance.js';
+import { LINEAR_NEEDS_SECRETS_KEY } from '../config/secrets-file.js';
+import { readSecretsKey } from '../config/server-secrets.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning, REPO_CONFIG_PATH, testCommandWarnings } from '../config/repo-config.js';
 import { repoRoot } from '../app/root.js';
@@ -25,8 +29,13 @@ export interface InitDeps {
   io: InitIO;
   home: string;
   cwd: string;
-  /** `factory init --dev` (ORC-411): a Smee channel for Linear's webhooks when there is no public URL, on a workstation only. */
+  /**
+   * `factory init --dev` (ORC-411): a Smee channel for Linear's webhooks when there is no public URL, on a workstation only; and
+   * the `secrets_key` factory.yml lacks, drawn into a file (ORC-470).
+   */
   dev?: boolean;
+  /** Where `secrets_key` is read when it is an `env:` reference: the shell's environment by default. */
+  env?: NodeJS.ProcessEnv;
   createSmee: () => Promise<string>;
   exec: Exec;
   /**
@@ -234,11 +243,29 @@ function factoryYml(withGithub: boolean): { text: string; env: Record<string, st
   return { text: `# Written by factory init: every secret is a reference, read from the daemon's environment.\n${stringify(yml)}`, env };
 }
 
+/** The `secrets_key` `factory init --dev` draws (ORC-470): a file of FACTORY_HOME, beside the secrets.json it encrypts, its owner's alone. */
+const DEV_KEY: Omit<SecretsKeyFile, 'dir'> = { source: 'factory_home', name: 'secrets.key' };
+
+/**
+ * The `secrets_key` of a workstation (ORC-470), drawn into its file when there is none, a file left by an init that stopped
+ * before writing factory.yml taken again: it may have sealed secrets.json already. Read back as the daemon reads it. Never printed.
+ */
+async function drawDevSecretsKey(home: string): Promise<{ key: string; file: SecretsKeyFile }> {
+  const file = { ...DEV_KEY, dir: resolve(home) };
+  mkdirSync(file.dir, { recursive: true });
+  try {
+    writeFileSync(join(file.dir, file.name), `${randomBytes(32).toString('base64')}\n`, { mode: 0o600, flag: 'wx' });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+  }
+  return { key: await fileSecretKind.create({ dir: file.dir }, {}).read(file.name), file };
+}
+
 /**
  * Linear's OAuth application: what to create, then its three values, in `secrets.json`. An empty answer keeps the stored value
  * (ORC-83), as long as the client ID is the same: another application's secrets would fail its OAuth and its webhooks.
  */
-async function askLinear(io: InitIO, home: string, secrets: ReturnType<typeof loadSecrets>, urls: { callback: string; webhook: string }): Promise<void> {
+async function askLinear(io: InitIO, home: string, secrets: ReturnType<typeof loadSecrets>, urls: { callback: string; webhook: string }, key: string): Promise<void> {
   io.print(
     [
       '',
@@ -262,8 +289,8 @@ async function askLinear(io: InitIO, home: string, secrets: ReturnType<typeof lo
     if (isUsableWebhookSecret(webhookSecret)) break;
     io.print(`The webhook signing secret is required: without it, ${PRODUCT_NAME} refuses every webhook.`);
   }
-  // Linear's OAuth tokens stay with their application.
-  saveSecrets(home, { ...secrets, linear: { ...stored, clientId, clientSecret, webhookSecret } });
+  // Linear's OAuth tokens stay with their application. Sealed, never in clear (ORC-470).
+  saveSecrets(home, { ...secrets, linear: { ...stored, clientId, clientSecret, webhookSecret } }, key);
 }
 
 export async function runInit(d: InitDeps): Promise<void> {
@@ -271,15 +298,21 @@ export async function runInit(d: InitDeps): Promise<void> {
   const top = await d.exec('git', ['rev-parse', '--show-toplevel'], { cwd: d.cwd });
   // One form whatever gave the path: git writes `C:/x` on Windows, a typed one may be relative or end with `/`.
   const repoPath = resolve(top.code === 0 ? top.stdout.trim() : await io.ask(`Path of the git repository to hand to ${PRODUCT_NAME}`));
-  // Read first: a secrets.json encrypted at rest (ORC-398) stops init before it asks anything.
-  const secrets = loadSecrets(d.home);
   const cfg = loadInstance(d.home);
   const ymlPath = join(d.home, 'factory.yml');
-  // Without Linear's application, the instance never ran: its first setup gets the App's steps and references.
-  const firstSetup = !secrets.linear;
   // Before init writes one with its App's references, its own left unread.
   const ymlText = factoryYmlText(d.home);
-  const appDeclared = ymlText !== undefined && (parse(ymlText) as Record<string, unknown> | null)?.['github'] != null;
+  const ymlKeys = ymlText === undefined ? undefined : (parse(ymlText) as Record<string, unknown> | null);
+  const appDeclared = ymlKeys?.['github'] != null;
+  // Linear's values are sealed with secrets_key, never written in clear (ORC-470): --dev draws one when factory.yml names none.
+  const drawn = d.dev && ymlKeys?.['secrets_key'] == null ? await drawDevSecretsKey(d.home) : undefined;
+  const asksLinear = !!cfg.publicUrl || cfg.relay.kind === 'smee' || !!d.dev;
+  const key = drawn?.key ?? (asksLinear || secretsText(d.home) !== undefined ? await readSecretsKey(d.home, d.env) : undefined);
+  // Read first: a secrets.json sealed with another key, or without the one to open it, stops init before it asks anything.
+  const secrets = loadSecrets(d.home, key);
+  if (asksLinear && !key) throw new Error(`${LINEAR_NEEDS_SECRETS_KEY}.`);
+  // Without Linear's application, the instance never ran: its first setup gets the App's steps and references.
+  const firstSetup = !secrets.linear;
   const previous = cfg.projects.find((p) => samePath(p.repoPath, repoPath));
   // An empty answer keeps what is there (ORC-83): the project's team key, the stored Linear values.
   const teamKey = (await io.ask('Linear team key (e.g. REL)', previous?.linearTeamKey)).toUpperCase();
@@ -295,7 +328,7 @@ export async function runInit(d: InitDeps): Promise<void> {
     cfg.dev = true;
   }
   const webhook = cfg.publicUrl ? `${cfg.publicUrl}/webhooks/linear` : cfg.relay.kind === 'smee' ? cfg.relay.url : undefined;
-  if (webhook) await askLinear(io, d.home, secrets, { callback: `${cfg.publicUrl ?? `http://localhost:${cfg.port}`}/oauth/callback`, webhook });
+  if (webhook) await askLinear(io, d.home, secrets, { callback: `${cfg.publicUrl ?? `http://localhost:${cfg.port}`}/oauth/callback`, webhook }, key!);
   // Linear signs its webhook secret only once it has the webhook's URL: no value to ask yet.
   else io.print(NO_PUBLIC_URL);
 
@@ -316,7 +349,7 @@ export async function runInit(d: InitDeps): Promise<void> {
   // The daemon reads factory.yml alone (ORC-199): one is written when there is none, then the instance keys go into it, the
   // rest of the file kept.
   const written = ymlText === undefined ? factoryYml(firstSetup) : undefined;
-  saveInstance(d.home, cfg, written?.text);
+  saveInstance(d.home, cfg, written?.text, drawn?.file);
   // The maturity report (ORC-410): each point the same detection read, as a card to approve, over a repository `init` proposes.
   // After factory.yml: a database that fails loses none of the answers.
   if (detected) await printMaturity(d, id, (run) => maturityReport(repoPath, detected, run), cfg.publicUrl ?? `http://localhost:${cfg.port}`);

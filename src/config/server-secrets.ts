@@ -1,18 +1,17 @@
+import { parse, stringify } from 'yaml';
 import { SecretReader } from '../adapters/secrets/reader.js';
 import { openSecretSources, SECRET_SOURCE_KINDS } from '../adapters/secrets/registry.js';
 import { refText, type SecretRef, type SecretSource, type SecretSourceKind } from '../adapters/secrets/types.js';
 import { DAY_MS } from '../core/baseline.js';
 import { FactoryYmlError, factoryYmlText, parseFactoryYml, type FactoryYml } from './factory-yml.js';
 import { effectiveInstance, isLoopbackHost, secretsText } from './instance.js';
-import { isSealed, MIN_SECRETS_KEY_LENGTH } from './secrets-file.js';
+import { isSealed, SECRETS_KEY_REQUIRED } from './secrets-file.js';
 
 /** Past this, `doctor` says a secret's rotation is too old (ORC-398, ORC-222 criterion 4). */
 export const ROTATION_MAX_DAYS = 180;
 
-/** Why the daemon refuses to start exposed without `secrets_key` (ORC-398): the start and doctor say it alike. */
-export const SECRETS_KEY_REQUIRED = `set secrets_key in factory.yml (a reference, at least ${MIN_SECRETS_KEY_LENGTH} characters: openssl rand -base64 32), required off the loopback: it encrypts secrets.json at rest`;
-
 const IN_CLEAR_ENV = "in clear in the daemon's environment: a sealed source (systemd-creds) keeps it off the disk";
+const IN_CLEAR_FILE = "in clear in a file, its owner's alone: for a workstation; on a server, a sealed source (systemd-creds) keeps it off the disk";
 
 export interface SealedFactoryYml {
   yml?: FactoryYml;
@@ -33,8 +32,28 @@ export async function loadSealedFactoryYml(
   /** `only`: the sections (`github`) or keys (`secrets_key`) to read; every one when absent. */
   o: { kinds?: Readonly<Record<string, SecretSourceKind>>; only?: readonly string[] } = {},
 ): Promise<SealedFactoryYml> {
-  const kinds = o.kinds ?? SECRET_SOURCE_KINDS;
+  return sealedFrom(factoryYmlText(home), env, o);
+}
+
+/**
+ * factory.yml's `secrets_key` alone, read from its source (ORC-470): what `factory init` seals Linear's values with, in a shell that
+ * need not hold the daemon's other variables. Undefined without one; a source that fails throws, naming the key, never a value.
+ */
+export async function readSecretsKey(home: string, env: NodeJS.ProcessEnv = process.env): Promise<string | undefined> {
   const text = factoryYmlText(home);
+  if (text === undefined) return undefined;
+  const raw = parse(text) as Record<string, unknown> | null;
+  if (raw?.['secrets_key'] == null) return undefined;
+  const kept = { secret_sources: raw['secret_sources'] ?? undefined, secrets_key: raw['secrets_key'] };
+  return (await sealedFrom(stringify(kept), env, { only: ['secrets_key'] })).yml?.secretsKey;
+}
+
+async function sealedFrom(
+  text: string | undefined,
+  env: NodeJS.ProcessEnv,
+  o: { kinds?: Readonly<Record<string, SecretSourceKind>>; only?: readonly string[] },
+): Promise<SealedFactoryYml> {
+  const kinds = o.kinds ?? SECRET_SOURCE_KINDS;
   const draft = text === undefined ? undefined : parseFactoryYml(text, env, kinds, 'defer');
   const reader = new SecretReader(openSecretSources(draft?.secretSources, kinds, env));
   const refs = Object.entries(draft?.secretRefs ?? {}).filter(([, ref]) => ref.source !== 'env');
@@ -84,19 +103,21 @@ export async function serverSecretReport(
   const reports: SecretReport[] = [];
   for (const [key, ref] of Object.entries(yml?.secretRefs ?? {})) reports.push(await describeRef(key, ref, yml, sources, now));
   const instance = effectiveInstance(yml);
-  // Off the loopback, the daemon does not start without it: said whether or not secrets.json exists yet. Checked on
-  // `secretRefs`: values are deferred here, so `secretsKey` is unset for a key read from a source.
-  const keyMissing = !yml?.secretRefs?.['secrets_key'] && !isLoopbackHost(instance.host);
+  const stored = secretsText(home);
+  // The daemon does not start without it off the loopback, said whether or not secrets.json exists yet, nor beside Linear (ORC-470).
+  // Checked on `secretRefs`: values are deferred here, so `secretsKey` is unset for a key read from a source.
+  const exposed = !isLoopbackHost(instance.host);
+  const keyMissing = !yml?.secretRefs?.['secrets_key'] && (exposed || !!yml?.linear || stored !== undefined);
   if (keyMissing) {
-    reports.push({ key: 'secrets_key', inClear: false, warnings: [`missing, the daemon refuses to start (host: ${instance.host}): ${SECRETS_KEY_REQUIRED}`] });
+    const why = exposed ? `host: ${instance.host}` : 'Linear is set up';
+    reports.push({ key: 'secrets_key', inClear: false, warnings: [`missing, the daemon refuses to start (${why}): ${SECRETS_KEY_REQUIRED}`] });
   }
   if (!yml?.secretRefs?.['github.private_key'] && env['GH_APP_KEY']) {
     reports.push({ key: 'github.privateKey', reference: 'env:GH_APP_KEY', inClear: true, warnings: [IN_CLEAR_ENV] });
   }
-  const stored = secretsText(home);
   if (stored !== undefined) {
     const sealed = isSealed(stored);
-    reports.push({ key: 'secrets.json', inClear: !sealed, warnings: sealed ? [] : [keyMissing ? 'in clear on disk' : 'in clear on disk: set secrets_key in factory.yml to encrypt it'] });
+    reports.push({ key: 'secrets.json', inClear: !sealed, warnings: sealed ? [] : [keyMissing ? 'in clear on disk' : 'in clear on disk: the daemon encrypts it with secrets_key at its start'] });
   }
   return reports;
 }
@@ -105,6 +126,8 @@ async function describeRef(key: string, ref: SecretRef, yml: FactoryYml | undefi
   const reference = refText(ref);
   const kind = ref.source === 'env' ? 'env' : yml?.secretSources?.[ref.source]?.kind;
   if (kind === 'env') return { key, reference, inClear: true, warnings: [IN_CLEAR_ENV] };
+  // A workstation's key, mode 0600 (ORC-470): in clear on its disk all the same.
+  if (kind === 'file') return { key, reference, inClear: true, warnings: [IN_CLEAR_FILE] };
   let rotatedAt: Date | undefined;
   try {
     rotatedAt = (await sources[ref.source]?.describe?.(ref.path))?.rotatedAt;

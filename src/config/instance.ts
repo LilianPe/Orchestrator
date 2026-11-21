@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Document, parseDocument } from 'yaml';
 import { FANTOME, FactoryYmlError, factoryYmlText, parseInstanceKeys, type FactoryYml, type ProjectConfig, type Relay } from './factory-yml.js';
-import { isSealed, openSecretsFile, sealSecretsFile } from './secrets-file.js';
+import { isSealed, LINEAR_NEEDS_SECRETS_KEY, openSecretsFile, sealSecretsFile } from './secrets-file.js';
 import { validatorsNeeded } from '../core/authz.js';
 
 export type { ProjectConfig } from './factory-yml.js';
@@ -34,6 +34,13 @@ export interface LinearSecrets {
 
 export interface Secrets {
   linear?: LinearSecrets;
+}
+
+/** A `secrets_key` held in a file (ORC-470): the `file` source declared under `source`, its folder `dir`, the file `name`. */
+export interface SecretsKeyFile {
+  source: string;
+  dir: string;
+  name: string;
 }
 
 export function factoryHome(env: NodeJS.ProcessEnv = process.env): string {
@@ -112,8 +119,9 @@ function projectYml({ id, repoPath, linearTeamKey, authz, effects, preset }: Pro
  * never written. `base` is the rest of a file written where there is none. Never its GitHub App, whose key is a reference only a
  * person writes. Validated as the daemon reads it: a value it would refuse is never written. Replaced whole by a rename: the
  * daemon, which reads its Claude account there at each launch (`claudeAccountReader`), never reads it half-written.
+ * `keyFile`: the `secrets_key` `factory init --dev` drew (ORC-470), declared with its `file` source; a reference, never its value.
  */
-export function saveInstance(home: string, cfg: Omit<InstanceConfig, 'github'>, base?: string): void {
+export function saveInstance(home: string, cfg: Omit<InstanceConfig, 'github'>, base?: string, keyFile?: SecretsKeyFile): void {
   const text = factoryYmlText(home) ?? base;
   const doc = text === undefined ? new Document({}) : parseDocument(text);
   if (doc.errors.length > 0) throw new FactoryYmlError([`unreadable YAML: ${doc.errors[0]!.message}`]);
@@ -131,6 +139,12 @@ export function saveInstance(home: string, cfg: Omit<InstanceConfig, 'github'>, 
     if (isDeepStrictEqual(before[key], cfg[key])) continue;
     if (value === undefined) doc.delete(yml);
     else doc.set(yml, doc.createNode(value));
+  }
+  if (keyFile) {
+    // Another declaration of that name would lose its references.
+    if (doc.hasIn(['secret_sources', keyFile.source])) throw new FactoryYmlError([`secret_sources.${keyFile.source}: already declared: write secrets_key in factory.yml by hand`]);
+    doc.setIn(['secret_sources', keyFile.source], doc.createNode({ kind: 'file', dir: keyFile.dir }));
+    doc.set('secrets_key', `${keyFile.source}:${keyFile.name}`);
   }
   const written = doc.toString();
   parseInstanceKeys(written);
@@ -253,9 +267,11 @@ export function linearSettings(home: string, yml: FactoryYml | undefined): Linea
   return { clientId: '', clientSecret: '', webhookSecret: '', ...stored, ...fromYml };
 }
 
-/** Writes Linear's OAuth tokens and identifiers to `secrets.json`, leaving its static values as they are there; encrypted with `secrets_key` when factory.yml names one (ORC-398). */
+/** Writes Linear's OAuth tokens and identifiers to `secrets.json`, leaving its static values as they are there; encrypted with `secrets_key` (ORC-398), refused without it (ORC-470). */
 export function saveLinearTokens(home: string, patch: Partial<Omit<LinearSecrets, 'clientId' | 'clientSecret' | 'webhookSecret'>>, yml?: Pick<FactoryYml, 'secretsKey'>): void {
   const key = yml?.secretsKey;
+  // Never in clear, on the loopback too (ORC-470): Connect Linear and a refresh stop here without it.
+  if (!key) throw new Error(`${LINEAR_NEEDS_SECRETS_KEY}.`);
   const s = loadSecrets(home, key);
   saveSecrets(home, { ...s, linear: { clientId: '', clientSecret: '', webhookSecret: '', ...s.linear, ...patch } }, key);
 }
@@ -283,14 +299,15 @@ export function daemonSecretValues(home: string, yml: FactoryYml | undefined, en
 }
 
 /**
- * Encrypted with `key` when given (ORC-398), in clear otherwise. Mode 0600 on POSIX. Windows has no mode bits (chmod only sets
+ * Encrypted with `key` (ORC-398), never in clear (ORC-470). Mode 0600 on POSIX. Windows has no mode bits (chmod only sets
  * read-only): the file takes the ACL of its folder, so FACTORY_HOME must be in a folder only the factory's user can read
  * (docs/installation.md).
  */
-export function saveSecrets(home: string, s: Secrets, key?: string): void {
+export function saveSecrets(home: string, s: Secrets, key: string): void {
+  // Sealed before anything is written: a key too short throws here.
+  const sealed = sealSecretsFile(JSON.stringify(s, null, 2), key);
   ensureTree(home);
   const file = homePaths(home).secrets;
-  const text = JSON.stringify(s, null, 2);
-  writeFileSync(file, key ? sealSecretsFile(text, key) : text, { mode: 0o600 });
+  writeFileSync(file, sealed, { mode: 0o600 });
   chmodSync(file, 0o600);
 }

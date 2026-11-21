@@ -6,7 +6,8 @@ import { FakeSecretSource, fakeSecretKind } from '../adapters/secrets/fake.js';
 import { SECRET_SOURCE_KINDS } from '../adapters/secrets/registry.js';
 import { FactoryYmlError } from './factory-yml.js';
 import { saveSecrets } from './instance.js';
-import { loadSealedFactoryYml, ROTATION_MAX_DAYS, SECRETS_KEY_REQUIRED, serverSecretLines, serverSecretReport } from './server-secrets.js';
+import { SECRETS_KEY_REQUIRED } from './secrets-file.js';
+import { loadSealedFactoryYml, ROTATION_MAX_DAYS, serverSecretLines, serverSecretReport } from './server-secrets.js';
 
 const PEM = '-----BEGIN RSA PRIVATE KEY-----\nsealed\n-----END RSA PRIVATE KEY-----\n';
 const NOW = Date.parse('2026-11-15T00:00:00Z');
@@ -98,25 +99,49 @@ describe("doctor's report of the server secrets (ORC-398)", () => {
     expect(await serverSecretReport(h, {}, { now: NOW })).toEqual([]);
   });
 
-  it('names a secrets.json kept in clear on disk', async () => {
+  // ORC-470: on the loopback too, secrets.json without secrets_key stops the start.
+  it('names a secrets.json kept in clear on disk, and the missing secrets_key that stops the start beside it', async () => {
     const h = home('concurrency: 1\n');
-    saveSecrets(h, { linear: { clientId: 'c', clientSecret: 's', webhookSecret: 'w', accessToken: 'a' } });
+    writeFileSync(join(h, 'secrets.json'), JSON.stringify({ linear: { clientId: 'c', clientSecret: 's', webhookSecret: 'w', accessToken: 'a' } }));
     expect(await serverSecretReport(h, {}, { now: NOW })).toEqual([
-      { key: 'secrets.json', inClear: true, warnings: ['in clear on disk: set secrets_key in factory.yml to encrypt it'] },
+      { key: 'secrets_key', inClear: false, warnings: [`missing, the daemon refuses to start (Linear is set up): ${SECRETS_KEY_REQUIRED}`] },
+      { key: 'secrets.json', inClear: true, warnings: ['in clear on disk'] },
     ]);
+    writeFileSync(join(h, 'factory.yml'), 'secrets_key: env:FACTORY_SECRETS_KEY\n');
+    expect((await serverSecretReport(h, { FACTORY_SECRETS_KEY: 'k'.repeat(32) }, { now: NOW })).find((r) => r.key === 'secrets.json')).toEqual({
+      key: 'secrets.json',
+      inClear: true,
+      warnings: ['in clear on disk: the daemon encrypts it with secrets_key at its start'],
+    });
     saveSecrets(h, {}, 'k'.repeat(32));
-    expect((await serverSecretReport(h, {}, { now: NOW })).find((r) => r.key === 'secrets.json')).toEqual({ key: 'secrets.json', inClear: false, warnings: [] });
+    expect((await serverSecretReport(h, { FACTORY_SECRETS_KEY: 'k'.repeat(32) }, { now: NOW })).find((r) => r.key === 'secrets.json')).toEqual({ key: 'secrets.json', inClear: false, warnings: [] });
   });
 
-  it('off the loopback, says a missing secrets_key stops the start, even before secrets.json exists', async () => {
+  it('says a missing secrets_key stops the start off the loopback, even before secrets.json exists, and beside a linear section', async () => {
     const h = home('concurrency: 1\n');
     writeFileSync(join(h, 'factory.yml'), 'host: 0.0.0.0\n');
     expect(await serverSecretReport(h, {}, { now: NOW })).toEqual([
       { key: 'secrets_key', inClear: false, warnings: [`missing, the daemon refuses to start (host: 0.0.0.0): ${SECRETS_KEY_REQUIRED}`] },
     ]);
-    // On the loopback, it stays optional: nothing to say without secrets.json.
+    // On the loopback without Linear: nothing to say.
     writeFileSync(join(h, 'factory.yml'), 'host: 127.0.0.1\n');
     expect(await serverSecretReport(h, {}, { now: NOW })).toEqual([]);
+    writeFileSync(join(h, 'factory.yml'), 'host: 127.0.0.1\nlinear: { app_client_id: cid }\n');
+    expect(await serverSecretReport(h, {}, { now: NOW })).toEqual([
+      { key: 'secrets_key', inClear: false, warnings: [`missing, the daemon refuses to start (Linear is set up): ${SECRETS_KEY_REQUIRED}`] },
+    ]);
+  });
+
+  it('says a key of a file in clear, for a workstation (ORC-470)', async () => {
+    const h = home(`secret_sources: { factory_home: { kind: file, dir: ${JSON.stringify(tmpdir())} } }\nsecrets_key: factory_home:secrets.key\n`);
+    expect(await serverSecretReport(h, {}, { now: NOW })).toEqual([
+      {
+        key: 'secrets_key',
+        reference: 'factory_home:secrets.key',
+        inClear: true,
+        warnings: ["in clear in a file, its owner's alone: for a workstation; on a server, a sealed source (systemd-creds) keeps it off the disk"],
+      },
+    ]);
   });
 
   it('says it in lines, the date first, then each warning', () => {
