@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { apiClassifier, classifierBackend, cliClassifier, messageClassifier, parseVerdict, quoted } from './message-classifier.js';
 
 const answer = (content: unknown, status = 200): typeof fetch => (async () => ({ ok: status < 300, status, json: async () => ({ content }) })) as unknown as typeof fetch;
@@ -107,12 +107,50 @@ describe('the small model of messages (ORC-336)', () => {
     expect(classifierBackend({ CLAUDE_CODE_OAUTH_TOKEN: 't' }, 'token', false)).toBeUndefined();
   });
 
+  describe('its API key (ORC-445)', () => {
+    afterEach(() => vi.unstubAllGlobals());
+    /** The key the Messages API was called with, by the classifier `messageClassifier` builds. */
+    const keyUsed = async (env: NodeJS.ProcessEnv, apiKey: string | undefined, log: (m: string) => void) => {
+      const keys: string[] = [];
+      vi.stubGlobal('fetch', (async (_url: string, init: RequestInit) => {
+        keys.push((init.headers as Record<string, string>)['x-api-key']!);
+        return answer([{ type: 'text', text: 'question' }])('', init);
+      }) as unknown as typeof fetch);
+      const classify = messageClassifier(env, undefined, false, apiKey, log);
+      await classify!('x');
+      await classify!('y');
+      return keys;
+    };
+
+    it('reads message_model.api_key of factory.yml, before ANTHROPIC_API_KEY and without a warning', async () => {
+      const logs: string[] = [];
+      expect(await keyUsed({ ANTHROPIC_API_KEY: 'old' }, 'own', (m) => logs.push(m))).toEqual(['own', 'own']);
+      expect(logs).toEqual([]);
+      expect(classifierBackend({}, undefined, false, 'own')).toBe('api');
+      // On the host, a key alone still goes through the Messages API, and the Claude account before it.
+      expect(classifierBackend({}, undefined, true, 'own')).toBe('api');
+      expect(classifierBackend({}, 'token', true, 'own')).toBe('cli');
+    });
+
+    it('falls back on ANTHROPIC_API_KEY in transition, with one warning for the daemon, not one per message', async () => {
+      const logs: string[] = [];
+      expect(await keyUsed({ ANTHROPIC_API_KEY: 'old' }, undefined, (m) => logs.push(m))).toEqual(['old', 'old']);
+      expect(logs).toEqual([expect.stringContaining('message_model.api_key')]);
+    });
+
+    it('gives no warning when the transition key is not the one used', () => {
+      const logs: string[] = [];
+      expect(messageClassifier({ ANTHROPIC_API_KEY: 'old' }, 'token', true, undefined, (m) => logs.push(m))).toBeDefined();
+      expect(logs).toEqual([]);
+    });
+  });
+
   it('warns of a FACTORY_MESSAGE_MODEL it does not know, and stays on', () => {
     const logs: string[] = [];
-    expect(classifierBackend({ FACTORY_MESSAGE_MODEL: 'disabled', ANTHROPIC_API_KEY: 'k' }, undefined, false, (m) => logs.push(m))).toBe('api');
+    expect(classifierBackend({ FACTORY_MESSAGE_MODEL: 'disabled', ANTHROPIC_API_KEY: 'k' }, undefined, false, undefined, (m) => logs.push(m))).toBe('api');
     expect(logs).toEqual([expect.stringContaining('FACTORY_MESSAGE_MODEL=disabled is not recognised')]);
     logs.length = 0;
-    for (const on of ['on', '1', 'TRUE', '']) classifierBackend({ FACTORY_MESSAGE_MODEL: on }, undefined, true, (m) => logs.push(m));
+    for (const on of ['on', '1', 'TRUE', '']) classifierBackend({ FACTORY_MESSAGE_MODEL: on }, undefined, true, undefined, (m) => logs.push(m));
     expect(logs).toEqual([]);
   });
 });
