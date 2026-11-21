@@ -264,7 +264,7 @@ export function daemonSecretValues(home: string, yml: FactoryYml | undefined, en
   const repoEnv = yml?.repos?.flatMap((r) => Object.values(r.secrets ?? {}).filter((ref) => fromEnv(ref.source)).map((ref) => env[ref.path])) ?? [];
   // The server's `env:` secrets by their references, a source's option among them (ORC-398); another source's are the reader's.
   const serverEnv = Object.values(yml?.secretRefs ?? {}).filter((ref) => ref.source === 'env').map((ref) => env[ref.path]);
-  const fromYml = [yml?.github?.privateKey, yml?.github?.webhookSecret, yml?.secretsKey, ...(yml?.claude?.accounts.map((a) => a.token) ?? []), ...repoEnv, ...serverEnv];
+  const fromYml = [yml?.github?.privateKey, yml?.github?.webhookSecret, yml?.secretsKey, yml?.messageModel?.apiKey, ...(yml?.claude?.accounts.map((a) => a.token) ?? []), ...repoEnv, ...serverEnv];
   return [...new Set([...secretValues({ linear: linearSettings(home, yml) }), ...fromYml.filter((v): v is string => !!v)])];
 }
 

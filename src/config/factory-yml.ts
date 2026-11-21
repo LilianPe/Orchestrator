@@ -65,6 +65,8 @@ export interface FactoryYml {
   audit?: { seriousDefect: string };
   /** How a human message is acknowledged (ORC-380, decision ORC-140): `comment` when absent, or a reaction on its comment. */
   acknowledge?: AckMode;
+  /** The Messages API key of the small model that classifies human messages (ORC-336, ORC-445), a server secret. */
+  messageModel?: { apiKey: string };
   /** The caps of a run's reads that move a public counter (ORC-370), each `READ_CAPS`' when unset; never off, and no repository's to change. */
   egress?: Partial<ReadCaps>;
   /** The Linear status each step shows (ORC-382), by step: applied by `stepSettings`, checked against the preset by `defaultWorkflow`. */
@@ -237,6 +239,7 @@ const SECTIONS: Record<string, string[]> = {
   read_guard: ['max_lines'],
   audit: ['serious_defect'],
   acknowledge: [],
+  message_model: ['api_key'],
   egress: ['max_versions_per_package', 'max_assets_per_repo'],
   statuses: [],
   spec: ['publish', 'threshold'],
@@ -534,6 +537,8 @@ export function parseFactoryYml(
   if (seriousDefect !== undefined) out.audit = { seriousDefect };
   const acknowledge = leaf('acknowledge', r['acknowledge'], z.enum(['comment', 'reaction']), '`comment` or `reaction` expected');
   if (acknowledge !== undefined) out.acknowledge = acknowledge;
+  const apiKey = secret('message_model.api_key', section('message_model')?.['api_key']);
+  if (apiKey) out.messageModel = { apiKey };
   const egress = section('egress');
   if (egress) {
     const cap = (key: string) => leaf(`egress.${key}`, egress[key], z.number().int().positive(), 'a positive integer is expected; the cap cannot be turned off');

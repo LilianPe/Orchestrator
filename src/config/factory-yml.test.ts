@@ -169,6 +169,15 @@ describe('factory.yml (ORC-209, part B)', () => {
     expect(violations('acknowledge: emoji')).toEqual(['acknowledge: `comment` or `reaction` expected']);
   });
 
+  it('reads the API key of the small model of messages as a server secret (ORC-445)', () => {
+    const yml = parseFactoryYml('message_model: { api_key: env:MESSAGE_KEY }', { ...ENV, MESSAGE_KEY: 'sk-message' });
+    expect(yml.messageModel).toEqual({ apiKey: 'sk-message' });
+    expect(yml.secretRefs).toEqual({ 'message_model.api_key': { source: 'env', path: 'MESSAGE_KEY' } });
+    expect(violations('message_model: { api_key: env:MESSAGE_KEY }')).toEqual(['message_model.api_key: the environment variable MESSAGE_KEY is not set']);
+    expect(violations('message_model: { api_key: sk-in-clear }')).toEqual([expect.stringContaining('never a secret in clear')]);
+    expect(violations('message_model: { key: env:MESSAGE_KEY }')).toEqual(['message_model.key: unknown key']);
+  });
+
   it('reads the Linear status of each step and where the spec is published, SPEC_PUBLICATION for what is unset (ORC-382)', () => {
     expect(parseFactoryYml('statuses:\n  spec_draft: Spec\n  build: In Progress', ENV).statuses).toEqual({ spec_draft: 'Spec', build: 'In Progress' });
     expect(stepSettings(parseFactoryYml('statuses:\n  spec_draft: Spec', ENV))).toMatchObject({ statuses: { spec_draft: 'Spec' } });
