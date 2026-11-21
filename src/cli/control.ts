@@ -28,19 +28,13 @@ export const ANSWER_TIMEOUT_MS = 60_000;
  */
 export const DRY_RUN_TIMEOUT_MS = 2 * 60 * 60_000;
 
-/** The socket's errors before any byte is sent: nothing reached the daemon, HTTP may be tried instead. */
-const NOT_REACHED = new Set(['ENOENT', 'ECONNREFUSED', 'EACCES', 'EPERM', 'ENOTSOCK']);
 /**
- * A path past the OS's limit, refused as EINVAL on Linux, ENAMETOOLONG on macOS (ORC-431): not reached only when `connect` says
- * so, as either may come from a later call, once the daemon took the command (ORC-434).
+ * Whether a socket's error came before any byte was sent, so HTTP may be tried instead without sending a command twice: one of
+ * `connect`'s, whatever its code (ORC-434). No socket (ENOENT), a dead one (ECONNREFUSED), one this user may not open (EACCES), a
+ * path past the OS's limit (EINVAL on Linux, ENAMETOOLONG on macOS, ORC-431); the same codes from a later call may come once the
+ * daemon took the command.
  */
-const NOT_CONNECTED = new Set(['EINVAL', 'ENAMETOOLONG']);
-
-/** Whether a socket's error came before the daemon could take anything, so HTTP may be tried instead without sending a command twice. */
-export function nothingReached(err: unknown): boolean {
-  const { code = '', syscall } = err as NodeJS.ErrnoException;
-  return NOT_REACHED.has(code) || (NOT_CONNECTED.has(code) && syscall === 'connect');
-}
+export const nothingReached = (err: unknown): boolean => (err as NodeJS.ErrnoException).syscall === 'connect';
 
 /**
  * A request of the CLI's (its commands carry no body) with node's own client, which never gives up on a slow answer but at the
@@ -112,10 +106,10 @@ async function ask(d: ControlDeps, path: string, init: RequestInit = {}, o: { sl
   const signal = AbortSignal.timeout(timeoutMs);
   // Only the timer's own abort: an error that merely comes at its end keeps its meaning (a fallback to HTTP, say).
   const expired = (err: unknown) => signal.aborted && (err === signal.reason || (err as Error).cause === signal.reason);
-  const taken = init.method === 'POST' ? 'the command may have been taken, check with `factory status`' : undefined;
+  const taken = init.method === 'POST' ? 'the command may have been taken, check with `factory status`' : '';
   const timedOut = (where: string) => {
     // A dry run has no cap of its own: a long one is no stuck daemon, and a restart would lose it.
-    const why = o.slow ? 'the dry run may still be under way, and recorded once it ends' : `it may be stuck, check its log or restart it${taken ? `; ${taken}` : ''}`;
+    const why = o.slow ? 'the dry run may still be under way, and recorded once it ends' : `it may be stuck, check its log or restart it${taken && `; ${taken}`}`;
     d.out(`${PRODUCT_NAME} did not answer ${where} within ${delay(timeoutMs)}: ${why}.`);
     return undefined;
   };
@@ -127,7 +121,7 @@ async function ask(d: ControlDeps, path: string, init: RequestInit = {}, o: { sl
       // A socket a daemon killed left, or one this user may not open: HTTP, as without one. Any later error may come after
       // the daemon took the command: never sent twice.
       if (!nothingReached(err)) {
-        d.out(`${PRODUCT_NAME} did not answer through ${d.socket} (${(err as Error).message})${taken ? `: ${taken}` : ''}.`);
+        d.out(`${PRODUCT_NAME} did not answer through ${d.socket} (${(err as Error).message})${taken && `: ${taken}`}.`);
         return undefined;
       }
     }

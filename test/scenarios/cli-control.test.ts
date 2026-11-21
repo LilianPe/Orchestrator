@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, statSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
-import { createServer as createNetServer, type AddressInfo } from 'node:net';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -301,26 +301,31 @@ describe.skipIf(process.platform === 'win32')("the CLI through the daemon's Unix
   });
 });
 
-/** A daemon that takes the connection and never answers (ORC-434): over TCP on the loopback, or on a Unix socket. */
-async function mute(on: { socket?: string } = {}) {
-  const held: import('node:net').Socket[] = [];
-  const server = createNetServer((s) => void held.push(s));
-  await new Promise<void>((r) => (on.socket ? server.listen(on.socket, r) : server.listen(0, '127.0.0.1', r)));
+/**
+ * A daemon that takes the request and never ends its answer (ORC-434), on the loopback or on a Unix socket: silent, or as
+ * `answer` starts it; and the lines of the CLI's commands against it, which wait 0.2 s.
+ */
+async function mute(o: { socket?: string; answer?: (res: import('node:http').ServerResponse) => void } = {}) {
+  const server = createServer((_req, res) => o.answer?.(res));
+  await new Promise<void>((r) => (o.socket ? server.listen(o.socket, r) : server.listen(0, '127.0.0.1', r)));
+  const lines: string[] = [];
+  const api = o.socket ? 'http://127.0.0.1:1' : `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const close = () => {
-    for (const s of held) s.destroy();
+    server.closeAllConnections();
     return new Promise((r) => server.close(r));
   };
-  return { api: on.socket ? 'http://127.0.0.1:1' : `http://127.0.0.1:${(server.address() as AddressInfo).port}`, close };
+  return { deps: { api, out: (l: string) => void lines.push(l), timeoutMs: 200 }, lines, close };
 }
+
+const STUCK = 'it may be stuck, check its log or restart it';
 
 // ORC-434: a daemon that no longer answers does not hold the CLI forever.
 describe('the CLI against a daemon that does not answer (ORC-434)', () => {
   it('status gives up over HTTP after its delay, and says so', async () => {
     const daemon = await mute();
     try {
-      const lines: string[] = [];
-      expect(await runStatusCommand({ api: daemon.api, out: (l) => void lines.push(l), timeoutMs: 200 })).toBe(1);
-      expect(lines).toEqual([`${PRODUCT_NAME} did not answer on ${daemon.api} within 0.2 s: it may be stuck, check its log or restart it.`]);
+      expect(await runStatusCommand(daemon.deps)).toBe(1);
+      expect(daemon.lines).toEqual([`${PRODUCT_NAME} did not answer on ${daemon.deps.api} within 0.2 s: ${STUCK}.`]);
     } finally {
       await daemon.close();
     }
@@ -329,10 +334,9 @@ describe('the CLI against a daemon that does not answer (ORC-434)', () => {
   it('dry-run gives up too over HTTP, on its own client', async () => {
     const daemon = await mute();
     try {
-      const lines: string[] = [];
-      expect(await runDryRunCommand({ api: daemon.api, out: (l) => void lines.push(l), timeoutMs: 200 }, 'p')).toBe(1);
+      expect(await runDryRunCommand(daemon.deps, 'p')).toBe(1);
       // Never a restart, which would lose a dry run that only takes long.
-      expect(lines.at(-1)).toBe(`${PRODUCT_NAME} did not answer on ${daemon.api} within 0.2 s: the dry run may still be under way, and recorded once it ends.`);
+      expect(daemon.lines.at(-1)).toBe(`${PRODUCT_NAME} did not answer on ${daemon.deps.api} within 0.2 s: the dry run may still be under way, and recorded once it ends.`);
     } finally {
       await daemon.close();
     }
@@ -342,47 +346,43 @@ describe('the CLI against a daemon that does not answer (ORC-434)', () => {
     const socket = join(mkdtempSync(join(tmpdir(), 'factory-home-')), 'factory.sock');
     const daemon = await mute({ socket });
     try {
-      const lines: string[] = [];
-      const fetch = () => expect.unreachable();
-      expect(await runQueueCommand({ api: daemon.api, socket, fetch, out: (l) => void lines.push(l), timeoutMs: 200 }, 'pause')).toBe(1);
-      expect(lines).toEqual([`${PRODUCT_NAME} did not answer through ${socket} within 0.2 s: it may be stuck, check its log or restart it; the command may have been taken, check with \`factory status\`.`]);
+      expect(await runQueueCommand({ ...daemon.deps, socket, fetch: () => expect.unreachable() }, 'pause')).toBe(1);
+      expect(daemon.lines).toEqual([`${PRODUCT_NAME} did not answer through ${socket} within 0.2 s: ${STUCK}; the command may have been taken, check with \`factory status\`.`]);
     } finally {
       await daemon.close();
     }
   });
 
   it('a daemon that sends its headers and then stalls is given up on all the same', async () => {
-    const server = createServer((_req, res) => {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.write('{"ok"');
+    const daemon = await mute({
+      answer: (res) => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.write('{"ok"');
+      },
     });
-    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
     try {
-      const lines: string[] = [];
-      const api = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-      expect(await runDryRunCommand({ api, out: (l) => void lines.push(l), timeoutMs: 200 }, 'p')).toBe(1);
-      expect(lines.at(-1)).toContain('within 0.2 s');
+      expect(await runDryRunCommand(daemon.deps, 'p')).toBe(1);
+      expect(daemon.lines.at(-1)).toContain('within 0.2 s');
       // And through `fetch`, which status takes.
-      expect(await runStatusCommand({ api, out: (l) => void lines.push(l), timeoutMs: 200 })).toBe(1);
-      expect(lines.at(-1)).toBe(`${PRODUCT_NAME} did not answer on ${api} within 0.2 s: it may be stuck, check its log or restart it.`);
+      expect(await runStatusCommand(daemon.deps)).toBe(1);
+      expect(daemon.lines.at(-1)).toBe(`${PRODUCT_NAME} did not answer on ${daemon.deps.api} within 0.2 s: ${STUCK}.`);
     } finally {
-      server.closeAllConnections();
-      await new Promise((r) => server.close(r));
+      await daemon.close();
     }
   });
 });
 
-// ORC-434: only a socket the CLI could not connect to falls back to HTTP; an EINVAL from a later write may come once the daemon
-// took the command, which HTTP would then send a second time.
+// ORC-434: only a socket the CLI could not connect to falls back to HTTP; the same code from a later call may come once the
+// daemon took the command, which HTTP would then send a second time.
 describe('which socket errors fall back to HTTP (ORC-434)', () => {
-  const err = (code: string, syscall: string) => Object.assign(new Error(`${syscall} ${code}`), { code, syscall });
-
-  it('EINVAL and ENAMETOOLONG only from connect', () => {
-    expect(nothingReached(err('EINVAL', 'connect'))).toBe(true);
-    expect(nothingReached(err('ENAMETOOLONG', 'connect'))).toBe(true);
-    expect(nothingReached(err('EINVAL', 'write'))).toBe(false);
-    expect(nothingReached(err('ENAMETOOLONG', 'read'))).toBe(false);
-    expect(nothingReached(err('ECONNRESET', 'read'))).toBe(false);
-    expect(nothingReached(err('ENOENT', 'connect'))).toBe(true);
+  it.each([
+    ['EINVAL', 'connect', true],
+    ['ENAMETOOLONG', 'connect', true],
+    ['ENOENT', 'connect', true],
+    ['EINVAL', 'write', false],
+    ['ENAMETOOLONG', 'read', false],
+    ['ECONNRESET', 'read', false],
+  ])('%s from %s: %s', (code, syscall, fallsBack) => {
+    expect(nothingReached(Object.assign(new Error(`${syscall} ${code}`), { code, syscall }))).toBe(fallsBack);
   });
 });
