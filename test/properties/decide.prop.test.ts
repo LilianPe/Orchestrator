@@ -68,7 +68,7 @@ const pendingRelaunch = [
   verifyFailed('tests'),
 ];
 /** The PR in review fails its CI past the red-CI bound: fix-ci is blocked. */
-const redCiBound = () => [ext('status.changed', { from: 'dev', to: 'human_review' }), ...Array.from({ length: 3 }, () => ext('pr.checks_failed', { ...pr, failures: ['test'] }))];
+const redCiBound = () => [ext('pr.opened', pr), ext('status.changed', { from: 'dev', to: 'human_review' }), ...Array.from({ length: 3 }, () => ext('pr.checks_failed', { ...pr, failures: ['test'] }))];
 /** The settle after the run's end dies, its retries spent (ORC-339). */
 const settleDied = () => ext('effect.failed', { effectId: 'REL-1:1:1', kind: 'settle', eventId: 'ex-1', attempts: 8, error: 'Linear down' });
 const reply = (taint: 'trusted' | 'untrusted' = 'trusted') => ext('session.prompted', { linearSessionId: DEV_SESSION, body: 'ok', author: 'lilian' }, taint);
@@ -546,6 +546,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     const CI_RESETS: EventType[] = ['pr.opened', 'session.prompted', 'ticket.commented', 'status.changed', 'ticket.delegated', 'dead_letter.repaired'];
     const redCiCounterexample = seq(
       ...delegated(),
+      ext('pr.opened', pr),
       ext('status.changed', { from: 'todo', to: 'human_review' }),
       ...Array.from({ length: ciBound + 2 }, () => ext('pr.checks_failed', { ...pr, failures: ['test'] })),
     );
@@ -565,6 +566,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
         ...handedBack({ intake: { size: 'xs', risk: 'low', complete: true, screen: false, missing: [] } }),
         blockedBy: [{ identifier: 'REL-2', stateName: 'In Progress' }],
       }),
+      ext('pr.opened', pr),
       ext('status.changed', { from: 'dev', to: 'human_review' }),
     ];
     const redCi = (): Entry => ext('pr.checks_failed', { ...pr, failures: ['test'] });

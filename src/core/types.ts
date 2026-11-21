@@ -280,7 +280,11 @@ export interface EventPayloads {
   command: { name: string; body: string; linearSessionId: string; author: string; commentId?: string; issue?: IssueSnapshot; ack?: true; kind?: MessageKind; masked?: true; frozen?: FrozenTests; repos?: string[]; waitedIn?: string };
   'pr.opened': PrPayload;
   'pr.checks_passed': PrPayload;
-  'pr.checks_failed': PrPayload & { failures: string[] };
+  /**
+   * `headSha`: the commit the checks ran on, when the source reads it (ORC-466): a red CI of a head the PR left behind is
+   * ignored. Optional: no version bump, older rows lack it.
+   */
+  'pr.checks_failed': PrPayload & { failures: string[]; headSha?: string };
   /**
    * `mergeSha` (the commit the merge put on the base branch) and `headSha` (the PR's head when merged),
    * when the source reads them (ORC-278): a revert on the default branch names one of them. `mergedAt`:

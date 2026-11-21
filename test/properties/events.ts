@@ -125,7 +125,8 @@ const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
     .map(({ frozen: f, ...c }) => (f && c.name === REFREEZE ? { ...c, frozen: f } : c)),
   'pr.opened': pr,
   'pr.checks_passed': pr,
-  'pr.checks_failed': pr.map((p) => ({ ...p, failures: ['test'] })),
+  // With or without the head the checks ran on (ORC-466): rows from before it lack it.
+  'pr.checks_failed': fc.record({ pr, head: fc.constantFrom(undefined, 'aaa', 'bbb') }).map(({ pr: p, head }) => ({ ...p, failures: ['test'], ...(head ? { headSha: head } : {}) })),
   // With or without the merge and head commits (ORC-278): rows from before it, and the poller with `gh`, lack them.
   'pr.merged': fc.record({ pr, shas: fc.constantFrom({}, { headSha: 'aaa' }, { mergeSha: 'ccc', headSha: 'aaa' }) }).map(({ pr: p, shas }) => ({ ...p, ...shas })),
   'pr.closed': pr,
@@ -333,10 +334,12 @@ const verifyLoop: fc.Arbitrary<DraftEntry[]> = fc
     }).flat(),
   );
 
-/** The PR goes to review, then the forge reports red CI several times in a row: the red-CI loop of I5. */
+/** The PR opens and goes to review, then the forge reports red CI on it several times in a row: the red-CI loop of I5. */
 const redCi: fc.Arbitrary<DraftEntry[]> = fc
   .record({ to: fc.constantFrom('human_review' as const, 'ai_review' as const), reports: fc.integer({ min: 1, max: 5 }), pr })
   .map(({ to, reports, pr: p }): DraftEntry[] => [
+    // A red CI is read on the ticket's open PR only (ORC-466).
+    { kind: 'external', draft: { type: 'pr.opened', payload: p }, untrusted: false },
     { kind: 'external', draft: { type: 'status.changed', payload: { from: 'dev', to } }, untrusted: false },
     ...Array.from({ length: reports }, (): DraftEntry => ({ kind: 'external', draft: { type: 'pr.checks_failed', payload: { ...p, failures: ['test'] } }, untrusted: false })),
   ]);

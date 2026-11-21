@@ -2657,6 +2657,21 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // Facts for the measures (ORC-278): a revert of the ticket's PR, a CI run's duration. Nothing to decide.
       out.trace.push(`${event.type}: recorded for the measures`);
       return out;
+    case 'pr.checks_failed': {
+      // Red CI of the ticket's open PR on its current head only (ORC-466): another PR's, a merged or closed one's, or one of a head
+      // a publication or a human's push replaced since, starts no fix and counts no round. A red CI with no head (before ORC-466) is read.
+      const { number, headSha } = event.payload;
+      const head = ticket?.humanHead ?? ticket?.verifiedSha;
+      if (ticket?.prNumber !== number || ticket.prState !== 'OPEN') {
+        out.trace.push(`pr.checks_failed: PR #${number} is not the open PR of the ticket, ignored`);
+        return out;
+      }
+      if (headSha && head && headSha !== head) {
+        out.trace.push(`pr.checks_failed: head ${headSha} is not the head of PR #${number} (${head}), ignored`);
+        return out;
+      }
+      break;
+    }
     case 'pr.checks_passed':
       // A ticket blocked by the red-CI bound is no longer blocked for a reason that holds: the block is lifted. The count of
       // the review and CI loop stays, one per run (ORC-184): a review that keeps finding would loop between its fix and green CI.

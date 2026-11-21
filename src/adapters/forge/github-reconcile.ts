@@ -92,7 +92,7 @@ export class GithubReconciler {
             ...base,
             id,
             type: "pr.checks_failed",
-            payload: { ...payload, failures: pr.failedChecks },
+            payload: { ...payload, failures: pr.failedChecks, ...(pr.headSha ? { headSha: pr.headSha } : {}) },
           });
         else if (pr.checks === "pass")
           await this.d.submit({ ...base, id, type: "pr.checks_passed", payload });
