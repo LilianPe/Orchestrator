@@ -98,7 +98,8 @@ No image receives a secret at build time. Isolation test no. 7 looks for tokens 
 
 ## Current limits
 
-- **Publishing**: the factory pushes and opens the PR, with the GitHub App (ORC-125, [`github.md`](github.md#publishing)). Without it, a verified ticket is blocked: configure `github.*` or `GH_APP_*`. An agent in a runner has neither `gh` nor a token, and the proxy refuses `git push`. `GH_TOKEN` only serves `factoryd`, until ORC-181.
+- **Publishing**: the factory pushes and opens the PR, with the GitHub App (ORC-125, [`github.md`](github.md#publishing)). Without it, a verified ticket is blocked: configure `github.*` or `GH_APP_*`. An agent in a runner has neither `gh` nor a token, and the proxy refuses `git push`. `factoryd` has neither either since ORC-181: the App reads the PRs.
+- **`factoryd`'s own `git fetch`** (ORC-181): the image no longer gives git a credential (it was `gh auth setup-git` with `GH_TOKEN`). The App's token serves the factory's push alone, so a private repository's clone under `repos/` is fetched with whatever credential the container's git finds; with none, a launch is refused with `the forge could not be read`. Fetching with the App's installation token is still to do ([`github.md`](github.md#the-daemons-own-git)).
 - **`verify` no longer runs in `factoryd`** (ORC-151): its commands go into a fresh runner, on a clone, at network level `none`. Under compose, `FACTORY_CONTAINER_CLI` is set: a failed engine gives a ticket blocked for infrastructure reasons (`verify.errored`), never a fallback to `factoryd`. `FACTORY_ALLOW_HOST_VERIFY` is not passed through, and would have no effect. **`factoryd`'s `git`, next to the socket, reads nothing an agent wrote** (ORC-317): each agent has its own repository, and the git directory of `repoPath` is never mounted.
 
 ## Variables
@@ -109,7 +110,6 @@ In a `.env` file next to `compose.yaml` (not versioned). `docker compose` refuse
 |---|---|---|
 | `CLAUDE_TOKEN_1`, `CLAUDE_TOKEN_2` | one of these means | Tokens for the Claude Code accounts, read by `factory.yml` (`token: env:CLAUDE_TOKEN_1`); the `claude.active` account is the runs' only credential. |
 | `ANTHROPIC_API_KEY` | one of these means | Claude Code authentication without an active account, for the runs of this container, which still run next to the daemon (until ORC-179). Compose no longer requires it: without either, runs fail at authentication. |
-| `GH_TOKEN` | yes | `gh` and HTTPS reads, until ORC-181; publishing goes through the GitHub App. Permissions: [`github.md`](github.md#permissions-required-for-the-gh-fallback). |
 | `GH_APP_CLIENT_ID`, `GH_APP_CLIENT_SECRET` | yes, unless `factory.yml` gives `github.client_id` | The GitHub App's OAuth client, for the dashboard's GitHub sign-in (ORC-399): the container listens beyond loopback, and `factoryd` refuses to start without it. |
 | `FACTORY_DIR` | yes | Absolute path on the server (see above). |
 | `FACTORY_ENGINE_SOCKET` | yes | Rootless engine socket, for example `/run/user/1000/docker.sock`. |
@@ -216,7 +216,7 @@ The stack ran once under Docker Desktop, which is not rootless. These points rem
 
 ## Clean shutdown and restart
 
-`SIGTERM` (`docker compose stop`) triggers a clean shutdown: timers, PR polling and reconciliation are stopped; the runs in progress are **left running** (ORC-344): the daemon stops reading them, without stopping their agent, destroying their container or writing anything of them, then waits for what it still has to write (the inbox, a run that ended just before), closes the SSE connections and the database. `compose.yaml` gives it 30 s (`stop_grace_period`), which it no longer spends waiting for agents.
+`SIGTERM` (`docker compose stop`) triggers a clean shutdown: timers and reconciliation are stopped; the runs in progress are **left running** (ORC-344): the daemon stops reading them, without stopping their agent, destroying their container or writing anything of them, then waits for what it still has to write (the inbox, a run that ended just before), closes the SSE connections and the database. `compose.yaml` gives it 30 s (`stop_grace_period`), which it no longer spends waiting for agents.
 
 On the next start, Relais resumes on its own whatever was cut off (by a shutdown or a crash), the same way for both: it reattaches to a run still alive (or ended meanwhile with its result line), whose real result comes back, and starts again the step of one that vanished. No ticket is blocked because of it; details in [`operations.md`](operations.md#shutdown-restart-and-interrupted-runs). Queued requests, timers (grouped feedback) and the pause state are kept in `relais.db`.
 

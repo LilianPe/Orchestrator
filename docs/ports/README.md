@@ -5,7 +5,7 @@ The engine only talks to the world through seven ports. Each has a **sheet** (wh
 | Port (MVP doc) | Interface | Sheet | Suite | Run on |
 |---|---|---|---|---|
 | Tracker | `Tracker` | [tracker.md](tracker.md) | `test/contracts/tracker.contract.ts` | `FakeTracker`; `LinearTracker` live, read-only |
-| Forge | `Forge` | [forge.md](forge.md) | `test/contracts/forge.contract.ts` | `FakeForge`, `GitHubAppForge` (on a scripted `fetch`), `GhCliForge` (on a scripted `gh`); `GhCliForge` live |
+| Forge | `Forge` | [forge.md](forge.md) | `test/contracts/forge.contract.ts` | `FakeForge`, `GitHubAppForge` (on a scripted `fetch`) |
 | Publisher | `Publisher` | [publisher.md](publisher.md) | `test/contracts/publisher.contract.ts` | `FakePublisher` (`GitPublisher` through its own tests) |
 | SandboxProvider | `SandboxProvider` | [sandbox-provider.md](sandbox-provider.md) | `test/contracts/sandbox.contract.ts` | `FakeSandboxProvider`, `SandboxRouter`, `ContainerSandboxProvider` (isolation tests) |
 | CheckRunner | `CheckRunner` | [check-runner.md](check-runner.md) | `test/contracts/check-runner.contract.ts` | `FakeCheckRunner`, `runVerify` |
@@ -65,9 +65,3 @@ Outside CI, skipped without their variables (rule from [`docs/transition.md`](..
 | Test | Variables | What it reads |
 |---|---|---|
 | `src/adapters/tracker/linear/tracker.live.test.ts` | `FACTORY_LIVE_LINEAR_TOKEN` (the app's OAuth access token, sent as `Bearer` as the instance does; not a personal API key), `FACTORY_LIVE_LINEAR_ISSUE` (a ticket, e.g. `ORC-1`); options `FACTORY_LIVE_LINEAR_SEARCH`, a word from its title, and `FACTORY_LIVE_LINEAR_DELEGATED` with `FACTORY_LIVE_LINEAR_NOT_DELEGATED`, two tickets from the same team, one delegated to the app (neither done nor canceled), the other not | the ticket and the tickets delegated to the app (the token's user), without writing anything |
-| `src/adapters/forge/gh-cli.live.test.ts` | `FACTORY_LIVE_GH_REPO` (a local clone), `FACTORY_LIVE_GH_BRANCH` and `FACTORY_LIVE_GH_PR` (a branch and its PR, with finished checks: a merged PR works); `gh` logged in | the PR, without writing anything; the unreachable forge goes through a proxy on a closed local port |
-
-```bash
-FACTORY_LIVE_GH_REPO=$PWD FACTORY_LIVE_GH_BRANCH=orc-168-ci-postgres-docker-rootless FACTORY_LIVE_GH_PR=30 \
-  npx vitest run src/adapters/forge/gh-cli.live.test.ts
-```

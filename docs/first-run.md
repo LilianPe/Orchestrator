@@ -13,7 +13,7 @@ Nothing below can be skipped for a real run: without a container engine nothing 
 | 1 | **The pilot repository**, cloned locally, with `origin` on GitHub and `origin/HEAD` set | ORC-137 chose two pilots: `Intersektion/intersektion-platform` (the product repository, the first 20 real tickets) and `LilianPe/Orchestrator` (dogfooding: run the factory from a pinned commit, never from the branch it changes). For a first run, the one whose tests you know. `git clone` sets `origin/HEAD`; on an older clone, `git remote set-head origin --auto`. | `config.yaml`, `projects[].repoPath` (written by `factory init`) |
 | 2 | **`.factory/config.yml` with `commands.test`**, merged on the default branch | `factory init` proposes it (step 2); commit it through a normal PR. Without `commands.test` every ticket blocks at the tests step. | the repository, default branch |
 | 3 | **Branch protection** on the default branch: a ruleset with *Require a pull request before merging* that the App cannot bypass | GitHub → repository → Settings → Rules → Rulesets ([`github.md`](github.md#branch-protection-required-by-factory-doctor)). `factory doctor` refuses without it. | GitHub |
-| 4 | **A test GitHub App** with the permissions of [`github-app-manifest.json`](github-app-manifest.json) (Contents, Pull requests, Checks write; Commit statuses, Actions, Metadata read), **its private key**, and **installed on the pilot repository** | `factory init` prints the steps, with the permissions (step 2); details in [`github.md`, "Creating the App"](github.md#creating-the-app). Locally, leave its webhook disabled: the factory polls the PRs every 30 s. Keep the `.pem` outside the repository, mode `0600`. | `factory.yml`, written by `factory init`: `github: { app_id: env:GH_APP_ID, private_key: env:GH_APP_KEY }`, with `GH_APP_ID` (the App ID) and `GH_APP_KEY` (the `.pem` path) in the daemon's environment. |
+| 4 | **A test GitHub App** with the permissions of [`github-app-manifest.json`](github-app-manifest.json) (Contents, Pull requests, Checks write; Commit statuses, Actions, Metadata read), **its private key**, and **installed on the pilot repository** | `factory init` prints the steps, with the permissions (step 2); details in [`github.md`, "Creating the App"](github.md#creating-the-app). Locally, leave its webhook disabled: the factory reads the PRs at its reconciliation, every 5 minutes. Keep the `.pem` outside the repository, mode `0600`. | `factory.yml`, written by `factory init`: `github: { app_id: env:GH_APP_ID, private_key: env:GH_APP_KEY }`, with `GH_APP_ID` (the App ID) and `GH_APP_KEY` (the `.pem` path) in the daemon's environment. |
 | 5 | **A Linear OAuth application** (not a personal API key), created by a Linear workspace admin, with webhooks on | `factory init` prints the exact callback URL, webhook URL and categories (step 2); details in [`linear.md`](linear.md#1-create-the-oauth-application). | Client ID, client secret and webhook signing secret typed into `factory init` → `secrets.json`. The OAuth tokens come later, from « Connect Linear ». |
 | 6 | **A public URL for Linear's webhooks** | Locally, nothing to create: run **`factory init --dev`**, which creates a smee.io channel when `config.yaml` has neither `publicUrl` nor a relay (ORC-411: without `--dev`, `init` creates none and asks nothing of Linear, which has nowhere to send the webhooks). Or a tunnel (`cloudflared tunnel --url http://localhost:4100`) in `publicUrl` before `factory init`, needed anyway if Linear refuses the `http://localhost` callback ([`linear.md`](linear.md#3-webhooks-production-and-development)). | `config.yaml`: `relay` (smee, written by `factory init --dev`) or `publicUrl` |
 | 7 | **A Claude Code token** | `claude setup-token` on a machine logged in to the subscription account. | `factory.yml`: `claude.accounts[].token: env:CLAUDE_CODE_OAUTH_TOKEN` (any variable name), and that variable in the daemon's environment. In a sandbox the egress proxy sets it on the model calls; the agent only holds a placeholder. |
@@ -87,7 +87,7 @@ On a first setup (no Linear values yet, no `factory.yml`), it then prints the Gi
 GitHub App of Orchestrator (it opens and updates the PRs):
 1. On GitHub: https://github.com/settings/apps/new (for an organization: its Settings → Developer settings → GitHub Apps).
    - Name and homepage URL: your choice
-   - Webhook: uncheck "Active" (no public URL): the factory polls the PRs every 30 s
+   - Webhook: uncheck "Active" (no public URL): the factory reads the PRs every 5 minutes, at its reconciliation
    - Repository permissions: Contents: read and write, Pull requests: read and write, Checks: read and write, Commit statuses: read, Actions: read, Metadata: read; nothing else
 2. Create the App, note its App ID, then "Generate a private key":
    keep the .pem outside the repository, mode 0600 (e.g. /home/<user>/.factory/github-app.pem).
@@ -231,16 +231,16 @@ The lines to read in its log (taken from a start on a scratch repository):
 [factoryd] Disabled in factory.yml: budgets.per_step_tokens.
 [factoryd] GitHub forge: GitHub App <id> (installation tokens limited to the run's repository, installation resolved per repository)
 [factoryd] Linear not connected: open http://localhost:4100/oauth/start
-[factoryd] GitHub webhooks refused: neither github.webhookSecret nor GH_WEBHOOK_SECRET; only the PR poll every 30 s follows GitHub.
+[factoryd] GitHub webhooks refused: neither github.webhookSecret nor GH_WEBHOOK_SECRET; only the reconciliation every 5 min follows GitHub.
 Orchestrator is running: http://localhost:4100  (Ctrl+C to stop)
 ```
 
-The GitHub webhooks line is expected locally. What must not be there:
+The GitHub webhooks line is expected locally: a merge or a CI verdict then reaches the ticket within 5 minutes. What must not be there:
 
 | Output | Cause |
 |---|---|
 | `FACTORY_CONTAINER_CLI is not set: the agents would run on this machine, … ` and exit `1` | item 8: never set `FACTORY_ALLOW_HOST_RUNS=1` for a real ticket |
-| `GitHub forge: gh CLI (migration fallback, read-only: without a GitHub App, the factory neither publishes nor merges)` | the App is not read: no PR will open |
+| `Warning: no GitHub App (github.app_id and github.private_key in factory.yml, or GH_APP_ID and GH_APP_KEY): the factory reads no PR, publishes nothing and merges nothing.` | item 4: the App is not read, no PR will open |
 | `Warning: no Claude token (claude.active in factory.yml, or CLAUDE_CODE_OAUTH_TOKEN): sandboxed runs will not be able to authenticate.` | item 7 not in the daemon's environment |
 | `Warning: <project>: no spec validator …` | item 11 |
 | `error: sandboxes not listed, … spawn podman ENOENT` | Podman is not on the daemon's `PATH` |
