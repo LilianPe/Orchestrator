@@ -11,21 +11,21 @@ If the prompt carries a "Feedback to address" block: these are messages from hum
 
 ## 1. Read the exact failure
 
-1. `gh pr checks <branch>`: the red checks and their links. A check still running is not a failure: only conclude on what has finished.
-2. `gh run view <run-id> --log-failed`: the job, the step, the failing command and the **first** error message (not only the last line). Empty or insufficient log: `gh run view <run-id> --json jobs` for the steps and their conclusion, then `gh run view --job <job-id> --log`.
+1. The "CI failures" block holds what the factory read of the PR's red checks: their names and, when it has them, the failing step, its command and the end of its output. Read the **first** error message, not only the last line. A block that only says the CI is failing, or points at a forge command, gives no detail: go on to 2. You have no access to the forge: do not look for the CI's logs anywhere else.
+2. The repository's CI workflows (`.github/workflows/`, never changed) say which commands each check runs: `grep -rn "<check name>" .github/workflows/`, then read the file that defines it, for the failing check's command and the environment it sets (versions, variables, services).
 3. Messages that never come from your code: lost runner ("lost communication with the server"), quota, network, external service unavailable, cancellation. A job timeout, on the other hand, is almost always your code (loop, wait, stuck test).
 
 ## 2. Reproduce
 
-Run the failing command locally, in the worktree, before touching the code. For a test suite, target the failing file or test, not the whole suite.
+Run the failing command locally, in the worktree, before touching the code. For a test suite, target the failing file or test, not the whole suite. The block names no command and the workflows do not settle it: run the repository's checks that match the check's name (its tests, types, lint), the targeted ones first.
 
 ## 3. Classify
 
-- **regression**: the failure reproduces locally and comes from the PR's code or its integration with the base (the CI often builds the PR merged into the base: a base that changed a type or a constant the PR uses breaks without a text conflict; `git fetch origin` then `git log --oneline HEAD..origin/<base>` to see what arrived);
+- **regression**: the failure reproduces locally and comes from the PR's code or its integration with the base (the CI often builds the PR merged into the base: a base that changed a type or a constant the PR uses breaks without a text conflict; `git fetch origin` then `git log --oneline HEAD..origin/<base>` to see what arrived, where `git rev-parse --abbrev-ref origin/HEAD` prints `origin/<base>`);
 - **flaky**: does not reproduce, or passes and fails without a code change;
 - **environment / CI infrastructure**: missing secret or variable, runner, network, quota, external service.
 
-Is a failure already on the base? `gh run list --branch <base> --limit 5` (same workflow): red there too, with the same error → it predates the PR. Do not fix code outside the PR: report it.
+Is the failure already on the base? Only when the block says so. Otherwise the failure is the PR's until shown otherwise: "the diff does not touch that file" is no proof, a changed helper breaks an untouched test. A cause you established outside the PR's code (the base's own code, the CI's environment) is not fixed here: report it with what establishes it.
 
 ## 4. Act
 
@@ -35,7 +35,7 @@ Is a failure already on the base? `gh run list --branch <base> --limit 5` (same 
 
 ## Forbidden
 
-Never disable, skip (`skip`, `only`), delete or weaken a test, an assertion or a CI step. Do not modify the CI workflows to make the build pass: nothing under `.github/` goes out, nor the other forbidden paths of the `dev` skill; if the fix needs one, a question (`status: "blocked"`). Do not increase a timeout without justifying, with a measurement (actual duration of the latest runs), that the slowness is legitimate. Never merge, never push (the factory publishes), do not rewrite history, do not switch branches.
+Never disable, skip (`skip`, `only`), delete or weaken a test, an assertion or a CI step. Do not modify the CI workflows to make the build pass: nothing under `.github/` goes out, nor the other forbidden paths of the `dev` skill; if the fix needs one, a question (`status: "blocked"`). Do not increase a timeout without justifying, with a measurement (the command's duration, run locally), that the slowness is legitimate. Never merge, never push (the factory publishes), do not rewrite history, do not switch branches.
 
 ## `submit_result` summary (published in Linear)
 

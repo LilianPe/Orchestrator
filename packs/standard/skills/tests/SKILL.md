@@ -15,19 +15,20 @@ If the prompt carries an "Approved spec" block: a designated human approved it, 
 
 1. Read the ticket, its acceptance criteria, then the code they touch and its existing tests (`grep -rl "<function>" <tests folder>`). The repository's conventions (`CLAUDE.md`) prevail for the naming and location of tests.
 2. At least one test per criterion, named after the expected behavior. Place it where this code is already tested, in a test file of the repository (`*.test.ts`, `*.spec.ts`, `test_*.py`, `tests/`…).
-3. Write **only test files**: no production code, no configuration, no dependency. A module that the ticket must create may remain absent: import it at its future path.
-4. Commit: `<ID>: acceptance criteria tests` (or the `CLAUDE.md` convention). Do not push, do not open a PR.
+3. Each test calls the code as its user does (the function, the route, the command the criterion names) and checks what that user would see: a returned value, a response, a stored row, an error message. Not a private helper, not a mock's calls. Before keeping a test, imagine the code it targets written as stubs: if it would still pass with every function returning nothing, throw it away and write one that checks a real value.
+4. Write **only test files**: no production code, no configuration, no dependency. A module that the ticket must create may remain absent: import it at its future path.
+5. Commit: `<ID>: acceptance criteria tests` (or the `CLAUDE.md` convention).
 
 The factory then runs these tests itself and checks that they fail on an assertion (or on a module absent before the ticket), not on a syntax, compilation or import error. No need to prove it in your message: it does not believe it, it observes it. If it sends you back its finding, fix the tests and commit again.
 
 ## Impossible test
 
-A criterion that no honest test can verify (contradictory, unverifiable, outside the repository): do not cheat, do not weaken it. Return `spec_impossible` with `submit_result`, saying which criterion and why.
+A criterion that no honest test can verify (contradictory, unverifiable, outside the repository): do not cheat, do not weaken it. End your turn with `submit_result`, `status: "blocked"`, `reason: "spec_impossible"`, and in `question` which criterion and why.
 
 ## Forbidden
 
 Those of `factory:dev`: no merge, no push, no branch switch, nothing outside the worktree.
 
-## Last message
+## End of turn: `submit_result`
 
-In English: the tests written, criterion by criterion, and the commit.
+**Always** end with the `mcp__factory__submit_result` tool, `status: "done"`: the factory reads nothing else. `tests_added`: one entry per test, the criterion it checks. `summary`: in English, the tests written, criterion by criterion, and the commit.

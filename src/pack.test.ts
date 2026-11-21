@@ -12,6 +12,14 @@ function hook(env: Record<string, string> = {}) {
   return JSON.parse(out).hookSpecificOutput as { hookEventName: string; additionalContext: string };
 }
 
+// What the agent reads as instructions: the skills and the session-start hook. Not the PreToolUse hook, the guard that names
+// what it refuses (pack-guard.test.ts).
+const instructions: [string, string][] = [
+  ...readdirSync(join(pack, 'skills')).map((n): [string, string] => [n, readFileSync(join(pack, 'skills', n, 'SKILL.md'), 'utf8')]),
+  ['session-start.mjs', readFileSync(join(pack, 'hooks/session-start.mjs'), 'utf8')],
+];
+const skill = (name: string): string => instructions.find(([n]) => n === name)![1];
+
 describe('standard pack', () => {
   it('is a plugin named factory', () => {
     expect(JSON.parse(readFileSync(join(pack, '.claude-plugin/plugin.json'), 'utf8')).name).toBe('factory');
@@ -39,10 +47,7 @@ describe('standard pack', () => {
 
   it('only cites factory:<skill> names that exist', () => {
     const names = new Set(readdirSync(join(pack, 'skills')));
-    const sources = [
-      ...[...names].map((n) => readFileSync(join(pack, 'skills', n, 'SKILL.md'), 'utf8')),
-      readFileSync(join(pack, 'hooks/session-start.mjs'), 'utf8'),
-    ];
+    const sources = instructions.map(([, text]) => text);
     const cited = new Set(sources.flatMap((s) => [...s.matchAll(/factory:([a-z][a-z-]*[a-z])/g)].map((m) => m[1]!)));
     expect(cited.size).toBeGreaterThan(5);
     for (const c of cited) expect(names.has(c), `factory:${c}`).toBe(true);
@@ -67,11 +72,10 @@ describe('standard pack', () => {
     expect(review).toMatch(/still open: judge each one again on this commit/);
   });
 
-  it('allows the read-only git and CI commands the skills rely on', () => {
+  it('allows the read-only git commands the skills rely on, and no gh: the runner image has none (ORC-191)', () => {
     const s = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8'));
-    expect(s.permissions.allow).toEqual(
-      expect.arrayContaining(['Bash(git merge-tree:*)', 'Bash(git rev-list:*)', 'Bash(git ls-remote:*)', 'Bash(gh run view:*)', 'Bash(gh run list:*)']),
-    );
+    expect(s.permissions.allow).toEqual(expect.arrayContaining(['Bash(git merge-tree:*)', 'Bash(git rev-list:*)', 'Bash(git ls-remote:*)']));
+    expect(s.permissions.allow.filter((rule: string) => /^Bash\(gh\b/.test(rule))).toEqual([]);
   });
 
   it('allows the Python toolchain: uv, and pytest, ruff, mypy from the project environment (ORC-311)', () => {
@@ -94,9 +98,6 @@ describe('standard pack', () => {
     const rules = hook({ FACTORY_TICKET: 'REL-1' }).additionalContext;
     expect(rules).not.toContain('factory-agent');
     expect(rules).toContain('`status: "blocked"`');
-    for (const name of readdirSync(join(pack, 'skills'))) {
-      expect(readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8'), name).not.toContain('factory-agent');
-    }
     for (const name of ['dev', 'feedback', 'fix-ci', 'receiving-review', 'debugging']) {
       expect(readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8'), name).toContain('`status: "blocked"`');
     }
@@ -112,11 +113,28 @@ describe('standard pack', () => {
     for (const file of files) expect(readFileSync(join(pack, file), 'utf8'), file).not.toContain('mcp__factory__ask');
   });
 
-  it('tells no skill to push or to open a PR: the factory does (ORC-125)', () => {
-    for (const name of readdirSync(join(pack, 'skills'))) {
-      const text = readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8');
-      expect(text, name).not.toMatch(/`[^`]*git push|gh pr (create|edit)|gh run rerun/);
+  it('names neither git push, gh, the agent CLI under its old or new name nor --no-verify in a skill or the session-start hook: the factory publishes (ORC-125, ORC-191)', () => {
+    for (const [name, text] of instructions) expect(text, name).not.toMatch(/git push|(^|[^\w-])gh(?![\w-])|(relais|factory)-agent|--no-verify/m); // transition, à retirer
+  });
+
+  it('has no skill launch a subagent: the factory reviews and splits the work, the session is one loop (ORC-191)', () => {
+    for (const [name, text] of instructions) expect(text, name).not.toMatch(/sub-?agent|`(Task|Agent)`|parallel passes/i);
+  });
+
+  it("ends every step's skill, and the answer agent's, on submit_result (ORC-188, ORC-191)", () => {
+    for (const job of new Set(Object.values(defaultWorkflow().jobs).map((j) => j.skill.split(':')[1]!))) {
+      expect(skill(job), job).toContain('`mcp__factory__submit_result`');
     }
+  });
+
+  it('the tests skill throws away a test that would pass on functions returning nothing (ORC-191)', () => {
+    expect(skill('tests')).toContain('calls the code as its user does');
+    expect(skill('tests')).toContain('still pass with every function returning nothing, throw it away');
+  });
+
+  it('the build skill: the shape of the data before the logic, less complexity before more, the cause and not a guard (ORC-191)', () => {
+    const text = skill('dev');
+    for (const rule of ['the shape of the data first, then the logic', 'remove complexity before adding any', 'never a guard that hides the crash']) expect(text).toContain(rule);
   });
 
   it('has no learn skill: the memory in writing sleeps (ORC-193)', () => {

@@ -25,7 +25,9 @@ If the ticket asks for several changes (several modules, a migration plus code, 
 ## 3. Build
 
 - Each behavior: `factory:tdd` (a failing test, then the minimal code).
-- A bug, an unexpected red test, a behavior you do not understand: `factory:debugging` before any fix.
+- Settle the shape of the data first, then the logic: the types, the fields and where they live, before the code that moves them. Code built on the wrong shape is rewritten, not fixed.
+- Before adding, look for what to take away: remove complexity before adding any (a branch nobody reaches, a parameter always passed the same, a copy of a function that exists).
+- A bug, an unexpected red test, a behavior you do not understand: `factory:debugging` before any fix. Fix the cause, never a guard that hides the crash (a `try` that swallows, a `?.` or a default on a value that must exist).
 - Follow the repository's conventions and the pattern established in neighboring code. Almost no comments: one line for a "why" the code does not say, never a paraphrase.
 - Commit per coherent step: `<ID>: <what the commit does>` (or the `CLAUDE.md` convention). No mention of a tool, AI or session in the commits, no `Co-Authored-By` line.
 

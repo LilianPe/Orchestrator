@@ -1,6 +1,6 @@
 ---
 name: verification
-description: Verify before asserting: run the command that proves a result and read its output before saying it is done, that it passes or that it is fixed, and before each commit, push or PR.
+description: Verify before asserting: run the command that proves a result and read its output before saying it is done, that it passes or that it is fixed, and before each commit and before handing back.
 ---
 
 # factory:verification
@@ -21,7 +21,6 @@ description: Verify before asserting: run the command that proves a result and r
 | The regression test works | red without the fix, green with it | "I wrote a test" |
 | The types are correct | the repository's type check: exit code 0 | the lint, the tests (often without type checking) |
 | It is committed | clean `git status`, and `git log -1` shows your commit | "I'm done": the factory only publishes what is committed |
-| The CI is green | `gh pr checks <branch>` read, no check running or red | "the CI will run" |
 | The ticket is handled | each criterion of the ticket reread and checked off | "the tests pass" |
 
 ## What to run, and what not to run
@@ -38,8 +37,8 @@ Other sessions run at the same time on the same machine, and the factory then re
 
 - Saying "perfect", "all good", "done" before having run the command.
 - Concluding from one checker to another: the lint does not compile, the tests do not always check types.
-- Believing a report (from a subagent, a commit message, feedback) without looking at the diff or rerunning.
-- A failure in a file you did not touch is not necessarily "not you": a changed dependency breaks an untouched test. To know whether it predates you, check whether it also fails on the trunk (the trunk's CI, or the file's `git log`); otherwise treat it as yours (`factory:debugging`).
+- Believing a report (a commit message, feedback, an earlier summary) without looking at the diff or rerunning.
+- A failure in a file you did not touch is not necessarily "not you": a changed dependency breaks an untouched test. Treat it as yours (`factory:debugging`) unless you establish that it predates you: the file's `git log`, and a cause your diff does not reach.
 
 ## Done when
 

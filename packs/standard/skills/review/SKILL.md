@@ -17,7 +17,7 @@ The prompt names your **lens**. The other lens is a separate session that sees n
 Follow `factory:code-review` for the method, with these differences:
 
 1. **Scope.** Its section 1 is done: the diff is in the prompt, against the trunk the PR targets. A truncated diff lists the changed files: read them in the clone. Read the repository's `CLAUDE.md` and `docs/agent/` in the clone when they exist, and the ticket in the prompt.
-2. **Level.** Always at least **standard**, on your lens's angles. **Thorough** for the paths its table names; no subagent.
+2. **Level.** Always at least **standard**, on your lens's angles. **Thorough** for the paths its table names.
 3. **Over-engineering is a finding**, in both lenses: an abstraction with one user and no second in sight, a configuration nobody asked for, an indirection that only forwards, code outside the ticket's scope. `minor` when it only costs reading; `blocking` when it changes behavior nobody asked for.
 4. **Verify** every finding before keeping it, as its section 5 says: read the cited function in full in the clone.
 5. **Contested findings.** When the prompt has a "Contested findings" block, the implementer contested these blocking findings of the previous review, each with its justification. They are still open: judge each one again on this commit, on your lens or not. Report it again, as `blocking`, unless its justification holds in the code; when it holds, leave it out and say so in your `summary`.
