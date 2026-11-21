@@ -79,6 +79,48 @@ describe('the wait on a « blocked by » ticket not done (ORC-363)', () => {
     expect(starts(waiting({ logical: 'dev' }), fired)).toEqual([]);
   });
 
+  describe('on a ticket blocked meanwhile (ORC-432)', () => {
+    const blocked = (patch: Partial<TicketState> = {}) =>
+      waiting({ logical: 'dev', blocked: true, blockReason: 'Which separator?', blockKind: 'question', blockedJob: 'dev', ...patch });
+    const reply = event('session.prompted', { linearSessionId: 's1', body: 'Semicolons', author: 'L', ack: true, kind: 'instruction' });
+    const done = event('blockers.done', { blockers: ['REL-2'] });
+
+    it('a reply keeps the block and starts nothing: the step it resumes waits for the blockers, the reply in the inbox', () => {
+      const out = decide(blocked(), reply, workflow);
+      expect(out.events.map((e) => e.type)).not.toContain('ticket.unblocked');
+      expect(out.effects.some((x) => x.kind === 'start_run' || x.kind === 'labels')).toBe(false);
+      expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'ack', body: expect.stringContaining('REL-2') }));
+      expect(after(blocked(), reply)).toMatchObject({
+        blocked: true,
+        humanInbox: [expect.objectContaining({ body: 'Semicolons' })],
+        waitingOn: { blockers: ['REL-2'], start: { job: 'dev' }, lift: { job: 'dev', input: 'feedback' } },
+      });
+    });
+
+    it('the blockers done, the block is lifted and the step the reply resumed starts, reading it', () => {
+      const answered = after(blocked(), reply);
+      const out = decide(answered, done, workflow);
+      expect(out.events.map((e) => e.type)).toContain('ticket.unblocked');
+      expect(starts(answered, done)).toEqual([expect.objectContaining({ job: 'dev', input: 'feedback' })]);
+      expect(after(answered, done)).toMatchObject({ blocked: false, humanInbox: [expect.objectContaining({ body: 'Semicolons' })] });
+    });
+
+    it('a mention that answers the block waits as a reply does (ORC-426)', () => {
+      const mention = event('session.mentioned', { linearSessionId: 's-m', body: 'Semicolons', author: 'L', ack: true, kind: 'instruction' });
+      const out = decide(blocked(), mention, workflow);
+      expect(out.events.map((e) => e.type)).not.toContain('ticket.unblocked');
+      expect(after(blocked(), mention)).toMatchObject({ blocked: true, waitingOn: { lift: { job: 'dev', input: 'feedback' } } });
+    });
+
+    it('the reply gives the bounds back as it would have lifting the block', () => {
+      expect(decide(blocked({ leaseRelaunches: 1 }), reply, workflow).events).toContainEqual({ type: 'ticket.patched', patch: { leaseRelaunches: 0 } });
+    });
+
+    it('with no reply, the blockers done leave the block and start nothing', () => {
+      expect(starts(blocked(), done)).toEqual([]);
+    });
+  });
+
   it.each([
     ['a block', { type: 'ticket.blocked', reason: 'Stopped.', kind: 'stopped' }],
     ['an undelegation', event('ticket.undelegated', {})],
