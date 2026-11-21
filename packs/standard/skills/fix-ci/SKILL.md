@@ -11,7 +11,7 @@ If the prompt carries a "Feedback to address" block: these are messages from hum
 
 ## 1. Read the exact failure
 
-1. The "CI failures" block holds what the factory read of the PR's red checks: their names and, when it has them, the failing step, its command and the end of its output. Read the **first** error message, not only the last line. You have no access to the forge: do not look for the CI's logs anywhere else.
+1. The "CI failures" block holds what the factory read of the PR's red checks: their names and, when it has them, the failing step, its command and the end of its output. Read the **first** error message, not only the last line. A block that only says the CI is failing, or points at a forge command, gives no detail: go on to 2. You have no access to the forge: do not look for the CI's logs anywhere else.
 2. The repository's CI workflows (`.github/workflows/`: read them, never change them) say which commands each check runs. Find the command of the failing check and the environment it sets (versions, variables, services).
 3. Messages that never come from your code: lost runner ("lost communication with the server"), quota, network, external service unavailable, cancellation. A job timeout, on the other hand, is almost always your code (loop, wait, stuck test).
 
@@ -25,7 +25,7 @@ Run the failing command locally, in the worktree, before touching the code. For 
 - **flaky**: does not reproduce, or passes and fails without a code change;
 - **environment / CI infrastructure**: missing secret or variable, runner, network, quota, external service.
 
-Is the failure already on the base? The block says so when the factory knows it. Otherwise: the PR's diff (`git diff origin/<base>...HEAD --stat`) does not touch what fails, and nothing the PR changes reaches it → it predates the PR. Do not fix code outside the PR: report it.
+Is the failure already on the base? Only when the block says so. Otherwise the failure is the PR's until shown otherwise: "the diff does not touch that file" is no proof, a changed helper breaks an untouched test. A cause you established outside the PR's code (the base's own code, the CI's environment) is not fixed here: report it with what establishes it.
 
 ## 4. Act
 

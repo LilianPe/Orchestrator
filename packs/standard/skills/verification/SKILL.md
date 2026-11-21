@@ -38,7 +38,7 @@ Other sessions run at the same time on the same machine, and the factory then re
 - Saying "perfect", "all good", "done" before having run the command.
 - Concluding from one checker to another: the lint does not compile, the tests do not always check types.
 - Believing a report (a commit message, feedback, an earlier summary) without looking at the diff or rerunning.
-- A failure in a file you did not touch is not necessarily "not you": a changed dependency breaks an untouched test. To know whether it predates you, check whether it also fails on the trunk (the trunk's CI, or the file's `git log`); otherwise treat it as yours (`factory:debugging`).
+- A failure in a file you did not touch is not necessarily "not you": a changed dependency breaks an untouched test. Treat it as yours (`factory:debugging`) unless you establish that it predates you: the file's `git log`, and a cause your diff does not reach.
 
 ## Done when
 

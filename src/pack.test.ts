@@ -127,7 +127,7 @@ describe('standard pack', () => {
   ];
 
   it('names neither git push, gh, relais-agent nor --no-verify in a skill or the session-start hook (ORC-191)', () => {
-    for (const [name, text] of instructions()) expect(text, name).not.toMatch(/git push|(^|[^\w-])gh |relais-agent|--no-verify/);
+    for (const [name, text] of instructions()) expect(text, name).not.toMatch(/git push|(^|[^\w-])gh(?![\w-])|relais-agent|--no-verify/m);
   });
 
   it('has no skill launch a subagent: the factory reviews and splits the work, the session is one loop (ORC-191)', () => {
