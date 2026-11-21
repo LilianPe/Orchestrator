@@ -14,7 +14,7 @@ import { effectiveInstance, samePath, validatorWarnings, type ProjectConfig } fr
 import type { Workflow } from '../core/workflow.js';
 import { isFantome } from '../presets/fantome.js';
 import { defaultWorkflow, missingStatusWarning } from '../presets/workflow.js';
-import { claudeAccountReader, stepSettings } from '../config/factory-yml.js';
+import { activeClaudeAccount, claudeAccountReader, stepSettings } from '../config/factory-yml.js';
 import { startRefusals } from '../config/start-refusals.js';
 import { cliLinearTracker } from './linear.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
@@ -975,7 +975,7 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     // Each refusal of the daemon's start, in its order and by the function it calls, with its message (ORC-448): the exposed
     // host's sign-in and secrets_key, the Smee relay (ORC-446), whose warning is said here.
     const instance = effectiveInstance(options.home, yml);
-    relay = startRefusals(instance, yml, env);
+    relay = startRefusals(instance, yml, env).warnings;
     if (!options.json) for (const line of relay) out(line);
     projects = instance.projects.filter((p) => samePath(p.repoPath, options.repoPath));
     // The project of this repository whose spec gate no validator can pass (ORC-421): a warning, never the verdict.
@@ -986,7 +986,7 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     states = defaultWorkflow(stepSettings(yml)).states;
     // The Claude token (ORC-337). The active account's of a source other than env is unread here: the start, which reads it, never
     // falls back to CLAUDE_CODE_OAUTH_TOKEN then, so neither is checked.
-    const unread = yml?.claude && !yml.claude.accounts.find((a) => a.name === yml.claude?.active)?.token;
+    const unread = yml?.claude && !activeClaudeAccount(yml)?.token;
     if (!unread) claudeAccountReader(options.home, env, undefined, sealed)();
   } catch (error) {
     out(errorMessage(error));

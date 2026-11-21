@@ -32,13 +32,13 @@ import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { saveAgentOutput, type AgentOutput } from '../core/agent-output.js';
-import { claudeAccountReader, disabledControls, readCapsOf, specPublicationOf, stepSettings, ticketCapOf, type FactoryYml } from '../config/factory-yml.js';
+import { claudeAccountReader, disabledControls, readCapsOf, specPublicationOf, stepSettings, ticketCapOf } from '../config/factory-yml.js';
 import { loadSealedFactoryYml } from '../config/server-secrets.js';
-import { startRefusals } from '../config/start-refusals.js';
+import { startRefusals, type StartChecks } from '../config/start-refusals.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../config/repo-config.js';
 import { makeDryRunFiles, makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint } from './repo-variables.js';
-import { daemonSecretValues, effectiveInstance, homePaths, isLoopbackHost, linearSettings, saveLinearTokens, sealSecretsAtRest, validatorWarnings, type InstanceConfig } from '../config/instance.js';
-import { githubOAuthClient, githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
+import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens, sealSecretsAtRest, validatorWarnings } from '../config/instance.js';
+import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
 import { fantome, isFantome, projectEffects } from '../presets/fantome.js';
 import { defaultWorkflow, missingStatusWarning, presetWorkflow } from '../presets/workflow.js';
@@ -72,17 +72,13 @@ export interface BootOptions {
   env?: NodeJS.ProcessEnv;
 }
 
-/**
- * The dashboard's GitHub sign-in off the loopback (ORC-399): the factory App's OAuth client, who factory.yml lets in, and
- * the HTTPS public URL GitHub calls back to, which `startRefusals` required. Undefined on the loopback, where nobody signs in.
- */
-function dashboardLogin(instance: InstanceConfig, yml: FactoryYml | undefined, client: { clientId: string; clientSecret: string } | undefined): ServerDeps['githubLogin'] {
-  if (isLoopbackHost(instance.host)) return undefined;
-  // Never an exposed daemon without its sign-in, should this run before `startRefusals`.
-  if (!client || !yml?.dashboard || !instance.publicUrl?.startsWith('https://')) throw new Error('the GitHub sign-in is checked by startRefusals first');
+/** The dashboard's GitHub sign-in off the loopback (ORC-399), from what `startRefusals` checked; none on the loopback, where nobody signs in. */
+function dashboardLogin(signIn: StartChecks['signIn']): ServerDeps['githubLogin'] {
+  if (!signIn) return undefined;
+  const { client, access } = signIn;
   // A publicUrl written with its trailing slash must still give the callback URL the App declares.
-  const redirectUri = `${instance.publicUrl.replace(/\/+$/, '')}${GITHUB_CALLBACK_PATH}`;
-  const options = { ...client, redirectUri, access: yml.dashboard };
+  const redirectUri = `${signIn.publicUrl.replace(/\/+$/, '')}${GITHUB_CALLBACK_PATH}`;
+  const options = { ...client, redirectUri, access };
   return { authorizeUrl: (state) => githubAuthorizeUrl({ clientId: client.clientId, redirectUri, state }), signIn: (code) => githubSignIn(options, code) };
 }
 
@@ -99,9 +95,9 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const { yml, sealed, reader: repoSecrets } = await loadSealedFactoryYml(o.home, env);
   const instance = effectiveInstance(o.home, yml);
   // Before secrets.json is touched; `factory doctor` says them alike (ORC-448).
-  for (const line of startRefusals(instance, yml, env)) log(line);
-  const oauthClient = githubOAuthClient(instance, env);
-  const githubLogin = dashboardLogin(instance, yml, oauthClient);
+  const { warnings, oauthClient, signIn } = startRefusals(instance, yml, env);
+  for (const line of warnings) log(line);
+  const githubLogin = dashboardLogin(signIn);
   // The tokens the daemon writes itself, encrypted at rest from now on when factory.yml names a key (ORC-398).
   const secretsKey = yml?.secretsKey;
   if (secretsKey && sealSecretsAtRest(o.home, secretsKey)) log('secrets.json: encrypted at rest with secrets_key');
