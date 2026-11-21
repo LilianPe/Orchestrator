@@ -1,7 +1,7 @@
 import type { RedCause } from '../checks/red.js';
 import type { MeasureFacts, OutboxRow, RunRecord, SessionRole, Store } from '../store/types.js';
 import { allowed, DEFAULT_MATRIX } from './authz.js';
-import { isQuestionSession } from './engine.js';
+import { isLeftHead, isOpenPr, isQuestionSession } from './engine.js';
 import { endsWait, reduce } from './reduce.js';
 import { addTokens, newTicketState, NO_TOKENS, spentTokens, type FactoryEvent, type LogicalState, type MessageKind, type TicketState, type TokenUsage } from './types.js';
 import { upcast, type StoredEvent } from './upcast.js';
@@ -284,12 +284,24 @@ function readComment(e: FactoryEvent<'ticket.commented'>, ticket: TicketState, a
   return answered.has(e.id) && (e.roles === undefined || allowed({ action: 'relaunch_blocked', channel: 'linear' }, e.actor, ticket, DEFAULT_MATRIX, e.roles).ok);
 }
 
+/**
+ * The ticket's PR as `decide` records it from the journal (ORC-469): `reduce` leaves `pr.opened` and `pr.closed` to the
+ * decision, whose patch the journal does not hold. A new PR, or the same one reopened, is open; the close of the open one closes it.
+ */
+function prOf(t: TicketState, e: FactoryEvent): TicketState {
+  if (e.type === 'pr.opened' && (e.payload.number !== t.prNumber || t.prState === 'CLOSED')) return { ...t, prNumber: e.payload.number, prState: 'OPEN' };
+  if (e.type === 'pr.closed' && isOpenPr(t, e.payload.number)) return { ...t, prState: 'CLOSED' };
+  return t;
+}
+
 /** The rework an event of the journal is, if any; `ticket` is the ticket once the event applied. */
 function rework(e: FactoryEvent, ticket: TicketState, relaunched: ReadonlySet<string>): Rework | undefined {
   switch (e.type) {
     case 'verify.failed':
       return e.payload.red ? undefined : { cause: e.type, id: e.id };
     case 'pr.checks_failed':
+      // Only a red CI `decide` reads (ORC-469): of the ticket's open PR, on no head a push left behind.
+      return isOpenPr(ticket, e.payload.number) && !isLeftHead(ticket, e.payload.headSha) ? { cause: e.type, id: e.id } : undefined;
     case 'push.human':
       return { cause: e.type, id: e.id };
     case 'session.prompted':
@@ -351,7 +363,7 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
   const answered = new Set(facts.effects.map((r) => r.eventId));
   const messages: { m: Message; kind: MeasuredKind }[] = [];
   for (const e of events) {
-    ticket = reduce(ticket, e) ?? ticket;
+    ticket = prOf(reduce(ticket, e) ?? ticket, e);
     if (mergedAt === null) {
       if (e.type === 'pr.merged') {
         mergedAt = e.at;

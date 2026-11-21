@@ -5,7 +5,7 @@ import { TRUSTED, type FactoryEvent, type TicketState } from "../../core/types.j
 import { isTakenOver } from "../../core/block-cause.js";
 import { upcast } from "../../core/upcast.js";
 import type { Store } from "../../store/types.js";
-import { checksEventId, prEventId, pushEventId, UNKNOWN_PUSHER } from "./github-webhook.js";
+import { checksEventId, opened, prEventId, prStateEventId, pushEventId, UNKNOWN_PUSHER } from "./github-webhook.js";
 import type { Forge, PrInfo } from "./types.js";
 
 /**
@@ -59,22 +59,21 @@ export class GithubReconciler {
       const at = this.d.clock.now();
       const base = { ...TRUSTED, at, projectId: t.projectId, ticketId: t.ticketId };
       const payload = { number: pr.number, url: pr.url, branch: pr.branch };
-      if (t.prNumber !== pr.number)
-        await this.d.submit({
-          ...base,
-          id: prEventId(t.ticketId, pr.number, "opened"),
-          type: "pr.opened",
-          payload,
-        });
+      const head = pr.headSha ? { headSha: pr.headSha } : {};
+      // A PR the ticket does not know, or the same one recorded closed and read open, as the webhook names it (ORC-469).
+      for (const draft of opened(t, payload, pr.state === "OPEN")) await this.d.submit({ ...base, ...draft });
       if (pr.state === "MERGED" || pr.state === "CLOSED") {
         // The merge commit, head and merge time the forge reads, as the webhook records them (ORC-278).
         const shas = {
           ...(pr.mergeSha ? { mergeSha: pr.mergeSha } : {}),
-          ...(pr.headSha ? { headSha: pr.headSha } : {}),
+          ...head,
           ...(pr.mergedAt !== undefined && Number.isFinite(pr.mergedAt) ? { mergedAt: pr.mergedAt } : {}),
         };
         if (pr.state === "MERGED") await this.d.submit({ ...base, id: prEventId(t.ticketId, pr.number, "merged"), type: "pr.merged", payload: { ...payload, ...shas } });
-        else await this.d.submit({ ...base, id: prEventId(t.ticketId, pr.number, "closed"), type: "pr.closed", payload });
+        // The ticket's PR per closing (ORC-469): reopened then closed again, it is closed again; recorded closed, it has nothing
+        // more to say. Another PR, never reopened, keeps one id.
+        else if (t.prNumber !== pr.number) await this.d.submit({ ...base, id: prEventId(t.ticketId, pr.number, "closed"), type: "pr.closed", payload });
+        else if (t.prState !== "CLOSED") await this.d.submit({ ...base, id: prStateEventId(t, pr.number, "closed"), type: "pr.closed", payload });
         if (done) await this.d.store.setMeta(finalKey, String(pr.number));
         return;
       }
@@ -93,10 +92,10 @@ export class GithubReconciler {
             ...base,
             id,
             type: "pr.checks_failed",
-            payload: { ...payload, failures: pr.failedChecks, ...(pr.headSha ? { headSha: pr.headSha } : {}) },
+            payload: { ...payload, failures: pr.failedChecks, ...head },
           });
         else if (pr.checks === "pass")
-          await this.d.submit({ ...base, id, type: "pr.checks_passed", payload });
+          await this.d.submit({ ...base, id, type: "pr.checks_passed", payload: { ...payload, ...head } });
         await this.d.store.setMeta(metaKey, seen);
       }
     }

@@ -133,7 +133,7 @@ describe('a ticket blocked before ORC-345 (criterion 2)', () => {
     expect(settledTicket(normalizeTicket(old('Arrêté à la demande') as TicketState))).toBe('stopped');
     expect(liftDeadLetterBlock(upcastTicket(old('Event e9 set aside (pr.opened): its decision failed (boom).')), 'e9').blocked).toBe(false);
     const green = { id: 'g1', type: 'pr.checks_passed', at: 1, projectId: 'p', ticketId: 'REL-1', schemaVersion: SCHEMA_VERSION, taint: 'trusted', payload: { number: 3, url: 'u', branch: 'b' } } as FactoryEvent;
-    expect(decide({ ...upcastTicket(old('CI still failing after 2 attempts of fix-ci.')), prNumber: 3 }, green, workflow).events).toContainEqual({ type: 'ticket.unblocked' });
+    expect(decide({ ...upcastTicket(old('CI still failing after 2 attempts of fix-ci.')), prNumber: 3, prState: 'OPEN' }, green, workflow).events).toContainEqual({ type: 'ticket.unblocked' });
   });
 
   it('leaves a typed or unblocked ticket as it is', () => {

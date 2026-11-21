@@ -12,7 +12,7 @@ const workflow = defaultWorkflow();
 function ev<T extends EventType>(type: T, payload: EventPayloads[T], extra: Partial<FactoryEvent> = {}): FactoryEvent {
   return { id: `e-${type}`, type, at: 1000, projectId: 'p', ticketId: 'REL-1', schemaVersion: SCHEMA_VERSION, taint: 'trusted', payload, ...extra } as FactoryEvent;
 }
-const ticket = (patch: Partial<TicketState> = {}): TicketState => ({ ...newTicketState('p', 'REL-1', 'Titre', 'dev', 0), delegated: true, linearSessionId: 's-dev', prNumber: 7, ...patch });
+const ticket = (patch: Partial<TicketState> = {}): TicketState => ({ ...newTicketState('p', 'REL-1', 'Titre', 'dev', 0), delegated: true, linearSessionId: 's-dev', prNumber: 7, prState: 'OPEN', ...patch });
 const blockedOn = (kind: BlockKind, patch: Partial<TicketState> = {}) => ticket({ blocked: true, blockReason: 'x', blockKind: kind, blockedJob: 'dev', ...patch });
 /** A ticket blocked while the check of `r1`, a dev run that ended well, was under way (ORC-403 keeps its done). */
 const blockedDuring = (kind: BlockKind, patch: Partial<TicketState> = {}) => blockedOn(kind, { verifyingRunId: 'r1', verifiedSha: 'abc', ...patch });

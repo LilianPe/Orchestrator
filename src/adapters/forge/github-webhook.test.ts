@@ -140,13 +140,28 @@ describe('mapGithubWebhook', () => {
     expect(await mapGithubWebhook('check_run', orphan, ctx(t))).toEqual([]);
   });
 
+  it('reopens first a PR the ticket recorded closed and the forge reads open, so that the verdict after it counts (ORC-469)', async () => {
+    const closed = tracked({ prNumber: 3, prState: 'CLOSED', updatedAt: 42 });
+    const read = (checks: PrInfo['checks']): PrInfo => ({ number: 3, url: 'https://pr/3', state: 'OPEN', branch: BRANCH, headSha: 'head1', checks, failedChecks: checks === 'fail' ? ['test'] : [] });
+    // The reopen id is the reconciler's: per state of the ticket, which a decision changes.
+    const reopen = 'pr:REL-1:3:reopened:42';
+    expect(ids(await mapGithubWebhook('check_run', checkRunBody('success'), ctx(closed, read('pass'))))).toEqual([reopen, checksEventId('REL-1', 3, 'pass', 'head1')]);
+    expect(ids(await mapGithubWebhook('check_run', checkRunBody('failure'), ctx(closed, read('fail'))))).toEqual([reopen, checksEventId('REL-1', 3, 'fail', 'head1')]);
+    expect(ids(await mapGithubWebhook('pull_request', pullRequestBody('synchronize', { mergeable_state: 'dirty' }), ctx(closed)))).toEqual([reopen, 'pr:REL-1:3:conflicted:head1:base1']);
+    // Open already: no reopen.
+    expect(ids(await mapGithubWebhook('check_run', checkRunBody('success'), ctx({ ...closed, prState: 'OPEN' }, read('pass'))))).toEqual([checksEventId('REL-1', 3, 'pass', 'head1')]);
+    // Read closed, a close delivered again: no reopen before it.
+    expect(ids(await mapGithubWebhook('pull_request', pullRequestBody('closed'), ctx(closed)))).toEqual(['pr:REL-1:3:closed:2026-10-28T10:00:00Z']);
+  });
+
   it('maps a green check to green CI only once the forge reads every check of that head green', async () => {
     const t = tracked({ prNumber: 3 });
     const pr = (checks: PrInfo['checks'], headSha = 'head1'): PrInfo => ({ number: 3, url: 'https://pr/3', state: 'OPEN', branch: BRANCH, headSha, checks, failedChecks: [] });
     expect(await mapGithubWebhook('check_run', checkRunBody('success'), ctx(t, pr('pending')))).toEqual([]);
     expect(await mapGithubWebhook('check_run', checkRunBody('success'), ctx(t, pr('pass', 'head2')))).toEqual([]);
     expect(await mapGithubWebhook('check_run', checkRunBody('success'), ctx(t, pr('pass')))).toMatchObject([
-      { id: checksEventId('REL-1', 3, 'pass', 'head1'), type: 'pr.checks_passed', payload: { number: 3, url: 'https://pr/3' } },
+      // With the head the checks ran on: a green CI of a head the PR left behind is ignored (ORC-469).
+      { id: checksEventId('REL-1', 3, 'pass', 'head1'), type: 'pr.checks_passed', payload: { number: 3, url: 'https://pr/3', headSha: 'head1' } },
     ]);
   });
 

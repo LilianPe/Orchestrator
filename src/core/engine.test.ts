@@ -888,6 +888,28 @@ describe('decide — built-ins', () => {
       counted(reduce(open, ev('push.human', { branch: 'b', sha: 'new', author: 'L', before: 'human' }))!, failed(3, 'new'));
     });
 
+    it('a green CI or a conflict of another PR, or of a head a push left behind, is ignored with a trace (ORC-469)', () => {
+      const pushed = [ev('publish.done', { runId: 'r1', job: 'fix-ci', sha: 'new', before: 'old' })];
+      const open = pushed.reduce((t, e) => reduce(t, e)!, inReview());
+      const ciBlocked = { ...open, ciFixAttempts: 2, blocked: true as const, blockKind: 'ci_bound' as const, blockReason: 'CI still failing after 2 attempts of fix-ci.' };
+      const green = (number: number, headSha?: string) => ev('pr.checks_passed', { number, url: 'u', branch: 'b', ...(headSha ? { headSha } : {}) });
+      const ignored = (t: TicketState, e: FactoryEvent, why: string) => {
+        const out = decide(t, e, workflow);
+        expect(out).toEqual(decision());
+        expect(out.trace).toContainEqual(expect.stringContaining(why));
+      };
+      // A green CI of another PR, or of a head left behind, lifts no block of the red-CI bound.
+      ignored(ciBlocked, green(2, 'new'), 'pr.checks_passed: PR #2 is not the open PR of the ticket, ignored');
+      ignored({ ...ciBlocked, prState: 'CLOSED' }, green(3, 'new'), 'pr.checks_passed: PR #3 is not the open PR of the ticket, ignored');
+      ignored(ciBlocked, green(3, 'old'), 'pr.checks_passed: head old of PR #3 was left behind by a push since, ignored');
+      // The current head, a head not heard of yet, or a green CI with no head, lifts it.
+      for (const e of [green(3, 'new'), green(3, 'later'), green(3)]) expect(decide(ciBlocked, e, workflow).events).toEqual([{ type: 'ticket.unblocked' }]);
+      // A conflict of a head left behind starts no rebase; the current head's does.
+      const conflicted = (headSha: string) => ev('pr.conflicted', { number: 3, url: 'u', branch: 'b', headSha, baseRef: 'main' });
+      ignored(open, conflicted('old'), 'pr.conflicted: head old of PR #3 was left behind by a push since, nothing started');
+      expect(decide(open, conflicted('new'), workflow).trace).toContain('on.pr.conflicted[0]');
+    });
+
     it('counts nothing when no fix-ci starts: no rule, or a merged PR', () => {
       expect(decide(ticket({ logical: 'dev', prNumber: 3, prState: 'OPEN', ciFixAttempts: 1 }), red, workflow)).toEqual(decision());
       const merged = decide(inReview({ prState: 'MERGED', ciFixAttempts: 1 }), red, workflow);

@@ -1233,7 +1233,7 @@ describe('a relaunch past a green check, a settle stuck on a ticket blocked alre
       // leaves a reply's job; a reply, a relaunch on CI failures.
       const pendingJob = lift === 'a green CI' ? { job: 'dev-feedback', input: 'feedback' as const, resume: true } : { job: 'fix-ci', input: 'ci_failures' as const, inputText: 'lint: 3 errors in src/export.ts' };
       const reason = 'CI still failing after 2 attempts of fix-ci.';
-      await h.store.putTicket({ ...(await h.ticket()), pendingJob, blocked: true, blockKind: 'ci_bound', blockReason: reason, blockedJob: 'fix-ci', prNumber: 7, prUrl: 'https://forge/pr/7' });
+      await h.store.putTicket({ ...(await h.ticket()), pendingJob, blocked: true, blockKind: 'ci_bound', blockReason: reason, blockedJob: 'fix-ci', prNumber: 7, prState: 'OPEN', prUrl: 'https://forge/pr/7' });
       const said = () => [...h.tracker.comments('REL-1'), ...h.tracker.activities().map((a) => ('body' in a ? String(a.body) : ''))].filter((b) => /could not be started/.test(b));
       h.runner.enqueue({ hold: true }, { hold: true });
       h.runner.release(first);

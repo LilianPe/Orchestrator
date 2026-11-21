@@ -17,7 +17,7 @@ export function verifyGithubSignature(raw: string, header: string | undefined, s
  * Id of a fact on a ticket's PR: the webhook and `GithubReconciler` name the same fact the same way, so the
  * inbox keeps it once whichever reports it first (ORC-134).
  */
-export function prEventId(ticketId: string, prNumber: number, fact: 'opened' | 'merged' | 'closed'): string {
+export function prEventId(ticketId: string, prNumber: number, fact: 'opened' | 'reopened' | 'merged' | 'closed'): string {
   return `pr:${ticketId}:${prNumber}:${fact}`;
 }
 
@@ -56,9 +56,21 @@ function prPayload(pr: any): PrPayload {
   return { number: pr.number, url: pr.html_url, branch: pr.head.ref };
 }
 
-/** `pr.opened` first when the ticket does not know this PR yet, as `GithubReconciler` does. */
-function opened(t: TicketState, payload: PrPayload): Draft[] {
-  return t.prNumber === payload.number ? [] : [{ id: prEventId(t.ticketId, payload.number, 'opened'), type: 'pr.opened', payload }];
+/**
+ * A fact of a PR the ticket knows, per state of the ticket (`updatedAt`, which every decision moves): the reconciliation and the
+ * webhook name it alike until it is decided, and a later closing or reopening has an id of its own (ORC-469).
+ */
+export function prStateEventId(t: TicketState, prNumber: number, fact: 'reopened' | 'closed'): string {
+  return `${prEventId(t.ticketId, prNumber, fact)}:${t.updatedAt}`;
+}
+
+/**
+ * `pr.opened` first when the ticket does not know this PR yet, as `GithubReconciler` does; or, read open, when the ticket
+ * recorded it closed: reopened, its webhook lost, the verdict after it counts (ORC-469).
+ */
+export function opened(t: TicketState, payload: PrPayload, open: boolean): { id: string; type: 'pr.opened'; payload: PrPayload }[] {
+  if (t.prNumber !== payload.number) return [{ id: prEventId(t.ticketId, payload.number, 'opened'), type: 'pr.opened', payload }];
+  return open && t.prState === 'CLOSED' ? [{ id: prStateEventId(t, payload.number, 'reopened'), type: 'pr.opened', payload }] : [];
 }
 
 function pullRequest(body: any, t: TicketState): Draft[] {
@@ -69,11 +81,11 @@ function pullRequest(body: any, t: TicketState): Draft[] {
   if (t.prNumber !== undefined && t.prNumber !== n && pr.state !== 'open') return [];
   if (body.action === 'reopened' && t.prNumber === n) {
     // Same PR, open again: `pr.opened` takes it back from `CLOSED`; the id is per reopening.
-    return [{ id: `pr:${t.ticketId}:${n}:reopened:${pr.updated_at ?? body.action}`, type: 'pr.opened', payload }];
+    return [{ id: `${prEventId(t.ticketId, n, 'reopened')}:${pr.updated_at ?? body.action}`, type: 'pr.opened', payload }];
   }
-  const out = opened(t, payload);
+  const out: Draft[] = opened(t, payload, pr.state === 'open');
   if (body.action === 'closed') {
-    // Per closing, so that a PR reopened then closed again is cancelled again; `GithubReconciler` keeps `:closed`.
+    // Per closing, so that a PR reopened then closed again is cancelled again; `GithubReconciler`'s is per state of the ticket (ORC-469).
     // The merge commit and the head merged, what a revert on the default branch names, and when GitHub merged it (ORC-278).
     const mergedAt = Date.parse(pr.merged_at);
     const shas = {
@@ -144,8 +156,8 @@ async function checks(body: any, kind: 'check_run' | 'check_suite', repo: string
   const verdict: Draft =
     bucket === 'fail'
       ? { id: checksEventId(t.ticketId, read.number, 'fail', head), type: 'pr.checks_failed', payload: { ...read, failures: live?.failedChecks.length ? live.failedChecks : [name], headSha: head } }
-      : { id: checksEventId(t.ticketId, read.number, 'pass', head), type: 'pr.checks_passed', payload: read };
-  return { ticket: t, events: [...opened(t, read), verdict] };
+      : { id: checksEventId(t.ticketId, read.number, 'pass', head), type: 'pr.checks_passed', payload: { ...read, headSha: head } };
+  return { ticket: t, events: [...opened(t, read, live !== undefined), verdict] };
 }
 
 /** A push to the ticket's branch, once whichever reports it: the webhook, or the reconciliation that reads the PR head (ORC-281). */
