@@ -157,6 +157,19 @@ describe('factory dry-run', () => {
     ]);
   });
 
+  it('unverifiable without its secrets (ORC-453), it says so, with the break, and the tickets go on: 0', async () => {
+    const h = createHarness();
+    const secret: DryRun = { ...dryRun(true), commands: [], unverified: { kind: 'secret', step: 'setup', command: 'npm ci', detail: 'failed without its secrets (NPM_TOKEN), which a dry run\'s setup does not get: npm error code E404', output: 'npm error code E404' } };
+    const c = control(h, { dryRun: async () => secret });
+    expect(await runDryRunCommand(c, 'p')).toBe(0);
+    expect(c.lines.slice(1)).toEqual([
+      `Dry run of p on ${'c'.repeat(12)}: unverifiable without its secrets.`,
+      '  secret, setup `npm ci`: failed without its secrets (NPM_TOKEN), which a dry run\'s setup does not get: npm error code E404',
+      '    | npm error code E404',
+      'The tickets of p are not refused; its build and tests did not run.',
+    ]);
+  });
+
   it('one that cannot run records nothing, and says why', async () => {
     const h = createHarness();
     const c = control(h, { dryRun: (id) => h.orch.dryRun(id) });

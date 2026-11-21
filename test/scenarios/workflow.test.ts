@@ -27,7 +27,7 @@ describe('standard workflow', () => {
     h.runner.enqueue(assessment(), drafted());
     await delegate(h);
     expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake', '/factory:spec']);
-    expect(await h.ticket()).toMatchObject({ logical: 'todo', spec: { version: 1 } });
+    expect(await h.ticket()).toMatchObject({ logical: 'spec', spec: { version: 1 } });
     await toBuild(h, { build: [BUILD] });
     expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake', '/factory:spec', '/factory:tests', '/factory:dev']);
     const req = h.runner.requests[3]!;
@@ -39,7 +39,7 @@ describe('standard workflow', () => {
     expect(t).toMatchObject({ logical: 'human_review', blocked: false, branch: 'feat/rel-1-export-csv', linearSessionId: 'ls-1' });
     expect(t.activeRunId).toBeUndefined();
     const moves = h.tracker.calls.filter((c) => c.method === 'moveTo').map((c) => c.args[1]);
-    expect(moves).toEqual(['In Progress', 'Human Review']);
+    expect(moves).toEqual(['Spec', 'In Progress', 'Human Review']);
     const acts = h.tracker.activities('ls-1');
     // Live, what the agent does in the factory's words; the recap composed from its `submit_result`, never its last text (ORC-214, ORC-195).
     expect(acts).toContainEqual({ type: 'action', action: 'Running a command', parameter: 'step build', ephemeral: true });

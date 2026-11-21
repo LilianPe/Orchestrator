@@ -57,8 +57,14 @@ function checkStepSettings({ effort, budgets, tools }: StepSettings): void {
   if (refused.length) throw new WorkflowError(refused.map((r) => `factory.yml: ${r}`).join('\n'));
 }
 
-/** ORC-170's Linear statuses, which `factory.yml`'s `statuses` may rename and to which it may add `spec` (ORC-382). */
-export const DEFAULT_STATES: Workflow['states'] = { todo: 'Todo', dev: 'In Progress', human_review: 'Human Review', ai_review: 'AI Review', done: 'Done' };
+/** ORC-170's Linear statuses and Spec (ORC-457), which `factory.yml`'s `statuses` may rename, and Spec turn off (ORC-382). */
+export const DEFAULT_STATES: Workflow['states'] = { todo: 'Todo', spec: 'Spec', dev: 'In Progress', human_review: 'Human Review', ai_review: 'AI Review', done: 'Done' };
+
+/** The value of `factory.yml`'s `statuses` that turns a step's status off (ORC-457): the ticket keeps the status it had. */
+const STATUS_OFF = 'off';
+
+/** How factory.yml turns the spec's status off, as its messages say it. */
+const SPEC_OFF = `statuses: { spec_draft: ${STATUS_OFF} }`;
 
 /**
  * The Linear status of each logical state, with `factory.yml`'s `statuses` (ORC-382): a step names the status the table of
@@ -75,17 +81,28 @@ function statesOf(statuses: Readonly<Record<string, string>> = {}): Workflow['st
       const what = preset.steps.some((s) => s.id === step) ? 'shows no status of its own' : 'is not a step';
       throw new WorkflowError(`factory.yml: statuses.${step}: ${what} of ${preset.name} (the steps with one: ${withOne})`);
     }
+    // The only status the factory can go without is the spec's: the ticket stays in Todo until `build` (ORC-212).
+    // In any case: `Off` names no Linear status either.
+    const off = name.toLowerCase() === STATUS_OFF;
+    if (off && status !== 'spec') {
+      throw new WorkflowError(`factory.yml: statuses.${step}: \`${STATUS_OFF}\` turns off only the status of spec_draft: the factory moves tickets to the others`);
+    }
     const before = namedBy.get(status);
     if (before !== undefined && states[status] !== name) {
       throw new WorkflowError(`factory.yml: statuses.${step}: « ${name} », where ${before}, which shows the same status, names « ${states[status]} »`);
     }
     namedBy.set(status, step);
-    states[status] = name;
+    if (off) delete states.spec;
+    else states[status] = name;
   }
   const seen = new Map<string, string>();
   for (const [status, name] of Object.entries(states)) {
     const other = seen.get(name);
-    if (other) throw new WorkflowError(`factory.yml: statuses: « ${name} » would name both ${other} and ${status}: a Linear status names one`);
+    if (other) {
+      // A name factory.yml gave before Spec was a default (ORC-457).
+      const spec = other === 'spec' || status === 'spec' ? ` (Spec is the spec's by default: rename it, or \`${SPEC_OFF}\`)` : '';
+      throw new WorkflowError(`factory.yml: statuses: « ${name} » would name both ${other} and ${status}: a Linear status names one${spec}`);
+    }
     seen.set(name, status);
   }
   return states;
@@ -99,7 +116,9 @@ export function missingStatusWarning(p: { id: string; teamKey: string }, states:
   const missing = Object.values(states).filter((name) => !team.includes(name));
   if (!missing.length) return undefined;
   const names = missing.map((n) => `« ${n} »`).join(', ');
-  return `Warning: ${p.id}: the Linear team ${p.teamKey} has no status ${names}, which the factory moves tickets to (ORC-170's, or as \`statuses\` in factory.yml names them): a move to it fails. Connect Linear again to create it, or name a status the team has.`;
+  // The spec's is the one status a project can turn off (ORC-457).
+  const off = states.spec && missing.includes(states.spec) ? ` A ticket in its spec stays in Todo with \`${SPEC_OFF}\` in factory.yml.` : '';
+  return `Warning: ${p.id}: the Linear team ${p.teamKey} has no status ${names}, which the factory moves tickets to (ORC-170's, or as \`statuses\` in factory.yml names them): a move to it fails. Connect Linear again to create it, or name a status the team has.${off}`;
 }
 
 /**

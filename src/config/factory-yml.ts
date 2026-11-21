@@ -69,7 +69,7 @@ export interface FactoryYml {
   messageModel?: { apiKey: string };
   /** The caps of a run's reads that move a public counter (ORC-370), each `READ_CAPS`' when unset; never off, and no repository's to change. */
   egress?: Partial<ReadCaps>;
-  /** The Linear status each step shows (ORC-382), by step: applied by `stepSettings`, checked against the preset by `defaultWorkflow`. */
+  /** The Linear status each step shows (ORC-382), by step, `off` for none (the spec's only, ORC-457): applied by `stepSettings`, checked against the preset by `defaultWorkflow`. */
   statuses?: Record<string, string>;
   /** Where a version of the spec is published (ORC-382): `SPEC_PUBLICATION` for what is unset. */
   spec?: Partial<SpecPublication>;

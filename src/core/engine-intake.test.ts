@@ -28,15 +28,15 @@ describe('intake (ORC-206)', () => {
     const job = workflow.jobs['intake']!;
     expect(job).toMatchObject({ step: 'intake', queue: 'dev', effort: 'low', structuredOutput: true, pickup: false });
     expect(startMove(workflow, job)).toBeUndefined();
-    // The chain's entry (ORC-395): past clarify, which has no job, its end starts the spec.
-    expect(nextOf(workflow, job)).toEqual({ run: workflow.jobs['spec'], step: expect.objectContaining({ id: 'spec_draft' }) });
+    // The chain's entry (ORC-395): past clarify, which has no job, its end starts the spec, in Spec (ORC-457).
+    expect(nextOf(workflow, job)).toEqual({ run: workflow.jobs['spec'], move: 'spec', step: expect.objectContaining({ id: 'spec_draft' }) });
   });
 
   it('records the size and the risk it estimated, then the guard lets a complete ticket start the spec (ORC-395)', () => {
     const e = finished(assessed());
     const out = decide(ticket(), e, workflow);
     expect(out.events).toContainEqual({ type: 'ticket.patched', patch: { size: 'm', risk: 'medium' } });
-    expect(out.effects).toEqual([expect.objectContaining({ kind: 'start_run', job: 'spec' })]);
+    expect(out.effects).toEqual([{ kind: 'move', to: 'spec' }, expect.objectContaining({ kind: 'start_run', job: 'spec' })]);
     expect(after(ticket(), e)).toMatchObject({ size: 'm', risk: 'medium', blocked: false });
   });
 
