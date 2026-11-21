@@ -90,9 +90,11 @@ export class LinearApi {
    * waits for it too. Past the retries, its error is the outbox's to retry (ORC-343).
    */
   async gql<T>(query: string, variables: Record<string, unknown> = {}, o: GqlOptions = {}): Promise<T> {
+    // A retry waits at least the delay it computed, not one read again from a clock that moved meanwhile (ORC-430).
+    let wait = 0;
     for (let failure = 1; ; failure++) {
       if (o.background && this.keptForCritical()) throw new LinearApiError('Linear quota kept for the critical calls: background call skipped');
-      const hold = this.limitedUntil - this.opts.now();
+      const hold = Math.max(wait, this.limitedUntil - this.opts.now());
       if (hold > 0) await this.opts.sleep(Math.min(hold, this.opts.maxWaitMs));
       try {
         const data = await this.once<T>(query, variables);
@@ -101,7 +103,7 @@ export class LinearApi {
       } catch (err) {
         if (!(err instanceof LinearApiError && err.rateLimited)) throw err;
         // A reset already past by this clock (a skew) or a `Retry-After: 0` still backs off.
-        const wait = Math.min(this.opts.maxWaitMs, err.retryInMs || BASE_WAIT_MS * 2 ** (failure - 1));
+        wait = Math.min(this.opts.maxWaitMs, err.retryInMs || BASE_WAIT_MS * 2 ** (failure - 1));
         this.limitedUntil = this.opts.now() + wait;
         if (o.background || failure > this.opts.rateLimitRetries) throw err;
       }

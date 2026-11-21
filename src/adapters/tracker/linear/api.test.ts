@@ -34,6 +34,14 @@ describe('LinearApi under its rate limit (ORC-350)', () => {
     expect(waits).toEqual([1_000, 2_000]);
   });
 
+  it('waits the whole delay it computed, however much its clock moved since (ORC-430)', async () => {
+    // A clock one millisecond further at each read: a wait read from it twice comes out short.
+    let t = 1_000_000;
+    const { api, waits } = linear([http429(), http429({ 'retry-after': '3' }), ok()], { now: () => t++ });
+    await api.gql('query { viewer { id } }');
+    expect(waits).toEqual([1_000, 3_000]);
+  });
+
   it("waits until Linear's reset, or its Retry-After, when it gives one, never past the longest wait", async () => {
     const now = () => 1_000_000;
     const reset = linear([http429({ 'x-ratelimit-requests-reset': String(1_000_000 + 7_000) }), ok()], { now });
