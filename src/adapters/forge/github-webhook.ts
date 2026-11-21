@@ -151,10 +151,13 @@ async function checks(body: any, kind: 'check_run' | 'check_suite', repo: string
 /** A push to the ticket's branch, once whichever reports it: the webhook, or the reconciliation that reads the PR head (ORC-281). */
 export const pushEventId = (ticketId: string, sha: string): string => `push:${ticketId}:${sha}`;
 
+/** The author of a push that names no pusher, for the webhook and the reconciliation alike. */
+export const UNKNOWN_PUSHER = 'inconnu';
+
 function push(body: any, t: TicketState, branch: string): Draft[] {
   // A deleted branch, or a push by a bot (the factory's GitHub App among them), is no human commit.
   if (body.deleted || isBot(body.sender) || typeof body.after !== 'string') return [];
-  const author: string = body.sender?.login ?? body.pusher?.name ?? 'inconnu';
+  const author: string = body.sender?.login ?? body.pusher?.name ?? UNKNOWN_PUSHER;
   return [
     {
       id: pushEventId(t.ticketId, body.after),

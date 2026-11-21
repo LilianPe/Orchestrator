@@ -114,7 +114,7 @@ describe('PrPoller', () => {
 
     it('is a human push, under the id of its webhook, after the head last known', async () => {
       expect(await headIs(HUMAN, {}, [OTHER, PUBLISHED])).toEqual([
-        { ...TRUSTED, taint: 'untrusted', at: 100, projectId: 'p', ticketId: 'REL-1', id: `push:REL-1:${HUMAN}`, type: 'push.human', payload: { branch: 'b', sha: HUMAN, author: 'unknown', before: PUBLISHED } },
+        { ...TRUSTED, taint: 'untrusted', at: 100, projectId: 'p', ticketId: 'REL-1', id: `push:REL-1:${HUMAN}`, type: 'push.human', payload: { branch: 'b', sha: HUMAN, author: 'inconnu', before: PUBLISHED } },
       ]);
       // A human head no publication carries yet is the last known.
       expect((await headIs(OTHER, { humanHead: HUMAN }))[0]?.payload).toMatchObject({ sha: OTHER, before: HUMAN });
@@ -284,6 +284,22 @@ describe('PrPoller', () => {
       await s.store.recordEvent(published(PUBLISHED));
       await s.poller.pollOnce('p');
       expect(s.events.filter((e) => e.type === 'push.human')).toEqual([]);
+    });
+
+    it('writes the head read before the first publication once, and forgets it past the first publication', async () => {
+      const s = setup();
+      const setMeta = vi.spyOn(s.store, 'setMeta');
+      const writes = () => setMeta.mock.calls.filter(([key]) => key.startsWith('lost-push:')).map(([, value]) => value);
+      await s.store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b', prNumber: 7 });
+      s.forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', headSha: OTHER, checks: 'none', failedChecks: [] });
+      await s.poller.pollOnce('p');
+      await s.poller.pollOnce('p');
+      expect(writes()).toEqual([OTHER]);
+      await s.store.recordEvent(published(PUBLISHED, 1));
+      await s.store.recordEvent(published(VERIFIED, 2));
+      await s.poller.pollOnce('p');
+      await s.poller.pollOnce('p');
+      expect(writes()).toEqual([OTHER, '']);
     });
 
     it("holds back no CI verdict when the head's judgement fails", async () => {

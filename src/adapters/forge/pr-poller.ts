@@ -5,7 +5,7 @@ import { TRUSTED, type FactoryEvent, type TicketState } from "../../core/types.j
 import { isTakenOver } from "../../core/block-cause.js";
 import { upcast } from "../../core/upcast.js";
 import type { Store } from "../../store/types.js";
-import { checksEventId, prEventId, pushEventId } from "./github-webhook.js";
+import { checksEventId, prEventId, pushEventId, UNKNOWN_PUSHER } from "./github-webhook.js";
 import type { Forge, PrInfo } from "./types.js";
 
 export class PrPoller {
@@ -120,8 +120,11 @@ export class PrPoller {
     // With no publication, there is nothing to compare with: the head read then is kept, and the forge may still read the PR
     // on it just after the first publication.
     const unpublishedKey = `lost-push:${t.projectId}:${t.ticketId}`;
-    if (!published) return this.d.store.setMeta(unpublishedKey, head);
-    if (heads.length === 1 && (await this.d.store.getMeta(unpublishedKey)) === head) return;
+    const unpublished = await this.d.store.getMeta(unpublishedKey);
+    if (!published) return unpublished === head ? undefined : this.d.store.setMeta(unpublishedKey, head);
+    if (heads.length === 1 && unpublished === head) return;
+    // Past the first publication, the head read before it is no longer looked at.
+    if (heads.length > 1 && unpublished) await this.d.store.setMeta(unpublishedKey, "");
     // The last commit it pushed, and the one before, which the forge may still read just after a push. A branch put back on
     // an older one is a human's push, as the webhook reports it.
     if (heads.slice(-2).includes(head)) return;
@@ -135,7 +138,7 @@ export class PrPoller {
       id: pushEventId(t.ticketId, head),
       type: "push.human",
       // The PR names no pusher; `before`, the head last known, so that only the commits since are the human's (ORC-338).
-      payload: { branch: pr.branch, sha: head, author: "unknown", before: t.humanHead ?? published },
+      payload: { branch: pr.branch, sha: head, author: UNKNOWN_PUSHER, before: t.humanHead ?? published },
     });
   }
 
