@@ -49,6 +49,9 @@ describe('instance config', () => {
     expect(currentProjectIds(home, ['x'])).toEqual(['b']);
     writeFileSync(join(home, 'config.yaml'), 'port: [\n');
     expect(currentProjectIds(home, ['x'])).toEqual(['x']);
+    writeFileSync(join(home, 'config.yaml'), '');
+    expect(currentProjectIds(home, ['x'])).toEqual(['x']);
+    expect(currentProjectIds(mkdtempSync(join(tmpdir(), 'factory-home-')), ['x'])).toEqual(['x']);
   });
 
   it('loads a config.yaml that still has the daily budget in dollars, without it: no queue waits on dollars (ORC-216)', () => {

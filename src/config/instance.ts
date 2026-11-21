@@ -129,11 +129,13 @@ export function loadInstance(home: string): InstanceConfig {
 
 /**
  * The ids of config.yaml's projects as the file is now (ORC-454): one `factory init` added while the daemon runs included, one
- * removed left out. `fallback` when the file does not read (an edit under way).
+ * removed left out. `fallback` when the file is missing, empty (`saveInstance` caught between its truncation and its write) or
+ * does not read: never no project for a file that has none to give.
  */
 export function currentProjectIds(home: string, fallback: readonly string[]): readonly string[] {
   try {
-    return loadInstance(home).projects.map((p) => p.id);
+    const text = readFileSync(homePaths(home).config, 'utf8');
+    return text.trim() ? validate(parse(text)).projects.map((p) => p.id) : fallback;
   } catch {
     return fallback;
   }
