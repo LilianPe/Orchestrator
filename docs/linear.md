@@ -10,7 +10,7 @@ Relais acts in Linear as an **agent**: an OAuth application installed with `acto
 |---|---|
 | Name | `relais`: this is the name that will be mentioned with `@`. |
 | Callback URL | `http://localhost:4100/oauth/callback`, or `<publicUrl>/oauth/callback` if `publicUrl` is set. The port follows `port` in `config.yaml`. |
-| Webhooks | Checked. URL: `<publicUrl>/webhooks/linear` on the server; on a workstation, the smee channel created by `relais init` (`https://smee.io/…`). See [Webhooks](#3-webhooks-production-and-development). |
+| Webhooks | Checked. URL: `<publicUrl>/webhooks/linear` on the server; on a workstation, the smee channel created by `factory init --dev` (`https://smee.io/…`). See [Webhooks](#3-webhooks-production-and-development). |
 | Webhook categories | **Agent session events**, **Issues**, **Comments**. |
 
 Create the application, then copy into `relais init`:
@@ -44,7 +44,7 @@ Linear must be able to reach Relais. Set in `config.yaml`:
 
 - **Production, on the server**: `publicUrl: https://relais.exemple.fr` and `relay: { kind: none }`. Linear calls `POST <publicUrl>/webhooks/linear` directly, in HTTPS, through the server's reverse proxy: the host's own (nginx, Caddy…), or the optional `caddy` service of `compose.yaml` (`--profile tls`). `factoryd` listens in plain HTTP behind it. Setup and examples: [`deployment.md`](deployment.md#tls-and-webhooks) (ORC-221).
 - **Development, on a workstation only** (never the server):
-  - **smee relay** (the default of `relais init`): `relay: { kind: smee, url: https://smee.io/… }`. Linear sends the webhooks to the public smee.io channel; `relais up` subscribes to it (SSE stream) and replays them locally. Nothing to open on the machine. The channel is created by `relais init`;
+  - **smee relay** (`factory init --dev`, ORC-411: without `--dev`, `init` creates no channel): `relay: { kind: smee, url: https://smee.io/… }`. Linear sends the webhooks to the public smee.io channel; `relais up` subscribes to it (SSE stream) and replays them locally. Nothing to open on the machine. The channel is created by `factory init --dev`;
   - **a tunnel** (ngrok, `cloudflared tunnel`): `publicUrl: <the tunnel's HTTPS URL>` and `relay: { kind: none }`, as on the server; the tunnel stands in for the reverse proxy, towards `http://localhost:4100`. Its URL changes with each tunnel unless it is reserved: update the application's webhook and callback URLs then.
 
 Every webhook is verified, whatever the mode:

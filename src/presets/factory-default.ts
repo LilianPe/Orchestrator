@@ -1,6 +1,7 @@
 import type { Preset } from './preset.js';
 
-const SONNET = 'claude-sonnet-5-5';
+/** Also the `default_model` of the factory.yml `factory init` writes (ORC-411). */
+export const SONNET = 'claude-sonnet-5-5';
 const OPUS = 'claude-opus-5-5';
 /** Turn cap of the steps the MVP doc leaves open: the former `per_run.turns` of the standard pack. */
 const DEFAULT_TURNS = 150;

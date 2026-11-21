@@ -677,8 +677,9 @@ export interface TicketState {
   /**
    * The ticket waits for the Linear tickets it is « blocked by » to be done (ORC-363), then makes `start`: no block, nothing for a human
    * to answer. Lifted by `blockers.done`; a block, an undelegation or a dev run ends it (`reduce`): `null` then. A move or a delegation again do not.
+   * `lift`: on a ticket blocked while it waits, the step a relaunch resumes (ORC-432), made in place of `start` with the block's lift.
    */
-  waitingOn?: { blockers: string[]; start: PendingJob } | null;
+  waitingOn?: { blockers: string[]; start: PendingJob; lift?: PendingJob } | null;
   /**
    * Signed actor of the last authorized delegation (ORC-186): the run's initiator, who never validates
    * its spec, and its requester, who may answer it.

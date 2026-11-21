@@ -40,7 +40,7 @@ relais            # prints the help (exit code 1, this is normal)
 
 ```bash
 cd <your repository>
-relais init
+relais init          # on a workstation without a public URL: relais init --dev (a smee.io relay for Linear's webhooks)
 ```
 
 The wizard is described in [`cli.md`](cli.md#relais-init) and creating the Linear application in [`linear.md`](linear.md); the whole first run, step by step, in [`first-run.md`](first-run.md). Then:
