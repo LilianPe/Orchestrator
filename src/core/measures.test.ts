@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MeasureFacts, OutboxRow, RunRecord } from '../store/types.js';
+import { LIFT_ON_WAIT } from './engine.js';
 import { ticketMeasures } from './measures.js';
 import { TRUSTED, type EventPayloads, type EventType, type FactoryEvent } from './types.js';
 
@@ -17,7 +18,7 @@ const run = (patch: Partial<RunRecord>): RunRecord => ({
   costUsd: 0, turns: 1, lastText: '', token: 't', cwd: '/w', ...patch,
 });
 
-const facts = (patch: Partial<MeasureFacts>): MeasureFacts => ({ devSession: undefined, events: [], runs: [], effects: [], acks: {}, ...patch });
+const facts = (patch: Partial<MeasureFacts>): MeasureFacts => ({ devSession: undefined, events: [], runs: [], effects: [], acks: {}, traces: {}, ...patch });
 
 describe('ticketMeasures (ORC-235)', () => {
   it('is empty for a ticket with no facts', () => {
@@ -189,6 +190,38 @@ describe('ticketMeasures (ORC-235)', () => {
       ],
     }));
     expect(m.reworks).toEqual([{ cause: 'feedback', id: 'question' }, { cause: 'feedback', id: 'instruction' }]);
+  });
+
+  it('reads the relaunch where the engine marks it: a flagged start, a relaunch the wait keeps, the old rows as before (ORC-440)', () => {
+    const comment = (id: string, at: number) => ev(id, 'ticket.commented', at, { body: 'ok', author: 'h', kind: 'instruction' });
+    const mention = (id: string, at: number) => ev(id, 'session.mentioned', at, { linearSessionId: `s-${id}`, body: '?', author: 'h', kind: 'instruction' });
+    const started = (eventId: string, effect: object) => ({ ...row(`REL-1:${eventId}:0`, { kind: 'start_run', ...effect } as never), eventId });
+    const m = ticketMeasures('p', 'REL-1', facts({
+      events: [
+        ev('d', 'ticket.delegated', 0, { linearSessionId: 'ls' }),
+        comment('flagged', 10),
+        mention('waited', 20),
+        comment('waited-comment', 25),
+        // Kept behind a wait on a ticket not blocked: no relaunch, its trace says only that it is not started.
+        mention('kept', 30),
+        // Its start says it relaunches nothing, whatever it reads.
+        mention('answered', 40),
+        // Decided before the flag: read as #275 read it.
+        comment('old', 50),
+        ev('m', 'pr.merged', 60, { number: 1, url: 'u', branch: 'b' }),
+      ],
+      effects: [
+        started('flagged', { job: 'dev', input: 'feedback', relaunches: true }),
+        started('answered', { job: 'other', input: 'feedback', relaunches: false }),
+        started('old', { job: 'dev-feedback', input: 'feedback' }),
+      ],
+      traces: {
+        waited: ['on.session.mentioned[0]', `${LIFT_ON_WAIT}: dev`, 'dev not started, waiting'],
+        'waited-comment': [`${LIFT_ON_WAIT}: dev-feedback`],
+        kept: ['dev-feedback not started, waiting'],
+      },
+    }));
+    expect(m.reworks.map((r) => r.id)).toEqual(['flagged', 'waited', 'waited-comment', 'old']);
   });
 });
 

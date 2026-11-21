@@ -11,7 +11,7 @@ const run = (patch: Partial<RunRecord>): RunRecord => ({
   costUsd: 0, turns: 1, lastText: '', token: 'secret-run-token', cwd: '/w', ...patch,
 });
 
-const facts = (patch: Partial<MeasureFacts>): MeasureFacts => ({ devSession: undefined, events: [], runs: [], effects: [], acks: {}, ...patch });
+const facts = (patch: Partial<MeasureFacts>): MeasureFacts => ({ devSession: undefined, events: [], runs: [], effects: [], acks: {}, traces: {}, ...patch });
 
 const pr = { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1' };
 const spec = { goal: 'Export the list as CSV', criteria: ['Given a list, when exported, then a CSV comes out'] };

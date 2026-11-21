@@ -861,7 +861,7 @@ export class PgStore implements AsyncStore {
 
   /** Five reads side by side: the facts of a ticket for its measures, not a decision (no lock, no snapshot needed). */
   async measureFacts(projectId: string, ticketId: string): Promise<MeasureFacts> {
-    const [events, runs, acked, ticket, effects] = await Promise.all([
+    const [events, runs, acked, ticket, effects, traced] = await Promise.all([
       this.db.execute<{ payload: FactoryEvent }>(sql`
         select payload from journal where ticket_id = ${ticketId} and payload->>'projectId' = ${projectId} order by seq
       `),
@@ -873,6 +873,10 @@ export class PgStore implements AsyncStore {
       `),
       this.getTicket(projectId, ticketId),
       this.listEffects(projectId, ticketId),
+      this.db.execute<{ id: string; trace: string[] }>(sql`
+        select d.event_id as id, d.decision->'trace' as trace from decision_trace d join journal j on j.event_id = d.event_id
+        where j.ticket_id = ${ticketId} and j.payload->>'projectId' = ${projectId} and jsonb_array_length(coalesce(d.decision->'trace', '[]'::jsonb)) > 0
+      `),
     ]);
     return {
       devSession: ticket?.linearSessionId,
@@ -880,6 +884,7 @@ export class PgStore implements AsyncStore {
       runs,
       effects,
       acks: Object.fromEntries(acked.rows.map((r) => [r.id, Number(r.at)])),
+      traces: Object.fromEntries(traced.rows.map((r) => [r.id, r.trace])),
     };
   }
 

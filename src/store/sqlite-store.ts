@@ -761,12 +761,19 @@ export class SqliteStore implements Store {
            AND id IN (SELECT id FROM events WHERE ticket_id = ? AND json_extract(data, '$.projectId') = ?)`,
       )
       .all(ticketId, projectId) as { id: string; acked_at: number }[];
+    const traced = this.db
+      .prepare(
+        `SELECT d.event_id AS id, json_extract(d.data, '$.trace') AS trace FROM decision_trace d JOIN events e ON e.id = d.event_id
+          WHERE e.ticket_id = ? AND json_extract(e.data, '$.projectId') = ? AND json_array_length(d.data, '$.trace') > 0`,
+      )
+      .all(ticketId, projectId) as { id: string; trace: string }[];
     return {
       devSession: this.ticketRow(projectId, ticketId)?.linearSessionId,
       events: events.map((r) => JSON.parse(r.data) as FactoryEvent),
       runs: await this.ticketRuns(projectId, ticketId),
       effects: await this.listEffects(projectId, ticketId),
       acks: Object.fromEntries(acked.map((r) => [r.id, Number(r.acked_at)])),
+      traces: Object.fromEntries(traced.map((r) => [r.id, JSON.parse(r.trace) as string[]])),
     };
   }
 

@@ -78,13 +78,13 @@ describe('decide — default reactions (ORC-392)', () => {
 
   it('routes a reply in a foreign session to ask', () => {
     const out = decide(ticket({ linearSessionId: 's1' }), ev('session.prompted', { linearSessionId: 's9', body: 'et pour mobile ?', author: 'L' }), workflow);
-    expect(out).toEqual(decision({ effects: [{ kind: 'start_run', job: 'ask', input: 'thread', inputText: 'et pour mobile ?', linearSessionId: 's9' }] }));
+    expect(out).toEqual(decision({ effects: [{ kind: 'start_run', job: 'ask', input: 'thread', inputText: 'et pour mobile ?', linearSessionId: 's9', relaunches: false }] }));
   });
 
   it('on a non-delegated ticket, a reply routes to ask and dev-queue rules are skipped', () => {
     const t = ticket({ delegated: false, logical: 'dev' });
     expect(decide(t, ev('session.prompted', { linearSessionId: 's9', body: 'et pourquoi ?', author: 'L' }), workflow)).toEqual(
-      decision({ effects: [{ kind: 'start_run', job: 'ask', input: 'thread', inputText: 'et pourquoi ?', linearSessionId: 's9' }] }),
+      decision({ effects: [{ kind: 'start_run', job: 'ask', input: 'thread', inputText: 'et pourquoi ?', linearSessionId: 's9', relaunches: false }] }),
     );
     expect(decide({ ...t, logical: 'ai_review' }, ev('status.changed', { from: 'human_review', to: 'ai_review' }), workflow)).toEqual(decision());
     expect(decide(t, ev('label.changed', { label: 'agent:reprendre', change: 'added' }), workflow)).toEqual(decision());
@@ -178,7 +178,7 @@ describe('decide — default reactions (ORC-392)', () => {
 
   it('a mention runs ask with the body in its own session', () => {
     const out = decide(ticket(), ev('session.mentioned', { linearSessionId: 's2', body: 'tu penses quoi ?', author: 'L' }), workflow);
-    expect(out).toEqual(decision({ effects: [{ kind: 'start_run', job: 'ask', input: 'thread', inputText: 'tu penses quoi ?', linearSessionId: 's2' }] }));
+    expect(out).toEqual(decision({ effects: [{ kind: 'start_run', job: 'ask', input: 'thread', inputText: 'tu penses quoi ?', linearSessionId: 's2', relaunches: false }] }));
   });
 
   it('a retiens command, journaled before ORC-193, starts no run: it waits in humanInbox as any message', () => {
@@ -448,7 +448,7 @@ describe('decide — taint', () => {
 
   it('answers an untrusted question with sensitive paths on its ask run', () => {
     const out = decide(ticket({ linearSessionId: 's1' }), untrusted(ev('session.prompted', { linearSessionId: 's9', body: 'et pour mobile ?', author: 'L' })), workflow);
-    expect(out.effects).toEqual([{ kind: 'start_run', job: 'ask', input: 'thread', inputText: 'et pour mobile ?', linearSessionId: 's9', sensitivePaths: SENSITIVE_PATHS }]);
+    expect(out.effects).toEqual([{ kind: 'start_run', job: 'ask', input: 'thread', inputText: 'et pour mobile ?', linearSessionId: 's9', relaunches: false, sensitivePaths: SENSITIVE_PATHS }]);
   });
 
   const pending = (taint?: 'trusted' | 'untrusted'): TicketState['humanInbox'] => [
@@ -1056,7 +1056,7 @@ describe('decide — built-ins', () => {
     const out = decide(blocked, ev('session.prompted', { linearSessionId: 's1', body: 'try again', author: 'L' }), workflow);
     expect(out.events).toEqual(expect.arrayContaining([{ type: 'ticket.unblocked' }, { type: 'pending.cleared', job: pendingJob }]));
     expect(out.effects.filter((e) => e.kind === 'start_run')).toEqual([
-      { kind: 'start_run', job: 'fix-ci', input: 'ci_failures', inputText: 'lint failed', sensitivePaths: ['.github/'] },
+      { kind: 'start_run', job: 'fix-ci', input: 'ci_failures', inputText: 'lint failed', sensitivePaths: ['.github/'], relaunches: true },
     ]);
     // A debounce armed before the block lifts it by starting that very job; held messages wait for it.
     const fired = decide(blocked, ev('timer.fired', { kind: 'debounce', payload: { job: 'dev-feedback', inbox: true } }), workflow);

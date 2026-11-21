@@ -983,9 +983,14 @@ function startRun(out: Decision, event: FactoryEvent, ticket: TicketState | unde
     return;
   }
   const taint = runTaint(event, ticket, run.input ?? job.input);
-  const effect: StartRun = { kind: 'start_run', job: job.name, ...run };
+  // A human message's start says whether it relaunches the ticket's work, read by the rework measure (ORC-440): not the answer agent's.
+  const relaunch = MESSAGES.has(event.type) ? { relaunches: job.queue !== 'questions' } : {};
+  const effect: StartRun = { kind: 'start_run', job: job.name, ...run, ...relaunch };
   out.effects.push(taint === 'untrusted' ? { ...effect, sensitivePaths: SENSITIVE_PATHS } : effect);
 }
+
+/** The human messages whose start of a run says whether it relaunches the ticket's work (ORC-440): not a command, which relaunches nothing. */
+const MESSAGES = new Set<EventType>(['session.prompted', 'session.mentioned', 'ticket.commented']);
 
 /**
  * Starts the step a step's end hands over to. On a blocked ticket the launch refuses a dev job (ORC-403 publishes a run's done
@@ -1556,7 +1561,14 @@ function startPending(out: Decision, event: FactoryEvent, ticket: TicketState, w
 function liftOnWait(out: Decision, event: FactoryEvent, ticket: TicketState, lift: PendingJob): void {
   if (relaunchedByHuman(event, ticket)) giveBoundsBack(out, ticket);
   out.events.push({ type: 'ticket.patched', patch: { waitingOn: { ...ticket.waitingOn!, lift } } });
+  out.trace.push(`${LIFT_ON_WAIT}: ${lift.job}`);
 }
+
+/** The trace of a relaunch the wait keeps (`liftOnWait`): no run starts with its decision, the rework measure reads it there (ORC-440). */
+export const LIFT_ON_WAIT = 'relaunch kept for the end of the wait';
+
+/** A decision's trace holds a relaunch the wait keeps (`liftOnWait`). */
+export const liftsOnWait = (trace: readonly string[] | undefined): boolean => !!trace?.some((line) => line.startsWith(`${LIFT_ON_WAIT}:`));
 
 /** Starts `job` as `pending` was set aside: its input and its restrictions. */
 function startAs(out: Decision, event: FactoryEvent, ticket: TicketState, job: JobSpec, pending: PendingJob): void {

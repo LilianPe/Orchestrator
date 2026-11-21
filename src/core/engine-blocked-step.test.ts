@@ -38,7 +38,7 @@ describe('a run published on a blocked ticket: its next step waits for the block
     const blocked = after(state, published, decide(state, published, workflow));
     expect(blocked).toMatchObject({ blocked: true, blockedJob: 'dev', nextJob: 'review' });
     const out = decide(blocked, reply, workflow);
-    expect(starts(out)).toEqual([{ kind: 'start_run', job: 'review' }]);
+    expect(starts(out)).toEqual([{ kind: 'start_run', job: 'review', relaunches: true }]);
     expect(types(out)).toEqual(expect.arrayContaining(['feedback.appended', 'ticket.unblocked']));
     expect(after(blocked, reply, out)).toMatchObject({ blocked: false, nextJob: undefined });
   });
@@ -74,7 +74,7 @@ describe('a run published on a blocked ticket: its next step waits for the block
     expect(types(d)).toContain('ticket.blocked');
     const again = after(blocked, failed, d);
     expect(again).toMatchObject({ blocked: true, blockReason: 'Error: linear down', nextJob: 'review' });
-    expect(starts(decide(again, reply, workflow))).toEqual([{ kind: 'start_run', job: 'review' }]);
+    expect(starts(decide(again, reply, workflow))).toEqual([{ kind: 'start_run', job: 'review', relaunches: true }]);
   });
 
   it('a stop ends the work: the step handed to the block goes with it, the reply resumes as on any stop', () => {
@@ -87,7 +87,7 @@ describe('a run published on a blocked ticket: its next step waits for the block
 
   it('a step handed to the block that the workflow no longer has: the reply resumes the blocked step, as before', () => {
     const blocked = blockedOn('infra', { nextJob: 'gone' });
-    expect(starts(decide(blocked, reply, workflow))).toEqual([{ kind: 'start_run', job: 'dev', input: 'feedback' }]);
+    expect(starts(decide(blocked, reply, workflow))).toEqual([{ kind: 'start_run', job: 'dev', input: 'feedback', relaunches: true }]);
   });
 
   it('a ticket not blocked starts its next step at once, as before', () => {

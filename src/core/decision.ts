@@ -11,7 +11,11 @@ export type ActivityType = 'thought' | 'response' | 'elicitation' | 'error';
 export type Effect =
   /** `sensitivePaths`: set on a run started from an untrusted event, the mark that makes the branch untrusted (`SENSITIVE_PATHS`, ORC-338). */
   /** `relaunchOf`: the lost attempt whose step this starts again (ORC-220): what it read and its session come from its record. */
-  | { kind: 'start_run'; job: string; input?: InputKind; inputText?: string; linearSessionId?: string; resume?: boolean; sensitivePaths?: readonly string[]; relaunchOf?: string }
+  /**
+   * `relaunches`: set on the start a human message decided (ORC-440), true when it relaunches the ticket's work, false for the answer
+   * agent's; the rework measure reads it. Absent on any other start, and on a row decided before.
+   */
+  | { kind: 'start_run'; job: string; input?: InputKind; inputText?: string; linearSessionId?: string; resume?: boolean; sensitivePaths?: readonly string[]; relaunchOf?: string; relaunches?: boolean }
   /** Without linearSessionId: stop the ticket's dev work. With it: stop only the runs of that (question) session. */
   | { kind: 'stop_run'; linearSessionId?: string }
   /**
