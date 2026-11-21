@@ -863,6 +863,54 @@ jobs:
       expect(await report(new FakeApi([]))).not.toHaveProperty('validatorWarnings');
     });
   });
+
+  // ORC-446: the Smee relay's check of the daemon's start (ORC-444), said by doctor too.
+  describe('the Smee relay outside the development mode (ORC-446)', () => {
+    const homeWith = (extra: string) => {
+      const home = tempHome();
+      writeFileSync(join(home, 'config.yaml'), `relay:\n  kind: smee\n  url: https://smee.io/abc\n${extra}projects:\n  - id: app\n    repoPath: /repo\n    linearTeamKey: APP\n`);
+      return home;
+    };
+    const cli = async (home: string, json = false) => {
+      const lines: string[] = [];
+      const code = await runDoctorCommand({ repoPath: '/repo', home, env: {}, out: (line) => lines.push(line), ...(json ? { json } : {}) });
+      return { code, lines, relay: lines.filter((l) => l.includes('kind: smee')) };
+    };
+
+    it('criterion 1: warns of a config without the marker, before it needs the GitHub App', async () => {
+      const { lines, relay } = await cli(homeWith(''));
+      expect(relay).toEqual([expect.stringMatching(/^Warning: relay: \{ kind: smee \}.*dev: true.*factory init --dev/)]);
+      expect(lines.indexOf(relay[0]!)).toBeLessThan(lines.findIndex((l) => l.includes('GitHub App not configured')));
+    });
+
+    it('criterion 1: fails with dev: false, as factory up does, exit 1', async () => {
+      const { code, lines, relay } = await cli(homeWith('dev: false\n'));
+      expect(code).toBe(1);
+      expect(relay).toEqual([expect.stringMatching(/dev: false.*publicUrl.*factory init --dev/)]);
+      expect(lines.join('\n')).not.toContain('GitHub App not configured');
+    });
+
+    it('criterion 2: fails with a publicUrl in the development mode, exit 1', async () => {
+      const { code, relay } = await cli(homeWith('dev: true\npublicUrl: https://f.example.com\n'));
+      expect(code).toBe(1);
+      expect(relay).toEqual([expect.stringMatching(/publicUrl: https:\/\/f\.example\.com.*relay: \{ kind: none \}/)]);
+    });
+
+    it('says nothing in the development mode', async () => {
+      expect((await cli(homeWith('dev: true\n'))).relay).toEqual([]);
+    });
+
+    it('lists the warning in the JSON report, and only when there is one', async () => {
+      const report = async (relayWarnings?: string[]) => {
+        const json: string[] = [];
+        await runDoctor({ repoPath: '/repo', api: new FakeApi([]), host: goodHost, json: true, out: (line) => json.push(line), ...(relayWarnings ? { relayWarnings } : {}) });
+        return JSON.parse(json.join('\n')) as unknown;
+      };
+      expect(await report(['Warning: relay: x'])).toMatchObject({ accepted: true, relayWarnings: ['Warning: relay: x'] });
+      expect(await report([])).not.toHaveProperty('relayWarnings');
+      expect((await cli(homeWith(''), true)).lines.filter((l) => l.startsWith('Warning: relay'))).toEqual([]);
+    });
+  });
 });
 
 describe('the host: the engine on cgroup v2, able to set the limits (ORC-208, criterion 1)', () => {

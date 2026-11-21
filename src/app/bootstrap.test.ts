@@ -344,9 +344,9 @@ describe('bootstrap', () => {
   describe('the Smee relay outside the development mode', () => {
     // A channel nobody answers: the relay only logs its retries.
     const smee = { kind: 'smee' as const, url: 'http://127.0.0.1:9/channel' };
-    const startWith = async (dev: boolean | undefined) => {
+    const startWith = async (dev: boolean | undefined, publicUrl?: string) => {
       const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-      saveInstance(home, { port: 4171, host: '127.0.0.1', relay: smee, projects: [], limits: {}, ...(dev === undefined ? {} : { dev }) });
+      saveInstance(home, { port: 4171, host: '127.0.0.1', relay: smee, projects: [], limits: {}, ...(dev === undefined ? {} : { dev }), ...(publicUrl ? { publicUrl } : {}) });
       const logs: string[] = [];
       const app = await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
       try {
@@ -360,6 +360,11 @@ describe('bootstrap', () => {
 
     it('refuses to start, naming publicUrl and factory init --dev', async () => {
       await expect(startWith(false)).rejects.toThrow(/relay: \{ kind: smee \}.*publicUrl.*factory init --dev/);
+    });
+
+    // ORC-446: a publicUrl, a server's or a tunnel's, already brings Linear's webhooks here.
+    it('refuses a publicUrl beside it, even in the development mode, naming relay: { kind: none }', async () => {
+      await expect(startWith(true, 'https://f.example.com')).rejects.toThrow(/publicUrl: https:\/\/f\.example\.com.*relay: \{ kind: none \}/);
     });
 
     it('starts with the relay of a config written by factory init --dev', async () => {

@@ -36,7 +36,7 @@ import { claudeAccountReader, disabledControls, readCapsOf, specPublicationOf, s
 import { loadSealedFactoryYml, SECRETS_KEY_REQUIRED } from '../config/server-secrets.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../config/repo-config.js';
 import { makeDryRunFiles, makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint } from './repo-variables.js';
-import { daemonSecretValues, effectiveInstance, homePaths, isLoopbackHost, linearSettings, saveLinearTokens, sealSecretsAtRest, validatorWarnings, type InstanceConfig } from '../config/instance.js';
+import { daemonSecretValues, effectiveInstance, homePaths, isLoopbackHost, linearSettings, relayWarnings, saveLinearTokens, sealSecretsAtRest, validatorWarnings, type InstanceConfig } from '../config/instance.js';
 import { githubOAuthClient, githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
 import { fantome, isFantome, projectEffects } from '../presets/fantome.js';
@@ -97,18 +97,6 @@ function requireSecretsKeyWhenExposed(instance: InstanceConfig, yml: FactoryYml 
   if (!yml?.secretsKey && !isLoopbackHost(instance.host)) throw new Error(`host: ${instance.host} exposes ${PRODUCT_NAME} outside this machine: ${SECRETS_KEY_REQUIRED}.`);
 }
 
-/**
- * The Smee relay in the development mode alone (ORC-444), the `dev: true` that `factory init --dev` writes: a public channel,
- * for a workstation, never a server. `dev: false` refuses the start; a config.yaml written before the marker, with none, starts
- * with a warning.
- */
-function checkSmeeRelay(instance: InstanceConfig, log: (m: string) => void): void {
-  if (instance.relay.kind !== 'smee' || instance.dev) return;
-  const fix = 'on a server, set publicUrl to its https:// address and relay: { kind: none }; on a workstation, run factory init --dev';
-  if (instance.dev === false) throw new Error(`relay: { kind: smee } in config.yaml outside the development mode (dev: false): a smee.io channel is public, for a workstation only: ${fix}.`);
-  log(`Warning: relay: { kind: smee } in config.yaml without dev: true, the development mode factory init --dev writes: started as written before that marker; ${fix} (it writes dev: true).`);
-}
-
 export async function startFactory(o: BootOptions): Promise<{ url: string; stop(): Promise<void> }> {
   const log = o.log ?? ((m: string) => console.log(`[factoryd] ${m}`));
   const root = repoRoot();
@@ -126,7 +114,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   // After the sign-in's refusals, before secrets.json is touched. The tokens the daemon writes itself, encrypted at rest
   // from now on when factory.yml names a key (ORC-398).
   requireSecretsKeyWhenExposed(instance, yml);
-  checkSmeeRelay(instance, log);
+  for (const line of relayWarnings(instance)) log(line);
   const secretsKey = yml?.secretsKey;
   if (secretsKey && sealSecretsAtRest(o.home, secretsKey)) log('secrets.json: encrypted at rest with secrets_key');
   // Before anything opens: no agent on the host but by choice (ORC-349). --fake-runner launches none.

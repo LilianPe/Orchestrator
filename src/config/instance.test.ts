@@ -11,6 +11,7 @@ import {
   loadInstance,
   loadSecrets,
   factoryHome,
+  relayWarnings,
   saveInstance,
   saveLinearTokens,
   saveSecrets,
@@ -73,6 +74,29 @@ describe('instance config', () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-home-'));
     saveInstance(home, { port: 4100, host: 'h', relay: { kind: 'none' }, projects: [], limits: {} });
     expect(() => saveInstance(home, { port: -1 } as never)).toThrow(/port/);
+  });
+});
+
+// ORC-444, ORC-446: Smee is the workstation's relay, in the development mode `factory init --dev` writes.
+describe('the Smee relay outside the development mode', () => {
+  const smee = { kind: 'smee' as const, url: 'https://smee.io/abc' };
+
+  it('says nothing without a relay, nor in the development mode', () => {
+    expect(relayWarnings({ relay: { kind: 'none' } })).toEqual([]);
+    expect(relayWarnings({ relay: { kind: 'none' }, dev: false, publicUrl: 'https://f.example.com' })).toEqual([]);
+    expect(relayWarnings({ relay: smee, dev: true })).toEqual([]);
+  });
+
+  it('warns of a config written before the marker, naming factory init --dev', () => {
+    expect(relayWarnings({ relay: smee })).toEqual([expect.stringMatching(/^Warning: relay: \{ kind: smee \}.*dev: true.*factory init --dev/)]);
+  });
+
+  it('refuses dev: false, naming publicUrl and factory init --dev', () => {
+    expect(() => relayWarnings({ relay: smee, dev: false })).toThrow(/relay: \{ kind: smee \}.*dev: false.*publicUrl.*factory init --dev/);
+  });
+
+  it('refuses a publicUrl beside the relay in the development mode, naming relay: { kind: none }', () => {
+    expect(() => relayWarnings({ relay: smee, dev: true, publicUrl: 'https://f.example.com' })).toThrow(/publicUrl: https:\/\/f\.example\.com.*relay: \{ kind: none \}/);
   });
 });
 
