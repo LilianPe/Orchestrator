@@ -95,10 +95,8 @@ interface EngineCgroups {
 export async function checkHost(env: NodeJS.ProcessEnv, run: Exec = execCmd): Promise<HostReport> {
   const sandbox = sandboxConfig(env);
   if (!sandbox) return { verdict: 'refused', reasons: ['no container engine (FACTORY_CONTAINER_CLI is not set): nothing limits the sandbox'] };
-  // What the start refuses, with its message (ORC-449), and a limit's refusal, which `sandboxConfig` drops behind another one (ORC-455).
-  const limits = sandboxLimits(env);
-  const refused = 'refusal' in sandbox ? [sandbox.refusal] : [];
-  if ('refused' in limits && !refused.includes(limits.refused)) refused.push(limits.refused);
+  // What the start refuses of this environment, each with its message (ORC-449, ORC-455): another CLI, unasked; the others, said beside the engine's answer.
+  const refused = 'refusals' in sandbox ? sandbox.refusals : [];
   const { cli } = sandbox;
   if (!cli) return { verdict: 'refused', reasons: refused };
   let cgroups: EngineCgroups;
@@ -113,6 +111,7 @@ export async function checkHost(env: NodeJS.ProcessEnv, run: Exec = execCmd): Pr
   const linger = 'sudo loginctl enable-linger <user>, docs/tests.md';
   const reasons = [...refused];
   // Only the limits set (ORC-451): one at `none` is the way out of a host without its controller; a refused one leaves every controller required.
+  const limits = sandboxLimits(env);
   const required = Object.entries(LIMIT_CONTROLLERS)
     .filter(([limit]) => 'refused' in limits || limits[limit as keyof SandboxLimits] !== undefined)
     .map(([, controller]) => controller);

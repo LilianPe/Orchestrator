@@ -1178,7 +1178,7 @@ describe('the host: the engine on cgroup v2, able to set the limits (ORC-208, cr
     } finally {
       vi.restoreAllMocks();
     }
-    const otherCli = await checkHost({ FACTORY_CONTAINER_CLI: 'lxc', FACTORY_SANDBOX_CPUS: 'lots' }, engine(PODMAN_INFO).exec);
+    const otherCli = await checkHost({ FACTORY_CONTAINER_CLI: 'lxc', ...RUNNER, FACTORY_SANDBOX_CPUS: 'lots' }, engine(PODMAN_INFO).exec);
     expect(otherCli.reasons).toEqual([expect.stringContaining('docker or podman expected'), expect.stringMatching(/^FACTORY_SANDBOX_CPUS=lots: /)]);
     // The limit is the start's own refusal: said once.
     const malformed = await asked({ FACTORY_SANDBOX_CPUS: 'lots' });
