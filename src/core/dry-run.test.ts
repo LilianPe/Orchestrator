@@ -285,6 +285,9 @@ describe('runDryRun (ORC-408)', () => {
     it.each([
       ['a variable the repository does not declare', 'Error: STRIPE_KEY is not set\n', 'variable'],
       ['a service of its own refusing', 'Error: connect ECONNREFUSED 127.0.0.1:5432\n', 'service'],
+      ['a lockfile out of sync', 'npm error `npm ci` can only install packages when your package.json and package-lock.json or npm-shrinkwrap.json are in sync.\n', 'dependency'],
+      ['a version too recent', 'ERR_PNPM_NO_MATURE_MATCHING_VERSION  Version 4.1.0 of vite does not meet the minimumReleaseAge constraint\n', 'dependency'],
+      ['a host the egress proxy refuses a CONNECT to', 'curl: (56) CONNECT tunnel failed, response 403\n', 'dependency'],
     ])('failing on %s stays red as such: its own cause, whatever the secrets', async (_, stderr, kind) => {
       const run = await runDryRun(failing(stderr).req);
       expect(run).toMatchObject({ ok: false, breaks: [expect.objectContaining({ kind, step: 'setup' })] });

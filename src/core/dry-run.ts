@@ -135,9 +135,13 @@ const DEPENDENCY = `a dependency is missing, or younger than the ${RELEASE_AGE_D
  * (`zod`, `@acme/ui/x`: npm's names, lower case) or by a path into `node_modules`; a path starting with `.` or `/` elsewhere, or an
  * alias (`@/lib/db`, `~/x`), is the repository's own. A bare path resolved through `baseUrl` (`src/x`) reads as a package name.
  */
+/** A version younger than the setup allows: what its registry holds, a token or not. */
+const TOO_RECENT = /ERR_PNPM_NO_MATURE_MATCHING_VERSION|minimumReleaseAge/;
+/** A lockfile out of sync with its manifest: the repository's files, read before any registry. */
+const LOCKFILE_OUT_OF_SYNC = /can only install packages when your package\.json and package-lock\.json|ERR_PNPM_OUTDATED_LOCKFILE/;
 const DEPENDENCY_LINES = [
   /No matching version found for \S+/,
-  /ERR_PNPM_NO_MATURE_MATCHING_VERSION|minimumReleaseAge/,
+  TOO_RECENT,
   /Because there (?:is|are) no versions? of \S+|was not found in the package registry/,
   /No matching distribution found for \S+|Could not find a version that satisfies the requirement/,
   /Couldn't find any versions for|Couldn't find package/,
@@ -147,7 +151,8 @@ const DEPENDENCY_LINES = [
 ];
 /** In the setup only: what an installer prints; in a test's output, a 404 is the application's. */
 const INSTALL_LINES = [
-  /can only install packages when your package\.json and package-lock\.json|ERR_PNPM_OUTDATED_LOCKFILE|ERR_PNPM_FETCH_404/,
+  LOCKFILE_OUT_OF_SYNC,
+  /ERR_PNPM_FETCH_404/,
   /\b404\b.*Not Found|\bE404\b/,
   /\b(?:ETARGET|notarget|ERESOLVE)\b/,
 ];
@@ -155,7 +160,13 @@ const INSTALL_LINES = [
  * The egress proxy's refusal of a host it does not allow: the repository needs a registry the factory does not let it reach. A
  * 403 to a CONNECT is the proxy's, as curl (`CONNECT tunnel failed, response 403`) and git (`… 403 from proxy after CONNECT`) say it.
  */
-const REFUSED_LINES = [/egress proxy:|\b403\b.*Forbidden|(?=.*\bCONNECT\b).*\b403\b/];
+const PROXY_REFUSED = /egress proxy:|(?=.*\bCONNECT\b).*\b403\b/;
+const REFUSED_LINES = [PROXY_REFUSED, /\b403\b.*Forbidden/];
+/**
+ * What a setup breaks on whatever its secrets (ORC-453): a version too recent, a lockfile out of sync, a host the egress proxy
+ * refuses. A registry's own 403 is not one of them: a private registry says it to a client without its token.
+ */
+const SECRET_FREE_LINES = [TOO_RECENT, LOCKFILE_OUT_OF_SYNC, PROXY_REFUSED];
 /**
  * Each with the variable's names as its first group, upper case: a lower-case word is not one; the first, a list of them
  * (`Missing environment variables: API_URL, STRIPE_KEY`). Where nothing says it is a variable, its name must hold a `_`:
@@ -410,8 +421,9 @@ export async function runDryRun(req: DryRunRequest): Promise<DryRun> {
       // service of the repository's own is its own, past an installer's retry warning (pip's `Retrying … ProxyError`).
       const down = broke.kind === 'failure' || broke.kind === 'dependency' ? unreachable(err.output) : undefined;
       if (down) throw new Error(`${err.command}: a registry or the egress proxy did not answer, no dry run recorded: ${down}`, { cause: err });
-      // Its secrets withheld (ORC-453): what the setup broke on, but a variable or a service of its own, may be their absence.
-      const own = broke.kind === 'variable' || broke.kind === 'service';
+      // Its secrets withheld (ORC-453): what the setup broke on may be their absence, but a variable or a service of its own, or
+      // a dependency no token changes.
+      const own = broke.kind === 'variable' || broke.kind === 'service' || (broke.kind === 'dependency' && firstLine(linesOf(err.output), SECRET_FREE_LINES) !== undefined);
       if (config.setupSecrets.length && !own) return dryRun([], setup, [], unverifiable(broke, config.setupSecrets));
       return dryRun([broke], setup, []);
     }

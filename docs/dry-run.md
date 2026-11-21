@@ -55,7 +55,7 @@ command, an excerpt of its output, and a detail line, classified as:
 | `variable` | a variable the code asks for and does not get: one `.factory/config.yml` does not declare under `env`, or one it declares that `factory.yml` gives no value (no entry for the repository there, or none for that name), said apart. Each name of the line is read; a secret declared under `setup_secrets` is never one of them, so a line that names only secrets is no variable's cause. Without the word *variable* in the line, only a name with a `_` counts: `URL is not defined` is a global | `Missing environment variable: STRIPE_KEY` |
 | `flaky` | a test that failed, then passed on its rerun. A test on the repository's known flaky list does not count | `src/a.test.ts > races failed, then passed on its rerun` |
 | `failure` | anything else: a `.factory/config.yml` refused, a `setup` command over its cap with no breakdown in its output, a test that fails again | its first error line |
-| `secret` | a `setup` that fails when `.factory/config.yml` declares `setup_secrets`, on anything but a `variable` or a `service`: its first error line, after the secrets it lacks. Kept apart, as the dry run's `unverified`, never among its breaks | `failed without its secrets (NPM_TOKEN), which a dry run's setup does not get: npm error code E404` |
+| `secret` | a `setup` that fails when `.factory/config.yml` declares `setup_secrets`, on anything but a `variable`, a `service`, or a `dependency` no token changes (a version too recent, a lockfile out of sync, a host the egress proxy refuses): its first error line, after the secrets it lacks. Kept apart, as the dry run's `unverified`, never among its breaks | `failed without its secrets (NPM_TOKEN), which a dry run's setup does not get: npm error code E404` |
 
 The classification reads text: what a tool prints in another form is a `failure`, with its first error line. A build or test
 command over its cap is classified by what it printed, as any other. A command that failed on its flaky tests alone has only
@@ -80,7 +80,8 @@ token. The dry run cannot tell that apart from the repository's own state, so it
 - `factory dry-run` prints it `unverifiable without its secrets`, with the break, and exits 0.
 
 What the setup's failure names of the repository's own stays red: a variable it does not get (`variable`), a service of its own
-refusing (`service`). A registry or the egress proxy not answering still rejects, as for any setup. The build and the tests do
+refusing (`service`), a dependency no token changes (a version younger than the setup allows, a lockfile out of sync with its
+manifest, a host the egress proxy refuses: `dependency`). A registry or the egress proxy not answering still rejects, as for any setup. The build and the tests do
 not run after a failed setup: an unverifiable dry run says nothing of them. It holds as a green one does, so while the setup
 keeps failing without its secrets and its inputs do not change, no dry run runs the repository's build and tests: a test broken
 on the default branch is not seen by the gate, only by each ticket's `verify`.
