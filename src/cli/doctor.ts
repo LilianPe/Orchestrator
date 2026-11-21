@@ -19,7 +19,7 @@ import { activeClaudeAccount, claudeAccountReader, stepSettings } from '../confi
 import { startRefusals } from '../config/start-refusals.js';
 import { cliLinearTracker } from './linear.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
-import { browserImage, sandboxConfig, visualProofLine } from '../app/sandbox-wiring.js';
+import { browserImage, sandboxConfig, sandboxLimits, visualProofLine } from '../app/sandbox-wiring.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning, testCommandWarnings, type RepoConfig } from '../config/repo-config.js';
 import { branchNameOfType, branchSpaces, branchTypes, DEFAULT_BRANCH_NAMING, LEGACY_BRANCHES, legacyBranchName, type BranchNaming } from '../core/naming.js';
 
@@ -113,11 +113,10 @@ export async function checkHost(env: NodeJS.ProcessEnv, run: Exec = execCmd): Pr
   const { cgroupV2, controllers, rootless, manager } = cgroups;
   const linger = 'sudo loginctl enable-linger <user>, docs/tests.md';
   const reasons = [...refused];
-  // Only the limits set (ORC-451): one at `none` is the way out of a host without its controller. A limit the start refuses
-  // leaves them unread, every controller still required.
-  const required = 'limits' in sandbox
-    ? LIMITS.filter((limit) => sandbox.limits[limit] !== undefined).map((limit) => LIMIT_CONTROLLERS[limit])
-    : REQUIRED_CONTROLLERS;
+  // Only the limits set (ORC-451): one at `none` is the way out of a host without its controller. A malformed one, refused
+  // above, leaves them unread: every controller stays required.
+  const limits = sandboxLimits(env);
+  const required = 'refused' in limits ? REQUIRED_CONTROLLERS : LIMITS.filter((limit) => limits[limit] !== undefined).map((limit) => LIMIT_CONTROLLERS[limit]);
   const missing = required.filter((controller) => !controllers.includes(controller));
   // On cgroups v1, no delegation makes the limits work: the version alone is said.
   if (!cgroupV2) reasons.push(`no cgroup v2: ${cli} runs on cgroups v1 or the hybrid layout, the sandbox cannot limit processes, memory and CPUs`);

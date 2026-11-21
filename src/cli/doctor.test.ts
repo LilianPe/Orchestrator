@@ -1140,6 +1140,9 @@ describe('the host: the engine on cgroup v2, able to set the limits (ORC-208, cr
     const malformed = await asked({ FACTORY_SANDBOX_CPUS: 'lots' }, ['memory', 'pids']);
     expect(malformed.reasons).toHaveLength(2);
     expect(malformed.reasons[1]).toContain('cannot limit through the cpu controller(s)');
+    // Another refusal of the start keeps the limits read: no controller of a limit at none.
+    const noImage = await checkHost({ FACTORY_CONTAINER_CLI: 'podman', FACTORY_SANDBOX_CPUS: 'none' }, engine({ host: { ...PODMAN_INFO.host, cgroupControllers: ['memory', 'pids'] } }).exec);
+    expect(noImage.reasons).toEqual(['FACTORY_RUNNER_IMAGE is required with FACTORY_CONTAINER_CLI.']);
   });
 
   it('refuses a rootless Podman on cgroupfs, which ignores the limits, even with every controller listed', async () => {
