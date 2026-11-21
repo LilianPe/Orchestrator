@@ -4,8 +4,9 @@ Before the factory takes tickets on a repository, it checks that the repository'
 its build and test commands, on its default branch, in the sandbox, as `verify` would run them for a ticket. This is the dry run.
 It records what breaks, classified, and a fingerprint of what it ran with.
 
-This page covers the run and its record (part 2 of ORC-208). Refusing tickets while the last dry run is red, and running it
-again when its fingerprint changes, come with part 3 (ORC-409): until then nothing triggers a dry run by itself.
+A delegated ticket waits for it: while the repository's last dry run is red, its tickets are refused, and the dry run runs again
+when what it ran with changes (ORC-409, [below](#the-gate-of-a-delegated-ticket)). `factory dry-run <project>` runs it by hand
+([CLI](cli.md#factory-dry-run-project-orc-409)).
 
 ## What runs
 
@@ -59,11 +60,38 @@ Each dry run keeps the inputs it ran with:
 - `setup`: a SHA-256 of the setup commands it ran;
 - `image`: the runner image as configured (`FACTORY_RUNNER_IMAGE`). A tag that moves to another image without changing its name
   is not seen: pin the image by its digest (`…@sha256:…`);
-- `lockfiles`: each lockfile at the commit's root (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `uv.lock`, `poetry.lock`,
-  `Cargo.lock`, `go.sum` and the others in `LOCKFILES`), by its git blob id;
-- `hash`: a SHA-256 of the three, which part 3 compares to decide whether to run it again.
+- `lockfiles`: each lockfile at the commit's root, by its git blob id: `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`,
+  `bun.lock`, `deno.lock`, `uv.lock`, `poetry.lock`, `pylock.toml` and `pylock.<name>.toml`, `Cargo.lock`, `go.sum` and the others
+  of `isLockfile` (`src/checks/diff-size.ts`): one list with the files `max_diff` does not count;
+- `config`: the blob of `.factory/config.yml`, `null` without one (ORC-409): a dry run red on its `env`, its `services` or its
+  `commands` runs again once the file is fixed;
+- `hash`: a SHA-256 of them all, which the gate compares to decide whether to run it again.
 
 `dryRunFingerprint` computes it from these inputs alone, without running anything.
+
+## The gate of a delegated ticket
+
+Before a ticket's first run (its `intake`, or the job that picks it up on a chain without one), the launch reads the project's
+last dry run on the default branch (ORC-409). It reads, on the factory's repository just fetched, the default branch's head and the
+fingerprint a dry run would have now: the `setup` of `.factory/config.yml` or the workflow's, the runner image, the lockfiles and
+the config's blob.
+
+- **It holds** when its fingerprint is the same, and, when it is red, when it ran on the same commit: a fix of the code on the
+  default branch lifts a red dry run once the branch has moved. A green one holds over a branch that moved with the same inputs.
+- **Otherwise it runs now**, and the launch waits for it: a project's first delegation runs its first dry run, so a first ticket
+  never waits for a dry run nobody started. Two tickets delegated together wait for the same one; red on another commit than the
+  one the second ticket's launch read (a fix pushed while it ran), the second runs a new one.
+- **Green**, the ticket goes on. **Red**, it is refused before any run (unless another launch took the ticket while it ran): blocked as the repository's to fix (the Flow's `repo_config`
+  cause), with a comment that says what breaks, each break with its step, its command and the line that names its cause, and how
+  it runs again. A reply resumes the ticket, which goes through the gate again.
+- **It cannot run** (the engine, the forge or a registry not answering): the launch fails, as any launch error, and nothing is
+  recorded.
+
+No gate without sandboxes, where no dry run can run (the host checks of `FACTORY_ALLOW_HOST_VERIFY`), nor for a replayed ticket
+([ORC-231](ghost-replay.md)). A ticket already under way is never stopped by a red dry run: the gate is at its first run only.
+
+What the fingerprint does not see (a variable's value in `factory.yml`, a registry that refused, a flaky test now on the known
+list) needs `factory dry-run <project>` once fixed; the refused tickets then start on a reply.
 
 ## Where it is kept
 

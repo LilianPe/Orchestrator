@@ -35,7 +35,7 @@ import { saveAgentOutput, type AgentOutput } from '../core/agent-output.js';
 import { claudeAccountReader, disabledControls, readCapsOf, stepSettings, ticketCapOf, type FactoryYml } from '../config/factory-yml.js';
 import { loadSealedFactoryYml, SECRETS_KEY_REQUIRED } from '../config/server-secrets.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../config/repo-config.js';
-import { makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint } from './repo-variables.js';
+import { makeDryRunFiles, makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint } from './repo-variables.js';
 import { daemonSecretValues, effectiveInstance, homePaths, isLoopbackHost, linearSettings, saveLinearTokens, sealSecretsAtRest, validatorWarnings, type InstanceConfig } from '../config/instance.js';
 import { githubOAuthClient, githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
@@ -348,6 +348,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
             registries: registriesViaEgress(egress),
             // Required with sandboxes (`makeSandboxes`): the dry run's fingerprint (ORC-408).
             runnerImage: env['FACTORY_RUNNER_IMAGE']!,
+            // A delegated ticket waits for the repository's dry run, run again when its fingerprint changes (ORC-409).
+            dryRunFiles: makeDryRunFiles({ log }),
           }
         : {}),
       // In a sandbox, no host path: the agent reaches the factory through its MCP alone (ORC-192).
@@ -448,6 +450,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       githubLogin,
       configProblems: problems,
       heldRows: (ticketId) => daemon.heldRows(ticketId),
+      // `factory dry-run`: a new one, after any under way, which reads what changed meanwhile (a known flaky test, a variable).
+      dryRun: (projectId) => daemon.dryRun(projectId, { fresh: true }),
       secrets: () => transcriptSecrets(env, daemonSecrets()),
       oauth: linearSettings(o.home, yml)
         ? {

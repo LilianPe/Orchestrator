@@ -1,5 +1,6 @@
-import { request } from 'node:http';
+import { request, type RequestOptions } from 'node:http';
 import { PRODUCT_NAME } from '../product.js';
+import type { DryRun } from '../core/dry-run.js';
 import type { RunRecord } from '../store/types.js';
 import { holds } from '../core/routing.js';
 import type { TicketState } from '../core/types.js';
@@ -23,10 +24,14 @@ export interface ControlDeps {
  */
 const NOT_REACHED = new Set(['ENOENT', 'ECONNREFUSED', 'EACCES', 'EPERM', 'ENOTSOCK', 'EINVAL', 'ENAMETOOLONG']);
 
-/** A request to the daemon through its Unix socket (the CLI's commands carry no body); rejected when nothing listens there. */
-function viaSocket(socket: string, path: string, init: RequestInit): Promise<Response> {
+/**
+ * A request of the CLI's (its commands carry no body) with node's own client, which never gives up on a slow answer: through the
+ * daemon's Unix socket, rejected when nothing listens there; or over HTTP, where `fetch` gives up after 5 minutes, before a dry run
+ * ends (ORC-409).
+ */
+function nodeRequest(to: RequestOptions, init: RequestInit): Promise<Response> {
   return new Promise((resolve, reject) => {
-    const req = request({ socketPath: socket, path, method: init.method ?? 'GET', headers: { host: 'localhost' } }, (res) => {
+    const req = request({ ...to, method: init.method ?? 'GET' }, (res) => {
       const chunks: Buffer[] = [];
       res.on('data', (c: Buffer) => chunks.push(c));
       res.on('end', () => resolve(new Response(Buffer.concat(chunks), { status: res.statusCode ?? 500, headers: { 'content-type': res.headers['content-type'] ?? 'text/plain' } })));
@@ -36,6 +41,14 @@ function viaSocket(socket: string, path: string, init: RequestInit): Promise<Res
     req.end();
   });
 }
+
+const viaSocket = (socketPath: string, path: string, init: RequestInit) => nodeRequest({ socketPath, path, headers: { host: 'localhost' } }, init);
+
+/** `fetch`'s stand-in for a slow answer over HTTP. */
+const slowFetch = (url: string, init: RequestInit = {}) => {
+  const u = new URL(url);
+  return nodeRequest({ host: u.hostname, port: u.port, path: `${u.pathname}${u.search}` }, init);
+};
 
 /** What `/api/state` answers and these commands read. */
 interface State {
@@ -72,7 +85,7 @@ function formatStatus(s: State, now: number): string[] {
  * reason told: a daemon that does not answer, or one that asks over HTTP for a GitHub sign-in (ORC-399), which the CLI
  * cannot give: it sends no credential.
  */
-async function ask(d: ControlDeps, path: string, init: RequestInit = {}): Promise<Response | undefined> {
+async function ask(d: ControlDeps, path: string, init: RequestInit = {}, o: { slow?: boolean } = {}): Promise<Response | undefined> {
   if (d.socket) {
     try {
       return await viaSocket(d.socket, path, init);
@@ -87,7 +100,9 @@ async function ask(d: ControlDeps, path: string, init: RequestInit = {}): Promis
   }
   let res: Response;
   try {
-    res = await (d.fetch ?? fetch)(`${d.api}${path}`, init);
+    const url = `${d.api}${path}`;
+    const send = d.fetch ?? (o.slow && url.startsWith('http:') ? slowFetch : fetch);
+    res = await send(url, init);
   } catch (err) {
     d.out(`${PRODUCT_NAME} does not answer on ${d.api} (${(err as Error).message}): run \`factory up\`, or check the port and FACTORY_HOME.`);
     return undefined;
@@ -143,4 +158,28 @@ export async function runStopCommand(d: ControlDeps, ticketId: string): Promise<
   }
   d.out(`Stop requested for ${ticketId}.`);
   return 0;
+}
+
+/**
+ * `factory dry-run <project>` (ORC-409): the daemon runs the dry run of the project's default branch and records it, as a delegated
+ * ticket's launch does, and the CLI prints it once recorded: green, or red with each break, its step, command, cause and an excerpt
+ * of what the command printed. 0 when green.
+ */
+export async function runDryRunCommand(d: ControlDeps, projectId: string): Promise<number> {
+  d.out(`Dry run of ${projectId} under way: its setup and commands in the sandbox, as verify runs them (minutes)…`);
+  const res = await ask(d, `/api/projects/${encodeURIComponent(projectId)}/dry-run`, { method: 'POST' }, { slow: true });
+  if (!res) return 1;
+  if (!res.ok) {
+    const { error } = (await res.json().catch(() => ({}))) as { error?: string };
+    d.out(`No dry run recorded (${res.status}): ${error ?? 'the daemon refuses it'}.`);
+    return 1;
+  }
+  const run = (await res.json()) as DryRun;
+  d.out(`Dry run of ${projectId} on ${run.sha.slice(0, 12)}: ${run.ok ? 'green' : 'red'}${run.commands.length ? ` (${run.commands.join(' · ')})` : ''}.`);
+  for (const b of run.breaks) {
+    d.out(`  ${b.kind}, ${b.step} \`${b.command}\`: ${b.detail}`);
+    for (const line of b.output.split('\n').filter((l) => l.trim())) d.out(`    | ${line}`);
+  }
+  if (!run.ok) d.out(`The tickets of ${projectId} are refused while its dry run is red: fix what breaks, then run this again. A ticket it refused starts on a reply once it is green.`);
+  return run.ok ? 0 : 1;
 }

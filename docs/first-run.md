@@ -199,16 +199,9 @@ then each GitHub Actions workflow with its verdict (or `No GitHub Actions workfl
 | `Default branch main: refused — …` | no ruleset requiring a pull request, or the App in its bypass list | item 3 |
 | `verdict: refused` under a workflow | a CI job sees a secret or a writable `GITHUB_TOKEN` on the factory's branches (`feat/*`, `fix/*`) | protect that job with an environment with required reviewers, or declare `permissions:` read only ([`github.md`](github.md#rule)) |
 
-### The dry run (not on main yet)
+### The dry run
 
-**ORC-408 / ORC-409.** The dry run runs the repository's `setup` and commands on the default branch in a sandbox and records what breaks. It is being written (ORC-408, PR open, not merged), and nothing on main triggers it yet: ORC-409 owns its trigger, and this guide will name its command once it is in the CLI. Until then, stand in for it by hand, in a fresh clone of the default branch, inside the runner image (so the same tools as the agents):
-
-```bash
-git clone <pilot url> /tmp/pilot-dry && cd /tmp/pilot-dry
-podman run --rm -v "$PWD:/w:Z" -w /w "$FACTORY_RUNNER_IMAGE" bash -c '<setup of .factory/config.yml> && <commands.test of .factory/config.yml>'
-```
-
-Expected: the setup installs and the tests pass on main. A red main here would make the factory's red check and `verify` meaningless: fix main first.
+The dry run (ORC-408, ORC-409) runs the repository's `setup`, then its build and test commands, on the default branch in the sandbox, as `verify` runs them for a ticket, and records what breaks. It needs the daemon and its sandboxes: run it in step 4, once `factory up` is running.
 
 ## 4. Start the daemon: `factory up`
 
@@ -240,6 +233,14 @@ The GitHub webhooks line is expected locally. What must not be there:
 Then open `http://localhost:4100`, click **Connect Linear** and authorize the application: « Linear is connected. You can close this tab. ». The factory creates the missing statuses of the team (Todo, In Progress, Human Review, AI Review, Done) and the `agent:stop` and `Bloqué` labels.
 
 In another terminal, with the same `FACTORY_HOME`: `factory status` (`Linear: connected · queue: active …`) and `factory plan`, which lists the tickets delegated to the agent and whether each would be picked up, without starting anything (`` Linear not connected: run `factory up`, then connect Linear. `` before the connection).
+
+Then the dry run of the pilot, with the project's `id` in `config.yaml` (`pilot` in step 2), in that same terminal:
+
+```bash
+factory dry-run <project>
+```
+
+It says `Dry run of <project> under way: …`, waits as long as the setup and the tests take, then prints `Dry run of <project> on <commit>: green (<its commands>).` and exits `0`; red, it lists what breaks, each break with its step, its command and its cause, and exits `1`. Red, fix main first: the project's tickets are refused while its dry run is red, and a red main would make the red check and `verify` meaningless. `No dry run recorded (409): …` means no dry run could run: no sandboxes (`FACTORY_CONTAINER_CLI`, `FACTORY_RUNNER_IMAGE`), the container engine, the forge or a registry not answering. Without it, the first delegation runs the project's first dry run itself and waits for it before `intake` ([`dry-run.md`](dry-run.md#the-gate-of-a-delegated-ticket)); running it here shows a red main before a ticket is refused for it.
 
 ## 5. Delegate the ticket
 
