@@ -1,3 +1,5 @@
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { Pool } from 'pg';
 import { migratePgStore } from './pg/migrate.js';
 import { listenForPoolErrors, PgStore } from './pg/pg-store.js';
@@ -40,6 +42,8 @@ export async function openStore(o: OpenStoreOptions): Promise<OpenedStore> {
         `${DATABASE_URL_ENV} is not set: in production the factory does not start on an empty SQLite file. Set it to the Postgres URL, or set ${STORE_ENV}=sqlite to choose SQLite.`,
       );
     }
+    // Its directory too: a first `factory init` opens it before anything else made FACTORY_HOME.
+    if (o.sqlitePath !== ':memory:') mkdirSync(dirname(o.sqlitePath), { recursive: true });
     return { store: new SqliteStore(o.sqlitePath), kind: 'sqlite' };
   }
   const onError = (err: Error) => (o.log ?? console.error)(`postgres : ${err.message}`);

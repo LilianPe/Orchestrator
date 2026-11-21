@@ -122,7 +122,7 @@ function cardLine(c: PrintedCard): string {
 
 /** The maturity report of the repository, stored as cards when it can be: a store that fails leaves init to finish, and says so. */
 async function printMaturity(d: InitDeps, projectId: string, report: MaturityReport, dashboard: string): Promise<void> {
-  let cards: PrintedCard[] = report();
+  let cards: PrintedCard[] | undefined;
   let failure: string | undefined;
   if (d.storeCards) {
     try {
@@ -131,6 +131,8 @@ async function printMaturity(d: InitDeps, projectId: string, report: MaturityRep
       failure = err instanceof Error ? err.message : String(err);
     }
   }
+  // Read once: the report walks the repository.
+  cards ??= report();
   d.io.print(['', `${MATURITY_HEADER}${dashboard}/#maturity`, ...cards.map(cardLine)].join('\n'));
   if (failure !== undefined) d.io.print(`Cards not stored (${failure}): run factory init again once the database is reachable.`);
 }

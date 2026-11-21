@@ -10,7 +10,7 @@ import { loadInstance, loadSecrets, saveInstance, saveSecrets, type InstanceConf
 import { MISSING_TEST_COMMAND, parseRepoConfig, testCommandWarnings } from '../config/repo-config.js';
 import { slugify } from '../core/naming.js';
 import { SqliteStore } from '../store/sqlite-store.js';
-import { GITHUB_APP_PERMISSIONS, instanceCards, MATURITY_HEADER, NO_PUBLIC_URL, PROPOSAL_HEADER, PYTEST_BESIDE_TEST, runInit, storeReport, type InitIO } from './init.js';
+import { GITHUB_APP_PERMISSIONS, instanceCards, MATURITY_HEADER, NO_PUBLIC_URL, PROPOSAL_HEADER, PYTEST_BESIDE_TEST, runInit, storeReport, type InitDeps, type InitIO } from './init.js';
 import type { MaturityReport } from './maturity.js';
 import { runValidateCommand } from './validate.js';
 
@@ -224,14 +224,22 @@ describe('factory init: the command that starts the application, in the same pro
 });
 
 describe('factory init: the maturity report, one card per point to approve (ORC-410)', () => {
-  async function initCards(files: Record<string, string>, { store = new SqliteStore(':memory:'), now = 1_700_000_000_000, repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-')) } = {}) {
-    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+  /** One init over a repository of `files`; its cards go through `storeCards`, by default `storeReport` into `store`. */
+  async function initCards(
+    files: Record<string, string>,
+    {
+      store = new SqliteStore(':memory:'),
+      now = 1_700_000_000_000,
+      repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-')),
+      home = mkdtempSync(join(tmpdir(), 'factory-init-home-')),
+      storeCards = (projectId: string, report: MaturityReport) => storeReport(store, projectId, report, now),
+    }: { store?: SqliteStore; now?: number; repo?: string; home?: string; storeCards?: InitDeps['storeCards'] } = {},
+  ) {
     for (const [path, content] of Object.entries(files)) {
       mkdirSync(dirname(join(repo, path)), { recursive: true });
       writeFileSync(join(repo, path), content);
     }
     const io = scriptedIO(['REL', 'cid', 'csecret', 'whsecret']);
-    const storeCards = (projectId: string, report: MaturityReport) => storeReport(store, projectId, report, now);
     await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec: gitTop(repo), storeCards });
     return { store, repo, projectId: loadInstance(home).projects[0]!.id, out: io.printed.join('\n') };
   }
@@ -275,11 +283,7 @@ describe('factory init: the maturity report, one card per point to approve (ORC-
     vi.stubEnv('NODE_ENV', 'test');
     try {
       const home = join(mkdtempSync(join(tmpdir(), 'factory-init-')), 'home');
-      const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
-      for (const [path, content] of Object.entries(NPM)) writeFileSync(join(repo, path), content);
-      const io = scriptedIO(['REL']);
-      await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec: gitTop(repo), storeCards: instanceCards(home) });
-      const out = io.printed.join('\n');
+      const { out } = await initCards(NPM, { home, storeCards: instanceCards(home) });
       expect(out).not.toContain('Cards not stored');
       const store = new SqliteStore(join(home, 'factory.db'));
       expect((await store.maturityCards()).map((c) => c.key)).toContain('main');
@@ -290,12 +294,7 @@ describe('factory init: the maturity report, one card per point to approve (ORC-
   });
 
   it('a store that cannot be written does not fail init: the cards are printed, and said not stored', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
-    const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
-    for (const [path, content] of Object.entries(NPM)) writeFileSync(join(repo, path), content);
-    const io = scriptedIO(['REL', 'cid', 'csecret', 'whsecret']);
-    await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec: gitTop(repo), storeCards: async () => Promise.reject(new Error('connection refused')) });
-    const out = io.printed.join('\n');
+    const { out } = await initCards(NPM, { storeCards: async () => Promise.reject(new Error('connection refused')) });
     expect(out).toContain('  [to approve] Stack: Node (npm)');
     expect(out).toContain('Cards not stored (connection refused): run factory init again once the database is reachable.');
     expect(out).toContain('Configuration written.');

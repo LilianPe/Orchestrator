@@ -1,8 +1,8 @@
 import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs';
 import { join } from 'node:path';
-import { isRecord } from '../adapters/graphql-pages.js';
-import { pyprojectDependencies } from '../checks/deps.js';
-import type { DryRun } from '../core/dry-run.js';
+import { packageJsonDependencies, pyprojectDependencies } from '../checks/deps.js';
+import { dryRunBroke, type DryRun } from '../core/dry-run.js';
+import { utc } from '../core/prompt.js';
 import type { MaturityPoint } from '../store/types.js';
 
 /** What init detected for the repository's `.factory/config.yml`: its install, its checks by name, what starts the application. */
@@ -45,29 +45,16 @@ const MAIN_UNCHECKED = 'not checked yet: the dry run (ORC-408) runs setup, build
  */
 function main(run: DryRun | undefined): string {
   if (!run) return MAIN_UNCHECKED;
-  const ended = `${new Date(run.endedAt).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
-  const of = `the dry run of ${run.sha.slice(0, 12)} on ${ended}`;
+  const of = `the dry run of ${run.sha.slice(0, 12)} on ${utc(run.endedAt)}`;
   if (run.ok) return `green: ${of}${run.commands.length ? ` (${run.commands.join(' · ')})` : ''}`;
-  const broke = [...new Set(run.breaks.map((b) => `${b.kind} in \`${b.command}\``))].join(', ') || 'no break recorded';
+  const broke = dryRunBroke(run) || 'no break recorded';
   return `red: ${of}: ${broke}\nfix it on main, then factory dry-run ${run.projectId}`;
-}
-
-function readJson(file: string): Record<string, unknown> | undefined {
-  try {
-    const v: unknown = JSON.parse(readFileSync(file, 'utf8'));
-    return isRecord(v) ? v : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 /** The names of every dependency of the repository's package.json and pyproject.toml. */
 function dependencies(repo: string): Set<string> {
-  const pkg = readJson(join(repo, 'package.json'));
-  const node = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'].flatMap((k) => (pkg && isRecord(pkg[k]) ? Object.keys(pkg[k]) : []));
-  const pyproject = existsSync(join(repo, 'pyproject.toml')) ? readFileSync(join(repo, 'pyproject.toml'), 'utf8') : '';
-  const python = pyprojectDependencies(pyproject);
-  return new Set([...node, ...python]);
+  const read = (file: string) => (existsSync(join(repo, file)) ? readFileSync(join(repo, file), 'utf8') : '');
+  return new Set([...packageJsonDependencies(read('package.json')), ...pyprojectDependencies(read('pyproject.toml'))]);
 }
 
 function stack(repo: string, deps: Set<string>): string {

@@ -420,6 +420,17 @@ export function pyprojectDependencies(text: string): string[] {
   return m.deps.map((d) => d.name);
 }
 
+/** The names a package.json declares as dependencies, in every npm section (ORC-410): none when it does not parse. */
+export function packageJsonDependencies(text: string): string[] {
+  const m: Manifest = { path: 'package.json', deps: [], directives: [] };
+  try {
+    readPackageJson(m, text);
+  } catch {
+    return [];
+  }
+  return m.deps.map((d) => d.declared);
+}
+
 const READERS: Record<Exclude<ManifestKind, 'unsupported'>, (m: Manifest, text: string) => void> = {
   'package.json': readPackageJson,
   'pyproject.toml': readPyproject,

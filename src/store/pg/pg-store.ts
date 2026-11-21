@@ -127,6 +127,9 @@ const workflowId = (hash: string) => `wf:${hash}`;
  */
 const ticketLock = (ticketId: string | undefined | null) => sql`select pg_advisory_xact_lock(hashtext(${ticketId ?? '__global__'}))`;
 
+/** Serializes a project's detection of maturity cards and their approvals (ORC-410). */
+const maturityLock = (projectId: string) => sql`select pg_advisory_xact_lock(hashtext(${`maturity:${projectId}`}))`;
+
 /** The `outbox.ticket_id` of a decision row: the ticket, or `*` for an event without one. */
 const outboxTicket = (ticketId: string | undefined | null) => ticketId ?? '*';
 
@@ -1020,7 +1023,7 @@ export class PgStore implements AsyncStore {
   async putMaturityCards(projectId: string, points: readonly MaturityPoint[], at: number): Promise<void> {
     await this.db.transaction(async (tx) => {
       // Locked for the detection: two inits at once write one set, not a mix.
-      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`maturity:${projectId}`}))`);
+      await tx.execute(maturityLock(projectId));
       const before = new Map((await this.readMaturityCards(tx, projectId)).map((c) => [c.key, c]));
       await tx.execute(sql`delete from maturity_cards where project_id = ${projectId}`);
       if (!points.length) return;
@@ -1036,7 +1039,7 @@ export class PgStore implements AsyncStore {
   async approveMaturityCard(projectId: string, key: string, value: string, by: string, at: number): Promise<MaturityCard | 'changed' | undefined> {
     return this.db.transaction(async (tx) => {
       // The detection's lock: an init replacing the cards meanwhile is waited for, never approved over.
-      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`maturity:${projectId}`}))`);
+      await tx.execute(maturityLock(projectId));
       const stored = (await this.readMaturityCards(tx, projectId)).find((c) => c.key === key);
       if (!stored) return undefined;
       const card = approvedCard(stored, value, by, at);
