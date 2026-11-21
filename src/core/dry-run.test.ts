@@ -614,6 +614,7 @@ describe('classifyBreak', () => {
     expect(classifyBreak('psql: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: FATAL:  password authentication failed for user "app"', 'setup', declared).kind).toBe('failure');
     expect(classifyBreak("ERROR 2003 (HY000): Can't connect to MySQL server on 'db.acme.com' (111)", 'command', declared).kind).toBe('failure');
     expect(classifyBreak("ERROR 2003 (HY000): Can't connect to server on 'db.acme.com' (115)", 'command', declared).kind).toBe('failure');
+    expect(classifyBreak("FAIL test/api.test.ts > shows a banner when it can't connect to server localhost", 'command', declared).kind).toBe('failure');
   });
 
   it('a client refused by a host off the loopback is no service of the repository\'s', () => {

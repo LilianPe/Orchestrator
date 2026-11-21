@@ -199,13 +199,13 @@ const relayRefused = (line: string) => refusedOn(line) === RELAY_PORT;
 /**
  * On the loopback, where the services listen: a port refusing there that is not the relay's, or what a database client says
  * of a server it cannot reach there, the host on the line (libpq's `Is the server running on host "localhost"`, MySQL's
- * `Can't connect to MySQL server on '127.0.0.1'`, MariaDB's without `MySQL`): of a remote one, a breakdown of the network.
- * Its Unix socket is local whatever the line names (libpq's, Node's `connect ECONNREFUSED` or `ENOENT`, Go's `dial unix`), but only where the client
- * said it could not reach it: a server that answered on its socket (`… .s.PGSQL.5432" failed: FATAL: password authentication
- * failed`) is no service down.
+ * `Can't connect to MySQL server on '127.0.0.1'`, MariaDB's `Can't connect to server on '127.0.0.1'`): of a remote one, a
+ * breakdown of the network. Its Unix socket is local whatever the line names (libpq's, Node's `connect ECONNREFUSED` or
+ * `ENOENT`, Go's `dial unix`), but only where the client said it could not reach it: a server that answered on its socket
+ * (`… .s.PGSQL.5432" failed: FATAL: password authentication failed`) is no service down.
  */
 const LOOPBACK_HOST = new RegExp(String.raw`${LOOPBACK}\b`);
-const DB_SERVER = /could not connect to (?:server|database)|Is the server running|Can't connect to (?:MySQL )?server/i;
+const DB_SERVER = /could not connect to (?:server|database)|Is the server running|Can't connect to MySQL server|Can't connect to server on '/i;
 const DB_SOCKET = /Is the server running locally|connections on Unix domain socket "|on socket "[^"]*\.s\.PGSQL\.\d+" failed: (?:No such file or directory|Connection refused)|Can't connect to local (?:MySQL )?server through socket|connect (?:ECONNREFUSED|ENOENT) \S*\.s\.PGSQL\.\d+|dial unix \S*\.s\.PGSQL\.\d+: connect: (?:no such file or directory|connection refused)/i;
 const serviceLine = (line: string) => {
   const port = refusedOn(line);
