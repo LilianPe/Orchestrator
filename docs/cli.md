@@ -127,12 +127,12 @@ The tickets of app are refused while its dry run is red: fix what breaks, then r
 
 Exit code 0 when green, 1 when red or when no dry run could run: no sandboxes (`FACTORY_CONTAINER_CLI` and
 `FACTORY_RUNNER_IMAGE`), the container engine, the forge or a registry not answering (`No dry run recorded (409): …`). A dry run of
-the project already under way, started by a delegated ticket, is not run twice: the command prints its result.
+the project already under way, started by a delegated ticket, is waited for; then the command runs a new one, which reads what
+changed meanwhile.
 
 Run it before a project's first ticket, to see it green; and after fixing a cause outside the repository that the fingerprint does
 not see (a variable's value in `factory.yml`, a registry, a test put on the known flaky list): the delegated tickets then read the
-new result. Over HTTP (no socket, Windows), `fetch` gives up after 5 minutes without an answer: the dry run goes on in the daemon
-and is recorded all the same.
+new result. The command waits for the answer as long as the dry run lasts, through the socket or over HTTP.
 
 ### `factory replay <journal.json | directory>...` (ORC-174)
 

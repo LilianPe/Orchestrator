@@ -187,13 +187,16 @@ export abstract class DaemonChecks extends DaemonBase {
    * The dry run of a project (ORC-408), on the forge's default branch or on the commit `sha`: its `setup` and commands in the
    * sandboxes (`runDryRun`), in a place of its own under `runsDir/<id>`, then recorded, red or green. It rejects when it cannot run
    * (no sandboxes, an engine or a forge down): nothing is recorded then. On the default branch, one at a time by project: who asks
-   * while one is under way gets its result (ORC-409).
+   * while one is under way gets its result (ORC-409), or with `fresh` a new one once it ended, which reads what changed meanwhile.
    */
-  async dryRun(projectId: string, o: { sha?: string } = {}): Promise<DryRun> {
+  async dryRun(projectId: string, o: { sha?: string; fresh?: boolean } = {}): Promise<DryRun> {
     if (o.sha) return this.runDry(projectId, o.sha);
     const under = this.dryRunsUnderWay.get(projectId);
-    if (under) return under;
-    const run = this.runDry(projectId).finally(() => this.dryRunsUnderWay.delete(projectId));
+    if (under && !o.fresh) return under;
+    // After the one under way, whatever its end: never two dry runs of a project at once.
+    const run = (under ? under.catch(() => undefined) : Promise.resolve()).then(() => this.runDry(projectId)).finally(() => {
+      if (this.dryRunsUnderWay.get(projectId) === run) this.dryRunsUnderWay.delete(projectId);
+    });
     this.dryRunsUnderWay.set(projectId, run);
     return run;
   }
@@ -212,8 +215,12 @@ export abstract class DaemonChecks extends DaemonBase {
     if (!this.dryRunGates(project)) return undefined;
     const { sha, ...files } = await this.d.dryRunFiles!(project);
     const fingerprint = dryRunFingerprint({ setup: config.setup ? [config.setup] : project.workflow.workspace.setup, image: this.d.runnerImage!, ...files });
+    const now = { sha, fingerprint };
     const last = await this.d.store.lastDryRun(project.id);
-    const run = last && dryRunHolds(last, { sha, fingerprint }) ? last : await this.dryRun(project.id);
+    if (last && dryRunHolds(last, now)) return last.ok ? undefined : last;
+    let run = await this.dryRun(project.id);
+    // Red on other inputs than this launch's: one under way since before a fix of the default branch. Run anew, once.
+    if (!run.ok && !dryRunHolds(run, now)) run = await this.dryRun(project.id, { fresh: true });
     return run.ok ? undefined : run;
   }
 

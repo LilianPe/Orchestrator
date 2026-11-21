@@ -450,7 +450,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       githubLogin,
       configProblems: problems,
       heldRows: (ticketId) => daemon.heldRows(ticketId),
-      dryRun: (projectId) => daemon.dryRun(projectId),
+      // `factory dry-run`: a new one, after any under way, which reads what changed meanwhile (a known flaky test, a variable).
+      dryRun: (projectId) => daemon.dryRun(projectId, { fresh: true }),
       secrets: () => transcriptSecrets(env, daemonSecrets()),
       oauth: linearSettings(o.home, yml)
         ? {

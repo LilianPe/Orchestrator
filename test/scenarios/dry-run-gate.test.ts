@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { dryRunFingerprint, type DryRun, type DryRunBreak, type DryRunRequest, type FingerprintFiles } from '../../src/core/dry-run.js';
 import { chainHarness, delegate as delegateOnChain } from '../helpers/chain.js';
 import { createHarness } from '../helpers/harness.js';
@@ -151,6 +151,38 @@ describe('the dry run gate of a delegated ticket', () => {
     await h.orch.drained();
     expect(asked).toHaveLength(1);
     expect(h.runner.requests).toHaveLength(2);
+  });
+
+  it('a red dry run under way since before a fix of the default branch is not taken for it: the ticket delegated after runs a new one', async () => {
+    const ends: ((run: DryRun) => void)[] = [];
+    const main: Main = { sha: MAIN, files: FILES };
+    const asked: DryRunRequest[] = [];
+    const h = createHarness({
+      sandboxed: true,
+      dryRunFiles: async () => ({ sha: main.sha, ...main.files }),
+      dryRunner: (req) => {
+        asked.push(req);
+        // What the forge's default branch is when it starts.
+        const at = { ...main };
+        return new Promise((resolve) => ends.push((ok) => resolve({ ...dryRunOf(at, ok.ok), id: req.runId })));
+      },
+    });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: DESCRIPTION });
+    h.tracker.addIssue({ identifier: 'REL-2', title: 'Export PDF', description: DESCRIPTION });
+    const delegated = (id: string) => h.orch.accept({ id: `d-${id}`, type: 'ticket.delegated', at: h.clock.now(), projectId: 'p', ticketId: id, payload: { linearSessionId: `ls-${id}` } });
+    await delegated('REL-1');
+    await vi.waitFor(() => expect(asked).toHaveLength(1));
+    main.sha = MOVED;
+    await delegated('REL-2');
+    await new Promise((r) => setTimeout(r, 50));
+    expect(asked).toHaveLength(1);
+    ends[0]!(dryRunOf({ sha: MAIN, files: FILES }, false));
+    await vi.waitFor(() => expect(asked).toHaveLength(2));
+    ends[1]!(dryRunOf({ sha: MOVED, files: FILES }, true));
+    await h.orch.drained();
+    expect(await h.ticket('REL-1')).toMatchObject({ blocked: true, blockKind: 'repo_config' });
+    expect((await h.ticket('REL-2')).blocked).toBe(false);
+    expect(h.runner.requests).toHaveLength(1);
   });
 
   it('a dry run that cannot run blocks the ticket on the launch, as any launch error, and records nothing', async () => {

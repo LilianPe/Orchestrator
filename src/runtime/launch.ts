@@ -812,7 +812,11 @@ export abstract class DaemonLaunch extends DaemonEffects {
       // The repository's own state, before the ticket's first run (ORC-409): a red dry run refuses it, whatever the job.
       const red = guarded ? await this.refusingDryRun(project, early!) : undefined;
       if (red) {
+        // Read again: a dry run takes minutes, another launch may have taken the ticket meanwhile, or a human stopped it.
+        t = await state(this.ticket(project.id, ticketId));
+        if (taken(t)) return { lost: t } as const;
         this.d.scheduler.release(key);
+        if (t.blocked) return undefined;
         const { reason, tried, question } = dryRunRefusal(red);
         const refused = await state(this.apply(t, blockedOn('repo_config', reason, job.name)));
         await this.tellBlock(project, refused, blockFacts({ reason, step: stepOf(wf, job.name), tried, question })).catch((err: Error) => this.log('warn', `could not post the dry run that refused ${ticketId}: ${err.message}`));

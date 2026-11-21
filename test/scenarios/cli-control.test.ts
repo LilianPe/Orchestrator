@@ -1,9 +1,10 @@
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, statSync, writeFileSync } from 'node:fs';
-import type { Server } from 'node:http';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { runDryRunCommand, runQueueCommand, runStatusCommand, runStopCommand, type ControlDeps } from '../../src/cli/control.js';
 import type { DryRun } from '../../src/core/dry-run.js';
 import { EventBus } from '../../src/server/live-feed.js';
@@ -161,6 +162,25 @@ describe('factory dry-run', () => {
     expect(await runDryRunCommand(c, 'p')).toBe(1);
     expect(c.lines.at(-1)).toMatch(/^No dry run recorded \(409\): a dry run runs in the sandboxes: FACTORY_CONTAINER_CLI/);
     expect(await h.store.lastDryRun('p')).toBeUndefined();
+  });
+
+  it('over HTTP, without fetch, which gives up on an answer after 5 minutes', async () => {
+    const server = createServer((req, res) => {
+      expect([req.method, req.url]).toEqual(['POST', '/api/projects/p/dry-run']);
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify(dryRun(true)));
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    try {
+      const lines: string[] = [];
+      expect(await runDryRunCommand({ api: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, out: (l) => void lines.push(l) }, 'p')).toBe(0);
+      expect(lines.at(-1)).toContain('green');
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+      await new Promise((r) => server.close(r));
+    }
   });
 
   it.skipIf(process.platform === 'win32')("goes through the daemon's Unix socket too", async () => {

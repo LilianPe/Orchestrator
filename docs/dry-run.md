@@ -79,8 +79,9 @@ the config's blob.
 - **It holds** when its fingerprint is the same, and, when it is red, when it ran on the same commit: a fix of the code on the
   default branch lifts a red dry run once the branch has moved. A green one holds over a branch that moved with the same inputs.
 - **Otherwise it runs now**, and the launch waits for it: a project's first delegation runs its first dry run, so a first ticket
-  never waits for a dry run nobody started. Two tickets delegated together wait for the same one.
-- **Green**, the ticket goes on. **Red**, it is refused before any run: blocked as the repository's to fix (the Flow's `repo_config`
+  never waits for a dry run nobody started. Two tickets delegated together wait for the same one; red on another commit than the
+  one the second ticket's launch read (a fix pushed while it ran), the second runs a new one.
+- **Green**, the ticket goes on. **Red**, it is refused before any run (unless another launch took the ticket while it ran): blocked as the repository's to fix (the Flow's `repo_config`
   cause), with a comment that says what breaks, each break with its step, its command and the line that names its cause, and how
   it runs again. A reply resumes the ticket, which goes through the gate again.
 - **It cannot run** (the engine, the forge or a registry not answering): the launch fails, as any launch error, and nothing is
