@@ -289,6 +289,9 @@ export async function runInit(d: InitDeps): Promise<void> {
   cfg.projects = [...cfg.projects.filter((p) => !samePath(p.repoPath, repoPath)), { ...previous, id, repoPath, linearTeamKey: teamKey }];
   // Smee only on demand (ORC-411): a public channel, for a workstation; a server has its public URL.
   if (!cfg.publicUrl && cfg.relay.kind === 'none' && d.dev) cfg.relay = { kind: 'smee', url: await d.createSmee() };
+  // The development mode is what --dev writes over a relay (ORC-444): the daemon's leave to start it, a channel written before
+  // included. With a public URL, --dev changes nothing.
+  if (d.dev && cfg.relay.kind === 'smee') cfg.dev = true;
   const webhook = cfg.publicUrl ? `${cfg.publicUrl}/webhooks/linear` : cfg.relay.kind === 'smee' ? cfg.relay.url : undefined;
   if (webhook) await askLinear(io, d.home, secrets, { callback: `${cfg.publicUrl ?? `http://localhost:${cfg.port}`}/oauth/callback`, webhook });
   // Linear signs its webhook secret only once it has the webhook's URL: no value to ask yet.

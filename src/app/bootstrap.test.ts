@@ -340,6 +340,32 @@ describe('bootstrap', () => {
     expect(warned.map((m) => m.split(':')[1]!.trim())).toEqual(['none', 'lone']);
   });
 
+  // ORC-444: Smee is the workstation's relay, started only in the development mode `factory init --dev` writes.
+  describe('the Smee relay outside the development mode', () => {
+    // A channel nobody answers: the relay only logs its retries.
+    const smee = { kind: 'smee' as const, url: 'http://127.0.0.1:9/channel' };
+    const startWith = async (dev: boolean | undefined) => {
+      const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+      saveInstance(home, { port: 4171, host: '127.0.0.1', relay: smee, projects: [], limits: {}, ...(dev === undefined ? {} : { dev }) });
+      const logs: string[] = [];
+      const app = await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
+      await app.stop();
+      return logs;
+    };
+
+    it('refuses to start, naming publicUrl and factory init --dev', async () => {
+      await expect(startWith(false)).rejects.toThrow(/relay: \{ kind: smee \}.*publicUrl.*factory init --dev/);
+    });
+
+    it('starts with the relay of a config written by factory init --dev', async () => {
+      expect((await startWith(true)).filter((m) => m.includes('smee'))).toEqual([]);
+    });
+
+    it('starts a config written before the marker, warning of the refusal to come', async () => {
+      expect((await startWith(undefined)).filter((m) => m.includes('smee'))).toEqual([expect.stringMatching(/^Warning: relay: \{ kind: smee \}.*dev: true.*factory init --dev/)]);
+    });
+  });
+
   it('TrackerSwitch explains how to connect', async () => {
     await expect(new TrackerSwitch(4100).getIssue('REL-1')).rejects.toThrow('Linear not connected: open http://localhost:4100/oauth/start');
   });

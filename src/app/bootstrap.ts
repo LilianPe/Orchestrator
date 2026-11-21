@@ -99,6 +99,18 @@ function requireSecretsKeyWhenExposed(instance: InstanceConfig, yml: FactoryYml 
   if (!yml?.secretsKey && !isLoopbackHost(instance.host)) throw new Error(`host: ${instance.host} exposes ${PRODUCT_NAME} outside this machine: ${SECRETS_KEY_REQUIRED}.`);
 }
 
+/**
+ * The Smee relay in the development mode alone (ORC-444), the `dev: true` that `factory init --dev` writes: a public channel,
+ * for a workstation, never a server. `dev: false` refuses the start; a config.yaml written before the marker, with none, starts
+ * with the warning returned.
+ */
+function smeeRelayWarning(instance: InstanceConfig): string | undefined {
+  if (instance.relay.kind !== 'smee' || instance.dev) return undefined;
+  const fix = 'on a server, set publicUrl to its https:// address and relay: { kind: none }; on a workstation, run factory init --dev';
+  if (instance.dev === false) throw new Error(`relay: { kind: smee } in config.yaml outside the development mode (dev: false): a smee.io channel is public, for a workstation only: ${fix}.`);
+  return `Warning: relay: { kind: smee } in config.yaml without dev: true, the development mode factory init --dev writes: started as written before that marker; ${fix} (it writes dev: true).`;
+}
+
 export async function startFactory(o: BootOptions): Promise<{ url: string; stop(): Promise<void> }> {
   const log = o.log ?? ((m: string) => console.log(`[factoryd] ${m}`));
   const root = repoRoot();
@@ -116,6 +128,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   // After the sign-in's refusals, before secrets.json is touched. The tokens the daemon writes itself, encrypted at rest
   // from now on when factory.yml names a key (ORC-398).
   requireSecretsKeyWhenExposed(instance, yml);
+  const relayWarning = smeeRelayWarning(instance);
+  if (relayWarning) log(relayWarning);
   const secretsKey = yml?.secretsKey;
   if (secretsKey && sealSecretsAtRest(o.home, secretsKey)) log('secrets.json: encrypted at rest with secrets_key');
   // Before anything opens: no agent on the host but by choice (ORC-349). --fake-runner launches none.
