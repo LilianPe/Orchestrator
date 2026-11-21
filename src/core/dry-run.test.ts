@@ -188,6 +188,9 @@ describe('runDryRun (ORC-408)', () => {
     ['the proxy\'s 502 on a host it could not resolve', 'curl: (22) The requested URL returned error: 502\negress proxy: getaddrinfo ENOTFOUND get.pnpm.io\n'],
     ['the proxy\'s 502 on a request it could not send', 'egress proxy: not sent on: Invalid character in header content\n'],
     ['the proxy down, as npm and git say it', 'npm error connect ECONNREFUSED 127.0.0.1:3128\nfatal: unable to access \'https://github.com/acme/sub.git/\': Failed to connect to 127.0.0.1 port 3128 after 0 ms: Could not connect to server\n'],
+    ['the proxy down, as git alone says it', 'fatal: unable to access \'https://github.com/acme/sub.git/\': Failed to connect to 127.0.0.1 port 3128 after 0 ms: Could not connect to server\n'],
+    ['the proxy\'s 502 to a CONNECT, as curl says it', 'curl: (56) CONNECT tunnel failed, response 502\n'],
+    ['the proxy\'s 502 to a CONNECT, as git says it', 'fatal: unable to access \'https://github.com/acme/sub.git/\': Received HTTP code 502 from proxy after CONNECT\n'],
   ])('a breakdown the installer reports as something else still rejects: %s', async (_, stderr) => {
     const { req, sandboxes } = forge();
     sandboxes.answer = (command) => (command === 'npm ci' ? { stdout: '', stderr, code: 1 } : undefined);
@@ -408,6 +411,8 @@ describe('classifyBreak', () => {
   it('the egress proxy\'s relay on the loopback is no service; a registry that does not answer is said apart', () => {
     expect(classifyBreak('connect ECONNREFUSED 127.0.0.1:3128', 'setup', declared).kind).toBe('failure');
     expect(unreachable('connect ECONNREFUSED 127.0.0.1:3128')).toContain('3128');
+    // The relay by its address: a 3128 that is no port (a pid, a duration) leaves a service a service.
+    expect(classifyBreak('Error: connect ECONNREFUSED 127.0.0.1:5432 (after 3128 ms)', 'command', declared).kind).toBe('service');
     expect(unreachable('npm error code ETIMEDOUT')).toContain('ETIMEDOUT');
     expect(unreachable('npm error 502 Bad Gateway - GET https://registry.npmjs.org/zod')).toContain('502');
     expect(unreachable("Failed to establish a new connection: [Errno 111] Connection refused")).toContain('Errno 111');

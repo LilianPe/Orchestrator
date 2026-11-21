@@ -159,8 +159,8 @@ const VARIABLE_LINES = [
 const NAME = /[A-Z][A-Z0-9_]{2,}/g;
 /** On the loopback, where the services listen. */
 const SERVICE_LINES = [/ECONNREFUSED (?:127\.0\.0\.1|localhost|::1|\[::1\])(?::\d+)?/, /could not connect to (?:server|database)/i, /Is the server running/];
-/** A line about the egress proxy's relay, whatever the tool's words (`port 3128 …: Could not connect to server`, curl's and git's). */
-const PROXY_RELAY = /\b3128\b/;
+/** A line about the egress proxy's relay, by its address, whatever the tool's words (`127.0.0.1 port 3128 …: Could not connect to server`, curl's and git's). */
+const PROXY_RELAY = /(?:127\.0\.0\.1|localhost|::1|\[::1\])(?::| port )3128\b/;
 const serviceLine = (line: string) => !PROXY_RELAY.test(line) && SERVICE_LINES.some((p) => p.test(line));
 /**
  * A registry or the egress proxy not answering: nothing of the repository's state, which the dry run then does not record. The
@@ -171,6 +171,9 @@ const UNREACHABLE_LINES = [
   // pip's and uv's.
   /Failed to establish a new connection|Temporary failure in name resolution|\bdns error\b/,
   /egress proxy: not sent on|\bProxyError\b|Cannot connect to proxy/,
+  // The relay itself, and the proxy's 502 to a CONNECT, as curl and git say them.
+  PROXY_RELAY,
+  /CONNECT tunnel failed|from proxy after CONNECT/,
 ];
 const ERROR_LINE = /\b(?:error|fail(?:ed|ure)?|assert\w*|exception|traceback|panic)\b/i;
 
