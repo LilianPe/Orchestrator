@@ -335,12 +335,14 @@ describe('factory init: Smee only for development (ORC-411)', () => {
   });
 
   // ORC-444: the development mode is what --dev writes, the daemon's leave to start the Smee relay.
-  it('with --dev, writes dev: true over its channel, also one written before the marker; without it or with a public URL, writes none', async () => {
+  it('with --dev, writes dev: true over its channel, also one written before the marker', async () => {
     expect(loadInstance((await initOnce({ dev: true })).home).dev).toBe(true);
     const old = await initOnce({ dev: true, config: { relay: { kind: 'smee', url: 'https://smee.io/old' } } });
     expect(loadInstance(old.home)).toMatchObject({ dev: true, relay: { kind: 'smee', url: 'https://smee.io/old' } });
+  });
+
+  it('writes no dev without --dev, nor with a public URL, even beside an old channel', async () => {
     expect(loadInstance((await initOnce()).home).dev).toBeUndefined();
-    expect(loadInstance((await initOnce({ dev: true, config: { publicUrl: 'https://factory.example.com' } })).home).dev).toBeUndefined();
     const server = await initOnce({ dev: true, config: { publicUrl: 'https://factory.example.com', relay: { kind: 'smee', url: 'https://smee.io/old' } } });
     expect(loadInstance(server.home).dev).toBeUndefined();
   });

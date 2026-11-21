@@ -287,11 +287,13 @@ export async function runInit(d: InitDeps): Promise<void> {
   // The project's other fields (its roles, written by hand) stay.
   const id = previous?.id ?? slugify(basename(repoPath), 30);
   cfg.projects = [...cfg.projects.filter((p) => !samePath(p.repoPath, repoPath)), { ...previous, id, repoPath, linearTeamKey: teamKey }];
-  // Smee only on demand (ORC-411): a public channel, for a workstation; a server has its public URL.
-  if (!cfg.publicUrl && cfg.relay.kind === 'none' && d.dev) cfg.relay = { kind: 'smee', url: await d.createSmee() };
-  // The development mode is what --dev writes over a relay (ORC-444): the daemon's leave to start it, a channel written before
-  // included. With a public URL, a server's, --dev changes nothing, even beside an old channel.
-  if (d.dev && !cfg.publicUrl && cfg.relay.kind === 'smee') cfg.dev = true;
+  // Smee only on demand (ORC-411): a public channel, for a workstation; a server has its public URL, and --dev changes nothing
+  // there, even beside an old channel. The development mode is what --dev writes (ORC-444): the daemon's leave to start the
+  // relay, a channel written before included.
+  if (d.dev && !cfg.publicUrl) {
+    if (cfg.relay.kind === 'none') cfg.relay = { kind: 'smee', url: await d.createSmee() };
+    cfg.dev = true;
+  }
   const webhook = cfg.publicUrl ? `${cfg.publicUrl}/webhooks/linear` : cfg.relay.kind === 'smee' ? cfg.relay.url : undefined;
   if (webhook) await askLinear(io, d.home, secrets, { callback: `${cfg.publicUrl ?? `http://localhost:${cfg.port}`}/oauth/callback`, webhook });
   // Linear signs its webhook secret only once it has the webhook's URL: no value to ask yet.
