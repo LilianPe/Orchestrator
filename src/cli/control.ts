@@ -209,11 +209,11 @@ export async function runDryRunCommand(d: ControlDeps, projectId: string): Promi
   const run = (await res.json()) as DryRun;
   const verdict = dryRunVerdict(run);
   d.out(`Dry run of ${projectId} on ${run.sha.slice(0, 12)}: ${verdict === 'unverifiable' ? 'unverifiable without its secrets' : verdict}${run.commands.length ? ` (${run.commands.join(' · ')})` : ''}.`);
-  for (const b of run.breaks) {
+  for (const b of [...run.breaks, ...(run.unverified ? [run.unverified] : [])]) {
     d.out(`  ${b.kind}, ${b.step} \`${b.command}\`: ${b.detail}`);
     for (const line of b.output.split('\n').filter((l) => l.trim())) d.out(`    | ${line}`);
   }
-  if (!run.ok) d.out(`The tickets of ${projectId} are refused while its dry run is red: fix what breaks, then run this again. A ticket it refused starts on a reply once it is green.`);
-  else if (verdict === 'unverifiable') d.out(`The tickets of ${projectId} are not refused: its setup failed without the secrets it declares under setup_secrets, which a dry run does not get, so its build and tests were not run.`);
-  return run.ok ? 0 : 1;
+  if (verdict === 'red') d.out(`The tickets of ${projectId} are refused while its dry run is red: fix what breaks, then run this again. A ticket it refused starts on a reply once it is green.`);
+  if (verdict === 'unverifiable') d.out(`The tickets of ${projectId} are not refused; its build and tests did not run.`);
+  return verdict === 'red' ? 1 : 0;
 }

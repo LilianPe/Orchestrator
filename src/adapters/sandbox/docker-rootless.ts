@@ -6,6 +6,7 @@ import type { EgressProxy } from '../../network/proxy.js';
 import { execCmd, execFailure, mustExec, type Exec, type ExecResult } from '../exec.js';
 import { isRecord } from '../graphql-pages.js';
 import {
+  EGRESS_RELAY_PORT,
   SANDBOX_HOME,
   WORKSPACE_TARGET,
   type NetworkLevel,
@@ -121,9 +122,9 @@ const databaseUrl = (password: string) => `postgres://${PG_USER}:${password}@127
 const EGRESS_DIR = '/run/factory/egress';
 /** The factory CA's certificate, read-only: the only authority the sandbox's tools trust (the proxy decrypts every tunnel). */
 const EGRESS_CA = '/run/factory/egress-ca.crt';
-const PROXY = 'http://127.0.0.1:3128';
+const PROXY = `http://127.0.0.1:${EGRESS_RELAY_PORT}`;
 /** PID 1 of a sandbox with an egress: TCP on the loopback to the proxy's socket, so every tool can use HTTP(S)_PROXY. */
-const relay = (socket: string) => `const net=require('net');net.createServer((c)=>{const u=net.connect('${socket}');c.pipe(u).pipe(c);c.on('error',()=>u.destroy());u.on('error',()=>c.destroy())}).listen(3128,'127.0.0.1')`;
+const relay = (socket: string) => `const net=require('net');net.createServer((c)=>{const u=net.connect('${socket}');c.pipe(u).pipe(c);c.on('error',()=>u.destroy());u.on('error',()=>c.destroy())}).listen(${EGRESS_RELAY_PORT},'127.0.0.1')`;
 /**
  * The proxy's address for every tool, and the factory CA as its trust: Node (claude, npm, yarn),
  * OpenSSL (curl, Python), pip, git.

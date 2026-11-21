@@ -13,6 +13,9 @@ export interface SandboxRequirements {
   services: readonly string[];
 }
 
+/** The port of the egress proxy's relay on a sandbox's loopback, where its tools' `HTTP(S)_PROXY` point. */
+export const EGRESS_RELAY_PORT = 3128;
+
 export const DEFAULT_REQUIREMENTS: SandboxRequirements = { minLevel: 'L3', browser: false, services: [] };
 
 export interface SandboxMount {

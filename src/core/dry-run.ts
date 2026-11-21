@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Exec } from '../adapters/exec.js';
-import { DEFAULT_REQUIREMENTS, type SandboxProvider } from '../adapters/sandbox/types.js';
+import { DEFAULT_REQUIREMENTS, EGRESS_RELAY_PORT, type SandboxProvider } from '../adapters/sandbox/types.js';
 import { SHA } from '../adapters/workspace/git-workspaces.js';
 import { runAndRerun, settle, type CommandRun, type KnownFlaky, type Standing } from '../checks/flaky.js';
 import { isLockfile } from '../checks/diff-size.js';
@@ -16,8 +16,8 @@ import { RELEASE_AGE_DAYS, runSealedSetup, SetupFailure } from './sealed-setup.j
 import { VERIFY_TIMEOUT_MS } from './verify.js';
 
 /**
- * What breaks a dry run, as its report classifies it (ORC-408). `secret`: a setup that declares `setup_secrets` failed without
- * them, the dry run unverifiable rather than red (ORC-453): it is not counted in `ok`.
+ * What breaks a dry run, as its report classifies it (ORC-408). `secret`: what a setup that declares `setup_secrets` failed on
+ * without them (ORC-453), never among the breaks: the dry run's `unverified`.
  */
 export type DryRunBreakKind = 'dependency' | 'service' | 'variable' | 'flaky' | 'failure' | 'secret';
 
@@ -62,6 +62,11 @@ export interface DryRun {
   ok: boolean;
   fingerprint: DryRunFingerprint;
   breaks: DryRunBreak[];
+  /**
+   * A setup that declares `setup_secrets` and failed without them, on no variable or service of its own (ORC-453): the dry run
+   * is unverifiable, neither green nor red. `ok`, its tickets go on; its commands did not run.
+   */
+  unverified?: DryRunBreak;
   /** What ran after the setup. */
   commands: string[];
   startedAt: number;
@@ -150,7 +155,7 @@ const INSTALL_LINES = [
  * The egress proxy's refusal of a host it does not allow: the repository needs a registry the factory does not let it reach. A
  * 403 to a CONNECT is the proxy's, as curl (`CONNECT tunnel failed, response 403`) and git (`… 403 from proxy after CONNECT`) say it.
  */
-const REFUSED_LINES = [/egress proxy:|\b403\b.*Forbidden|\bCONNECT\b.*\b403\b|\b403\b.*\bCONNECT\b/];
+const REFUSED_LINES = [/egress proxy:|\b403\b.*Forbidden|(?=.*\bCONNECT\b).*\b403\b/];
 /**
  * Each with the variable's names as its first group, upper case: a lower-case word is not one; the first, a list of them
  * (`Missing environment variables: API_URL, STRIPE_KEY`). Where nothing says it is a variable, its name must hold a `_`:
@@ -168,14 +173,15 @@ const NAME = /[A-Z][A-Z0-9_]{2,}/g;
  * `host='localhost', port=8000`, libpq's `"127.0.0.1", port 5432`, asyncpg's `('127.0.0.1', 5432)`, Prisma's `` `localhost`:`5432` ``.
  * The port is the first group.
  */
-const LOOPBACK_PORT = /(?<![\w.:])(?:127\.0\.0\.1|localhost|::1|\[::1\])['"`]?\)?(?::|(?:,\s*|\s+)(?:port[ =]?\s*)?)`?(\d{1,5})\b/;
+const LOOPBACK = String.raw`(?<![\w.:])(?:127\.0\.0\.1|localhost|::1|\[::1\])`;
+const LOOPBACK_PORT = new RegExp(String.raw`${LOOPBACK}['"\`]?\)?(?::|(?:,\s*|\s+)(?:port[ =]?\s*)?)\`?(\d{1,5})\b`);
 /**
  * A connection refused or not answered, whatever the tool's words: Node's, curl's, Go's, wget's, apt's, Maven's, Python's,
  * Prisma's. On the loopback, a service of the repository's that does not answer is its own, whether it refuses or times out.
  */
 const REFUSAL = /ECONNREFUSED|ETIMEDOUT|connection refused|connection timed out|i\/o timeout|failed to connect|could(?:n't| not) connect|connect call failed|can't reach database server/i;
 /** The egress proxy's relay, where the setup's tools reach the registries. */
-const RELAY_PORT = '3128';
+const RELAY_PORT = String(EGRESS_RELAY_PORT);
 const refusedOn = (line: string) => (REFUSAL.test(line) ? LOOPBACK_PORT.exec(line)?.[1] : undefined);
 /** The relay refusing, by its address, whatever the tool's words: a line that only names it (`HTTPS_PROXY=…`) is not that. */
 const relayRefused = (line: string) => refusedOn(line) === RELAY_PORT;
@@ -183,12 +189,14 @@ const relayRefused = (line: string) => refusedOn(line) === RELAY_PORT;
  * On the loopback, where the services listen: a port refusing there that is not the relay's, or what libpq says of a server
  * there, the host on the line (`Is the server running on host "localhost"`): of a remote one, a breakdown of the network.
  */
-const LOOPBACK_HOST = /(?<![\w.:])(?:127\.0\.0\.1|localhost|::1)\b/;
+const LOOPBACK_HOST = new RegExp(String.raw`${LOOPBACK}\b`);
 const LIBPQ_SERVER = /could not connect to (?:server|database)|Is the server running/i;
 const serviceLine = (line: string) => {
   const port = refusedOn(line);
   return port ? port !== RELAY_PORT : LOOPBACK_HOST.test(line) && LIBPQ_SERVER.test(line);
 };
+/** The reasons of a 502, 503 and 504, as HTTP says them. */
+const GATEWAY = 'Bad Gateway|Service Unavailable|Gateway Time-?out';
 /**
  * A registry or the egress proxy not answering: nothing of the repository's state, which the dry run then does not record. The
  * proxy's 502 says so in its body (`egress proxy: getaddrinfo ENOTFOUND …`, `egress proxy: not sent on: …`), pip in a `ProxyError`;
@@ -197,10 +205,11 @@ const serviceLine = (line: string) => {
  * (`relayRefused`).
  */
 const UNREACHABLE_LINES = [
-  /\b(?:ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ECONNRESET|ESOCKETTIMEDOUT)\b|\b50[234]\b.*(?:Bad Gateway|Service Unavailable|Gateway Time-?out)/,
-  // curl's and git's to a CONNECT, Yarn's, undici's; curl's `--fail`, npm's code; wget's and Go's, by the reason alone.
-  /\bCONNECT\b.*\b50[234]\b|\b50[234]\b.*\bCONNECT\b|statusCode=50[234]\b|Proxy response \(50[234]\)|returned error: 50[234]\b|npm (?:ERR!|error) code E50[234]\b/,
-  /Proxy tunneling failed: (?:Bad Gateway|Service Unavailable|Gateway Time-?out)|: (?:Bad Gateway|Service Unavailable|Gateway Time-?out)\s*$/,
+  new RegExp(String.raw`\b(?:ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ECONNRESET|ESOCKETTIMEDOUT)\b|\b50[234]\b.*(?:${GATEWAY})`),
+  // A status alone is no breakdown (`added 502 packages`): curl's and git's to a CONNECT, Yarn's, undici's, curl's `--fail`,
+  // npm's code; wget's and Go's, by the reason alone.
+  /(?=.*\bCONNECT\b).*\b50[234]\b|statusCode=50[234]\b|Proxy response \(50[234]\)|returned error: 50[234]\b|npm (?:ERR!|error) code E50[234]\b/,
+  new RegExp(String.raw`Proxy tunneling failed: (?:${GATEWAY})|: (?:${GATEWAY})\s*$`),
   /\bConnection timed out\b/i,
   // pip's and uv's.
   /Failed to establish a new connection|Temporary failure in name resolution|\bdns error\b/,
@@ -292,9 +301,8 @@ const breakOf = (step: DryRunBreak['step'], command: string, output: string, var
  * the break was read as (a private registry's 404 is no missing dependency); over its cap, what the cap says.
  */
 const unverifiable = (broke: DryRunBreak, secrets: readonly string[]): DryRunBreak => {
-  const lines = linesOf(broke.output);
-  const cause = broke.kind === 'failure' || !lines.length ? broke.detail : errorLine(lines);
-  return { ...broke, kind: 'secret', detail: `unverifiable without its secrets (${secrets.join(', ')}), which a dry run's setup does not get: ${cause}` };
+  const cause = broke.kind === 'failure' ? broke.detail : errorLine(linesOf(broke.output));
+  return { ...broke, kind: 'secret', detail: `failed without its secrets (${secrets.join(', ')}), which a dry run's setup does not get: ${cause}` };
 };
 
 /**
@@ -360,8 +368,8 @@ export async function runDryRun(req: DryRunRequest): Promise<DryRun> {
   await initHardenedClone(git);
   const sha = await fetchCommit(req, git, cloneDir);
   const files = await fingerprintFiles((...args) => git.raw('ls-tree', ...args), sha);
-  const dryRun = (breaks: DryRunBreak[], ranSetup: readonly string[], ran: readonly string[]): DryRun => ({
-    id: req.runId, projectId: req.projectId, sha, target: req.sha ? 'commit' : 'main', ok: breaks.every((b) => b.kind === 'secret'),
+  const dryRun = (breaks: DryRunBreak[], ranSetup: readonly string[], ran: readonly string[], unverified?: DryRunBreak): DryRun => ({
+    id: req.runId, projectId: req.projectId, sha, target: req.sha ? 'commit' : 'main', ok: !breaks.length, ...(unverified ? { unverified } : {}),
     fingerprint: dryRunFingerprint({ setup: ranSetup, image: req.image, ...files }), breaks, commands: [...ran], startedAt, endedAt: req.now(),
   });
   let config: RepoConfig;
@@ -404,7 +412,7 @@ export async function runDryRun(req: DryRunRequest): Promise<DryRun> {
       if (down) throw new Error(`${err.command}: a registry or the egress proxy did not answer, no dry run recorded: ${down}`, { cause: err });
       // Its secrets withheld (ORC-453): what the setup broke on, but a variable or a service of its own, may be their absence.
       const own = broke.kind === 'variable' || broke.kind === 'service';
-      if (config.setupSecrets.length && !own) return dryRun([unverifiable(broke, config.setupSecrets)], setup, []);
+      if (config.setupSecrets.length && !own) return dryRun([], setup, [], unverifiable(broke, config.setupSecrets));
       return dryRun([broke], setup, []);
     }
   }
@@ -433,7 +441,7 @@ export const dryRunBroke = (run: DryRun): string => [...new Set(run.breaks.map((
 
 /** Green, red, or unverifiable: green but for a setup that failed without its secrets (ORC-453), whose commands did not run. */
 export const dryRunVerdict = (run: DryRun): 'green' | 'red' | 'unverifiable' =>
-  !run.ok ? 'red' : run.breaks.length ? 'unverifiable' : 'green';
+  !run.ok ? 'red' : run.unverified ? 'unverifiable' : 'green';
 
 /**
  * The `main` maturity card's value (ORC-410): the project's last dry run on its default branch, green, unverifiable without its
@@ -443,9 +451,8 @@ export const dryRunVerdict = (run: DryRun): 'green' | 'red' | 'unverifiable' =>
 export function mainCardValue(run: DryRun | undefined): string {
   if (!run) return MAIN_UNCHECKED;
   const of = `the dry run of ${run.sha.slice(0, 12)} on ${utc(run.endedAt)}`;
-  const verdict = dryRunVerdict(run);
-  if (verdict === 'unverifiable') return `unverifiable: ${of}: its setup \`${run.breaks[0]!.command}\` failed without the secrets it declares under setup_secrets, which a dry run does not get`;
-  if (verdict === 'green') return `green: ${of}${run.commands.length ? ` (${run.commands.join(' · ')})` : ''}`;
+  if (run.unverified) return `unverifiable: ${of}: its setup \`${run.unverified.command}\` ${run.unverified.detail}`;
+  if (run.ok) return `green: ${of}${run.commands.length ? ` (${run.commands.join(' · ')})` : ''}`;
   const broke = dryRunBroke(run) || 'no break recorded';
   return `red: ${of}: ${broke}\nfix it on main, then factory dry-run ${run.projectId}`;
 }

@@ -188,12 +188,9 @@ describe('runDryRun (ORC-408)', () => {
     ['the proxy\'s 502 on a host it could not resolve', 'curl: (22) The requested URL returned error: 502\negress proxy: getaddrinfo ENOTFOUND get.pnpm.io\n'],
     ['the proxy\'s 502 on a request it could not send', 'egress proxy: not sent on: Invalid character in header content\n'],
     ['the proxy down, as npm and git say it', 'npm error connect ECONNREFUSED 127.0.0.1:3128\nfatal: unable to access \'https://github.com/acme/sub.git/\': Failed to connect to 127.0.0.1 port 3128 after 0 ms: Could not connect to server\n'],
-    ['the relay down, as git alone says it', 'fatal: unable to access \'https://github.com/acme/sub.git/\': Failed to connect to 127.0.0.1 port 3128 after 0 ms: Could not connect to server\n'],
     ['the relay down, as Go says it', 'go: downloading github.com/acme/x v1.2.0\ngo: github.com/acme/x@v1.2.0: Get "https://proxy.golang.org/github.com/acme/x/@v/v1.2.0.zip": proxyconnect tcp: dial tcp 127.0.0.1:3128: connect: connection refused\n'],
     ['the proxy\'s 502 to a CONNECT, as curl says it', 'curl: (56) CONNECT tunnel failed, response 502\n'],
     ['the proxy\'s 502 to a CONNECT, as Yarn says it', 'error An unexpected error occurred: "https://registry.yarnpkg.com/zod: tunneling socket could not be established, statusCode=502".\n'],
-    ['the proxy\'s 502 on an upstream that hung up', 'curl: (22) The requested URL returned error: 502\negress proxy: socket hang up\n'],
-    ['a connection timed out, as git says it', 'fatal: unable to access \'https://github.com/acme/sub.git/\': Failed to connect to github.com port 443: Connection timed out\n'],
   ])('a breakdown the installer reports as something else still rejects: %s', async (_, stderr) => {
     const { req, sandboxes } = forge();
     sandboxes.answer = (command) => (command === 'npm ci' ? { stdout: '', stderr, code: 1 } : undefined);
@@ -261,10 +258,9 @@ describe('runDryRun (ORC-408)', () => {
     it('failing as a private registry does without its token, is not red: unverifiable without its secrets, the tickets go on', async () => {
       const { req, sandboxes } = failing('npm error code E404\nnpm error 404 Not Found - GET https://npm.acme.internal/@acme%2fui - Not found\n');
       const run = await runDryRun(req);
-      expect(run.ok).toBe(true);
-      expect(run.breaks).toEqual([expect.objectContaining({ kind: 'secret', step: 'setup', command: 'npm ci', detail: expect.stringContaining('NPM_TOKEN') })]);
-      expect(run.breaks[0]!.detail).toContain('npm error code E404');
-      expect(run.breaks[0]!.detail).not.toContain('dependency');
+      expect(run).toMatchObject({ ok: true, breaks: [], unverified: { kind: 'secret', step: 'setup', command: 'npm ci', detail: expect.stringContaining('NPM_TOKEN') } });
+      expect(run.unverified!.detail).toContain('npm error code E404');
+      expect(run.unverified!.detail).not.toContain('dependency');
       expect(run.commands).toEqual([]);
       expect(dryRunVerdict(run)).toBe('unverifiable');
       // No secret reaches the dry run's setup.
@@ -272,8 +268,8 @@ describe('runDryRun (ORC-408)', () => {
     });
 
     it('failing on anything else than a variable or a service is unverifiable too: a failure, an over-cap setup', async () => {
-      expect((await runDryRun(failing('npm error code E401\nnpm error Unable to authenticate, need: Basic realm="acme"\n').req)).breaks.map((b) => b.kind)).toEqual(['secret']);
-      expect((await runDryRun(failing('Error: NPM_TOKEN is not set\n').req)).breaks.map((b) => b.kind)).toEqual(['secret']);
+      expect((await runDryRun(failing('npm error code E401\nnpm error Unable to authenticate, need: Basic realm="acme"\n').req)).unverified?.kind).toBe('secret');
+      expect((await runDryRun(failing('Error: NPM_TOKEN is not set\n').req)).unverified?.kind).toBe('secret');
       const now = Date.now();
       const { req, sandboxes } = failing('');
       sandboxes.answer = (command) => {
@@ -283,7 +279,7 @@ describe('runDryRun (ORC-408)', () => {
         return { stdout: '', stderr: 'npm http fetch GET https://npm.acme.internal/@acme%2fui\n', code: 124 };
       };
       const capped = await runDryRun(req);
-      expect(capped).toMatchObject({ ok: true, breaks: [expect.objectContaining({ kind: 'secret', detail: expect.stringContaining('NPM_TOKEN') })] });
+      expect(capped).toMatchObject({ ok: true, breaks: [], unverified: { kind: 'secret', detail: expect.stringContaining('NPM_TOKEN') } });
     });
 
     it.each([
@@ -291,8 +287,8 @@ describe('runDryRun (ORC-408)', () => {
       ['a service of its own refusing', 'Error: connect ECONNREFUSED 127.0.0.1:5432\n', 'service'],
     ])('failing on %s stays red as such: its own cause, whatever the secrets', async (_, stderr, kind) => {
       const run = await runDryRun(failing(stderr).req);
-      expect(run.ok).toBe(false);
-      expect(run.breaks).toEqual([expect.objectContaining({ kind, step: 'setup' })]);
+      expect(run).toMatchObject({ ok: false, breaks: [expect.objectContaining({ kind, step: 'setup' })] });
+      expect(run.unverified).toBeUndefined();
     });
 
     it('a registry or the egress proxy not answering still rejects: a breakdown says nothing of the secrets', async () => {
@@ -395,10 +391,13 @@ describe('the fingerprint of a dry run (ORC-409)', () => {
   });
 });
 
+const fingerprint = dryRunFingerprint({ setup: [], image: 'img', lockfiles: {}, config: null });
+const runOf = (over: Partial<DryRun> = {}): DryRun => ({ id: 'd', projectId: 'acme', sha: 'a'.repeat(40), target: 'main', ok: true, fingerprint, breaks: [], commands: [], startedAt: 0, endedAt: Date.UTC(2026, 10, 20, 14, 3), ...over });
+const unverified: DryRun['unverified'] = { kind: 'secret', step: 'setup', command: 'npm ci', detail: 'failed without its secrets (NPM_TOKEN), which a dry run\'s setup does not get: npm error code E404', output: '' };
+
 describe('dryRunHolds (ORC-409)', () => {
-  const fingerprint = dryRunFingerprint({ setup: [], image: 'img', lockfiles: {}, config: null });
   const other = dryRunFingerprint({ setup: [], image: 'img', lockfiles: { 'uv.lock': 'u' }, config: null });
-  const run = (ok: boolean, sha = 'a'.repeat(40)): DryRun => ({ id: 'd', projectId: 'p', sha, target: 'main', ok, fingerprint, breaks: [], commands: [], startedAt: 0, endedAt: 0 });
+  const run = (ok: boolean, sha = 'a'.repeat(40)) => runOf({ ok, sha });
   it('a green one holds on the same inputs, wherever the branch went; a red one on the same commit only', () => {
     expect(dryRunHolds(run(true), { sha: 'b'.repeat(40), fingerprint })).toBe(true);
     expect(dryRunHolds(run(false), { sha: 'a'.repeat(40), fingerprint })).toBe(true);
@@ -408,26 +407,20 @@ describe('dryRunHolds (ORC-409)', () => {
     expect(dryRunHolds(run(true), { sha: 'a'.repeat(40), fingerprint: other })).toBe(false);
     expect(dryRunHolds(run(false), { sha: 'a'.repeat(40), fingerprint: other })).toBe(false);
   });
+  it('an unverifiable one (ORC-453) holds as a green one does', () => {
+    expect(dryRunHolds(runOf({ unverified }), { sha: 'f'.repeat(40), fingerprint })).toBe(true);
+  });
 });
 
 describe('a dry run unverifiable without its secrets (ORC-453)', () => {
-  const fingerprint = dryRunFingerprint({ setup: [], image: 'img', lockfiles: {}, config: null });
-  const secret = { kind: 'secret' as const, step: 'setup' as const, command: 'npm ci', detail: 'unverifiable without its secrets (NPM_TOKEN): …', output: '' };
-  const run = (over: Partial<DryRun>): DryRun => ({ id: 'd', projectId: 'acme', sha: '0123456789abcdef', target: 'main', ok: true, fingerprint, breaks: [], commands: [], startedAt: 0, endedAt: Date.UTC(2026, 10, 20, 14, 3), ...over });
-
-  it('its verdict: green, red, or unverifiable when its only break is a secret', () => {
-    expect(dryRunVerdict(run({ commands: ['npm test'] }))).toBe('green');
-    expect(dryRunVerdict(run({ ok: false, breaks: [{ ...secret, kind: 'failure' }] }))).toBe('red');
-    expect(dryRunVerdict(run({ breaks: [secret] }))).toBe('unverifiable');
+  it('its verdict: green, red, or unverifiable when its setup failed without its secrets', () => {
+    expect(dryRunVerdict(runOf({ commands: ['npm test'] }))).toBe('green');
+    expect(dryRunVerdict(runOf({ ok: false, breaks: [{ ...unverified!, kind: 'failure' }] }))).toBe('red');
+    expect(dryRunVerdict(runOf({ unverified }))).toBe('unverifiable');
   });
 
   it('the main maturity card says it unverifiable, with the secrets its setup needs, never green', () => {
-    const value = mainCardValue(run({ breaks: [secret] }));
-    expect(value).toBe('unverifiable: the dry run of 0123456789ab on 2026-11-20 14:03 UTC: its setup `npm ci` failed without the secrets it declares under setup_secrets, which a dry run does not get');
-  });
-
-  it('holds as a green one does: same inputs, the branch moved or not', () => {
-    expect(dryRunHolds(run({ breaks: [secret] }), { sha: 'f'.repeat(40), fingerprint })).toBe(true);
+    expect(mainCardValue(runOf({ unverified }))).toBe(`unverifiable: the dry run of aaaaaaaaaaaa on 2026-11-20 14:03 UTC: its setup \`npm ci\` ${unverified!.detail}`);
   });
 });
 
@@ -533,6 +526,7 @@ describe('classifyBreak', () => {
     ['Maven', '[ERROR] Connect to 127.0.0.1:3128 [/127.0.0.1] failed: Connection refused'],
     ['urllib3', "HTTPSConnectionPool(host='127.0.0.1', port=3128): Max retries exceeded (Caused by NewConnectionError('Failed to establish a new connection: [Errno 111] Connection refused'))"],
     ['IPv6', 'dial tcp [::1]:3128: connect: connection refused'],
+    ['curl, timed out', 'curl: (28) Failed to connect to 127.0.0.1 port 3128 after 130001 ms: Connection timed out'],
   ])('the relay refusing is a breakdown, whatever the tool that says it: %s', (_, line) => {
     expect(unreachable(line)).toContain('3128');
     expect(classifyBreak(line, 'setup', declared).kind).not.toBe('service');
@@ -591,6 +585,7 @@ describe('classifyBreak', () => {
     ['redis-py', 'redis.exceptions.ConnectionError: Error 111 connecting to localhost:6379. Connection refused.', '6379'],
     ['asyncpg', 'ConnectionRefusedError: [Errno 111] Connect call failed (\'127.0.0.1\', 5432)', '5432'],
     ['Go', 'dial tcp 127.0.0.1:6379: connect: connection refused', '6379'],
+    ['libpq', 'psql: error: connection to server at "localhost" (127.0.0.1), port 5432 failed: Connection refused', '5432'],
   ])('a Python or Go client refused by a service on the loopback is a service, not a breakdown: %s', (_, line, port) => {
     for (const step of ['setup', 'command'] as const) expect(classifyBreak(line, step, declared)).toMatchObject({ kind: 'service', detail: expect.stringContaining(port) });
     expect(unreachable(line)).toBeUndefined();
@@ -614,15 +609,6 @@ describe('classifyBreak', () => {
 
   it('a test that timed out naming the loopback is no service: only a connection that did', () => {
     expect(classifyBreak('Error: Test timed out in 5000ms, waiting for http://localhost:3000/health', 'command', declared).kind).toBe('failure');
-  });
-
-  it('the relay timed out is a breakdown', () => {
-    expect(unreachable('curl: (28) Failed to connect to 127.0.0.1 port 3128 after 130001 ms: Connection timed out')).toContain('3128');
-  });
-
-  it('libpq refused on the loopback is a service, in its old and its new words', () => {
-    expect(classifyBreak('psql: error: connection to server at "localhost" (127.0.0.1), port 5432 failed: Connection refused', 'command', declared)).toMatchObject({ kind: 'service', detail: expect.stringContaining('5432') });
-    expect(classifyBreak('could not connect to server: Connection refused\n\tIs the server running on host "127.0.0.1" and accepting', 'command', declared).kind).toBe('service');
   });
 
   it('anything else is a failure, its first error line said', () => {

@@ -74,8 +74,8 @@ describe('the dry run gate of a delegated ticket', () => {
   });
 
   it('a dry run unverifiable without its setup_secrets (ORC-453) does not refuse the ticket: it starts, and the main card says it unverifiable', async () => {
-    const secret: DryRunBreak = { ...BREAK, kind: 'secret', detail: 'unverifiable without its secrets (NPM_TOKEN), which a dry run\'s setup does not get: npm error code E404' };
-    const { h, asked, delegate } = gated({ next: (_r, m) => ({ ...dryRunOf(m, true), breaks: [secret], commands: [] }) });
+    const unverified: DryRunBreak = { ...BREAK, kind: 'secret', detail: 'failed without its secrets (NPM_TOKEN), which a dry run\'s setup does not get: npm error code E404' };
+    const { h, asked, delegate } = gated({ next: (_r, m) => ({ ...dryRunOf(m, true), unverified, commands: [] }) });
     await h.store.putMaturityCards('p', [{ key: 'main', title: 'main green or red', value: 'not checked yet' }], 0);
     await delegate();
     expect(asked).toHaveLength(1);
