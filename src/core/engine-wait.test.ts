@@ -268,7 +268,35 @@ describe('the wait on a « blocked by » ticket not done (ORC-363)', () => {
     it('a ticket a human moved back to Todo meanwhile starts no fix-ci at the end of the wait, but the start it waited for', () => {
       const held = { ...after(inReview(), red), logical: 'todo' as const };
       expect(starts(held, done)).toEqual([expect.objectContaining({ job: 'dev' })]);
+      // The wait's own start relaunches nothing (ORC-440).
+      expect(starts(held, done)[0]).not.toHaveProperty('relaunches');
       expect(after(held, done)).toMatchObject({ ciFixAttempts: 0 });
+    });
+
+    it('a green CI of another PR leaves the fix-ci kept', () => {
+      const held = after(after(inReview(), red), event('pr.checks_passed', { ...pr, number: 5 }));
+      expect(held.waitingOn).toMatchObject({ lift: { job: 'fix-ci' }, round: 'red_ci' });
+    });
+
+    it('another PR drops what the wait kept of the previous one', () => {
+      const held = after(after(inReview(), conflicted), event('pr.opened', { ...pr, number: 8 }));
+      expect(held.waitingOn).toEqual({ blockers: ['REL-2'], start: { job: 'dev' } });
+    });
+
+    it('In Progress, a conflict is not kept: the start it waits for comes first, and its published head raises it again', () => {
+      const t = inReview({ logical: 'dev', ciFixAttempts: bound });
+      const out = decide(t, conflicted, workflow);
+      expect(out.events.map((x) => x.type)).not.toContain('ticket.blocked');
+      expect(after(t, conflicted).waitingOn).toEqual({ blockers: ['REL-2'], start: { job: 'dev' } });
+    });
+
+    it('a relaunch the wait keeps in place of a kept round is no round of the loop (ORC-432)', () => {
+      const t = { ...after(inReview(), red), blocked: true, blockReason: 'Which?', blockKind: 'question' as const, blockedJob: 'dev' };
+      const reply = event('session.prompted', { linearSessionId: 's1', body: 'Go', author: 'L', ack: true, kind: 'instruction' });
+      const held = after(t, reply);
+      expect(held.waitingOn?.round).toBeUndefined();
+      // In review, the end of the wait resumes nothing (ORC-432), and says so: the ack promised a resume.
+      expect(decide(held, done, workflow).effects).toContainEqual({ kind: 'activity', type: 'thought', body: expect.stringContaining('stays blocked') });
     });
   });
 
