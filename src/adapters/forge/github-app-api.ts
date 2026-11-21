@@ -92,6 +92,10 @@ const isBranch = (v: unknown): v is { protection: { enabled: boolean } } =>
 const isRule = (r: unknown): r is { type: string; ruleset_id: number } => isRecord(r) && typeof r.type === 'string' && typeof r.ruleset_id === 'number';
 const isRuleset = (v: unknown): v is { current_user_can_bypass: string } => isRecord(v) && typeof v.current_user_can_bypass === 'string';
 
+/** An installation with its permissions, each a level (`read`, `write`): anything else is no proof of what it holds. */
+const isInstallation = (v: unknown): v is { permissions: Record<string, string> } =>
+  isRecord(v) && isRecord(v.permissions) && Object.values(v.permissions).every((level) => typeof level === 'string');
+
 function hasRequiredReviewers(rules: EnvironmentDto['protection_rules']): boolean {
   return (rules ?? []).some((rule) => rule.type === 'required_reviewers' && (rule.reviewers ?? []).length > 0);
 }
@@ -100,7 +104,7 @@ function hasRequiredReviewers(rules: EnvironmentDto['protection_rules']): boolea
  * Read-only GitHub App client for `factory doctor`.
  * It reuses the App authentication of the forge (JWT, repo-scoped token) and adds
  * the reads its checks need: workflow files and environment rules for the CI secret check, the default branch's
- * protection (ORC-208).
+ * protection (ORC-208), the permissions the App's installation holds (ORC-439).
  * A 404 on `.github/workflows` means no CI, not an error. A 2xx answer it cannot read rejects, never read as
  * "no workflow" or "no environment" (ORC-273): `doctor` would then skip the CI secret check.
  */
@@ -151,5 +155,11 @@ export class GitHubAppApi extends GitHubAppAuth {
       ids.map(async (id) => ({ id, bypass: (await this.read('GET', `${base}/rulesets/${id}`, token, isRuleset, 'a ruleset')).current_user_can_bypass })),
     );
     return { branch, classic, rules: [...new Set(rules.map((rule) => rule.type))].sort(), pullRequestRulesets };
+  }
+
+  /** What the App's installation on the repository holds, as granted, not as the manifest asks: read with the App's JWT. */
+  async installationPermissions(repoPath: string): Promise<Record<string, string>> {
+    const repo = await this.repo(repoPath);
+    return (await this.read('GET', `${repoApi(repo)}/installation`, this.appJwt(), isInstallation, 'an installation with its permissions')).permissions;
   }
 }

@@ -280,3 +280,20 @@ describe('GitHubAppApi.branchProtection (ORC-208)', () => {
     await expect(makeApi(protectionRoutes(branch, rules, repo)).branchProtection('/repo')).rejects.toThrow(/unreadable answer/);
   });
 });
+
+describe('GitHubAppApi.installationPermissions (ORC-439)', () => {
+  it("reads the repository's installation with the App's JWT, never an installation token", async () => {
+    const calls: Call[] = [];
+    const api = makeApi([tokenRoute(), (url) => (url.pathname === '/repos/acme/app/installation' ? { body: { id: 42, permissions: { contents: 'write', administration: 'write' } } } : undefined)], calls);
+    expect(await api.installationPermissions('/repo')).toEqual({ contents: 'write', administration: 'write' });
+    expect(calls.map((c) => new URL(c.url).pathname)).toEqual(['/repos/acme/app/installation']);
+    const [scheme, jwt] = (calls[0]!.headers.authorization ?? calls[0]!.headers.Authorization ?? '').split(' ');
+    expect(scheme).toBe('Bearer');
+    expect(jwt?.split('.')).toHaveLength(3);
+  });
+
+  it('rejects an installation answered without its permissions, saying it is unreadable', async () => {
+    const api = makeApi([(url) => (url.pathname === '/repos/acme/app/installation' ? { body: { id: 42, permissions: { contents: 1 } } } : undefined)]);
+    await expect(api.installationPermissions('/repo')).rejects.toThrow(/unreadable/);
+  });
+});

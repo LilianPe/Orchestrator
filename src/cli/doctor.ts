@@ -50,6 +50,7 @@ export interface DoctorApi {
   listWorkflows(repoPath: string): Promise<WorkflowSource[]>;
   listEnvironments(repoPath: string): Promise<EnvironmentProtection[]>;
   branchProtection(repoPath: string): Promise<BranchProtection>;
+  installationPermissions(repoPath: string): Promise<Record<string, string>>;
 }
 
 type Verdict = 'accepted' | 'refused';
@@ -636,6 +637,46 @@ function analyzeWorkflow(source: WorkflowSource, environments: Map<string, Envir
   };
 }
 
+export interface InstallationReport {
+  /** As GitHub granted them to the installation, absent when it could not be read. */
+  permissions?: Record<string, string>;
+  verdict: Verdict;
+  reasons: string[];
+  /** Told when the permissions could not be read: never a refusal (ORC-439). */
+  warnings?: string[];
+}
+
+const NO_ADMINISTRATION = 'installed without the Administration permission';
+
+/**
+ * Whether the App's installation keeps out of the protection it is held by (ORC-439): with Administration, read or write,
+ * it could edit or delete the rulesets that keep it from merging alone, and read what ORC-428 says it must not.
+ */
+function judgeInstallation(permissions: Record<string, string>): InstallationReport {
+  const level = permissions.administration;
+  if (level === undefined) return { permissions, verdict: 'accepted', reasons: [NO_ADMINISTRATION] };
+  return {
+    permissions,
+    verdict: 'refused',
+    reasons: [
+      `installed with Administration (${level}): the daemon could edit or delete the rules that keep it from merging alone. ` +
+        "Remove it: in the App's settings (Settings → Developer settings → GitHub Apps → the App → Permissions & events), " +
+        'set Repository permissions → Administration to No access and save, then check in the installation (Settings → Applications → ' +
+        'Installed GitHub Apps → Configure) that Administration is no longer listed (docs/github-app-manifest.json).',
+    ],
+  };
+}
+
+/** An installation that could not be read (network, authentication): a warning, never the verdict (ORC-439). */
+const unreadInstallation = (error: unknown): InstallationReport => ({
+  verdict: 'accepted',
+  reasons: ['not checked, see the warning'],
+  warnings: [
+    `Warning: the App's installation permissions not read: ${errorMessage(error)}. ` +
+      "Check by hand that the installation does not hold Administration (Settings → Applications → Installed GitHub Apps → Configure).",
+  ],
+});
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -652,9 +693,10 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
     verdict: 'refused',
     reasons: [`Cannot read the protection of the default branch: ${errorMessage(error)}`],
   }));
-  // Unreadable workflows or environments still tell the host's and the protection's verdicts.
+  const installationRead = api.installationPermissions(repoPath).then(judgeInstallation, unreadInstallation);
+  // Unreadable workflows or environments still tell the host's, the protection's and the installation's verdicts.
   const failure = async (message: string) =>
-    doctorFailure(options, message, ignored, warnings, { host: options.host, branchProtection: await protectionRead });
+    doctorFailure(options, message, ignored, warnings, { host: options.host, branchProtection: await protectionRead, installation: await installationRead });
   let workflows: WorkflowSource[];
   try {
     workflows = await api.listWorkflows(repoPath);
@@ -670,6 +712,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
     }
   }
   const protection = await protectionRead;
+  const installation = await installationRead;
   const { host } = options;
   const environmentMap = new Map(environments.map((environment) => [environment.name, environment] as const));
   const factory = factoryBranches(options.naming ?? DEFAULT_BRANCH_NAMING);
@@ -682,14 +725,15 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
     ...(protection.verdict === 'refused'
       ? [protection.branch === undefined ? "the default branch's protection cannot be read" : `the default branch${branch} is not protected`]
       : []),
+    ...(installation.verdict === 'refused' ? ['the GitHub App is installed with the Administration permission'] : []),
     ...(refused > 0 ? [`${refused} workflow(s) of ${reports.length} can expose secrets or a writable GITHUB_TOKEN to the factory's branches`] : []),
   ];
   const accepted = refusals.length === 0;
 
   if (options.json) {
-    out(JSON.stringify({ repoPath, accepted, host, branchProtection: protection, workflows: reports, ...notes(ignored, warnings), ...instanceReportOf(options) }, null, 2));
+    out(JSON.stringify({ repoPath, accepted, host, branchProtection: protection, installation, workflows: reports, ...notes(ignored, warnings), ...instanceReportOf(options) }, null, 2));
   } else {
-    for (const line of verdictLines({ host, branchProtection: protection })) out(line);
+    for (const line of verdictLines({ host, branchProtection: protection, installation })) out(line);
     if (reports.length === 0) out('No GitHub Actions workflow found.');
     else {
       out(`GitHub Actions workflows: ${reports.length}`);
@@ -716,7 +760,8 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
     }
     out(
       accepted
-        ? "Result: accepted — a cgroup v2 host, a protected default branch, and no workflow can expose a secret or a writable GITHUB_TOKEN to the factory's branches. Check by hand what the warning under the default branch names."
+        ? `Result: accepted — a cgroup v2 host, a protected default branch, ${installation.warnings ? '' : 'an App installed without Administration, '}and no workflow can expose a secret or a writable GITHUB_TOKEN to the factory's branches. ` +
+            `Check by hand what the warning under the default branch names${installation.warnings ? ', and the one under the GitHub App installation' : ''}.`
         : `Result: refused — ${refusals.join('; ')}.`,
     );
   }
@@ -729,15 +774,18 @@ const notes = (ignored: string[], warnings: string[]) => ({ ...(ignored.length ?
 interface Verdicts {
   host: HostReport;
   branchProtection: BranchProtectionReport;
+  installation: InstallationReport;
 }
 
-/** The host's and the default branch's verdicts, in text, then a blank line. */
-function verdictLines({ host, branchProtection: protection }: Verdicts): string[] {
+/** The host's, the default branch's and the App installation's verdicts, in text, then a blank line. */
+function verdictLines({ host, branchProtection: protection, installation }: Verdicts): string[] {
   const branch = protection.branch ? ` ${protection.branch}` : '';
   return [
     `Host: ${host.verdict} — ${host.reasons.join(' ')}`,
     `Default branch${branch}: ${protection.verdict} — ${protection.reasons.join(' ')}`,
     ...(protection.warnings ?? []).map((warning) => `  ${warning}`),
+    `GitHub App installation: ${installation.verdict} — ${installation.reasons.join(' ')}`,
+    ...(installation.warnings ?? []).map((warning) => `  ${warning}`),
     '',
   ];
 }

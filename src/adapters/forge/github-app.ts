@@ -360,6 +360,11 @@ export class GitHubAppAuth {
     return request;
   }
 
+  /** The App's own JWT, for the few endpoints an installation token cannot call (`/repos/{owner}/{repo}/installation`). */
+  protected appJwt(): string {
+    return createAppJwt(this.appId, this.#privateKey, this.now());
+  }
+
   private async fetchInstallationToken(repo: GitHubRepoRef, now: number): Promise<string> {
     const jwt = createAppJwt(this.appId, this.#privateKey, now);
     const installationId = this.installationId ?? (await this.findInstallationId(repo, jwt));
