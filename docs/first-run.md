@@ -14,7 +14,7 @@ Nothing below can be skipped for a real run: without rootless Podman and the run
 | 2 | **`.factory/config.yml` with `commands.test`**, merged on the default branch | `factory init` proposes it (step 2); commit it through a normal PR. Without `commands.test` every ticket blocks at the tests step. | the repository, default branch |
 | 3 | **Branch protection** on the default branch: a ruleset with *Require a pull request before merging* that the App cannot bypass | GitHub → repository → Settings → Rules → Rulesets ([`github.md`](github.md#branch-protection-required-by-factory-doctor)). `factory doctor` refuses without it. | GitHub |
 | 4 | **A test GitHub App** with the permissions of [`github-app-manifest.json`](github-app-manifest.json) (Contents, Pull requests, Checks write; Commit statuses, Actions, Metadata read), **its private key**, and **installed on the pilot repository** | `factory init` prints the steps, with the permissions (step 2); details in [`github.md`, "Creating the App"](github.md#creating-the-app). Locally, leave its webhook disabled: the factory reads the PRs at its reconciliation, every 5 minutes. Keep the `.pem` outside the repository, mode `0600`. | `factory.yml`, written by `factory init`: `github: { app_id: env:GH_APP_ID, private_key: env:GH_APP_KEY }`, with `GH_APP_ID` (the App ID) and `GH_APP_KEY` (the `.pem` path) in the daemon's environment. |
-| 5 | **A Linear OAuth application** (not a personal API key), created by a Linear workspace admin, with webhooks on | `factory init` prints the exact callback URL, webhook URL and categories (step 2); details in [`linear.md`](linear.md#1-create-the-oauth-application). | Client ID, client secret and webhook signing secret typed into `factory init` → `secrets.json`. The OAuth tokens come later, from « Connect Linear ». |
+| 5 | **A Linear OAuth application** (not a personal API key), created by a Linear workspace admin, with webhooks on | `factory init` prints the exact callback URL, webhook URL and categories (step 2); details in [`linear.md`](linear.md#1-create-the-oauth-application). | Client ID, client secret and webhook signing secret typed into `factory init` → `secrets.json`, encrypted with the `secrets_key` `factory init --dev` draws (ORC-470). The OAuth tokens come later, from « Connect Linear », encrypted alike. |
 | 6 | **A public URL for Linear's webhooks** | Locally, nothing to create: run **`factory init --dev`**, which creates a smee.io channel when `factory.yml` has neither `public_url` nor a relay (ORC-411: without `--dev`, `init` creates none and asks nothing of Linear, which has nowhere to send the webhooks). Or a tunnel (`cloudflared tunnel --url http://localhost:4100`) in `public_url` of `factory.yml` before `factory init`, needed anyway if Linear refuses the `http://localhost` callback ([`linear.md`](linear.md#3-webhooks-production-and-development)). | `factory.yml`: `relay` (smee, written by `factory init --dev`) or `public_url` |
 | 7 | **A Claude Code token** | `claude setup-token` on a machine logged in to the subscription account. | `factory.yml`: `claude.accounts[].token: env:CLAUDE_CODE_OAUTH_TOKEN` (any variable name), and that variable in the daemon's environment. In a sandbox the egress proxy sets it on the model calls; the agent only holds a placeholder. |
 | 8 | **Rootless Podman on Linux, cgroup v2**, with the systemd cgroup manager and the `cpu`, `memory` and `pids` controllers delegated to your user | `sudo loginctl enable-linger <user>`; check with `podman info --format json` (`host.cgroupVersion: v2`, `host.cgroupManager: systemd`, `host.security.rootless: true`). On Windows, inside WSL2 only: the sandboxes need a Linux daemon. `factory doctor` checks all of it (step 3). | `FACTORY_CONTAINER_CLI=podman` in the daemon's environment |
@@ -41,6 +41,8 @@ factory init --dev
 ```
 
 `--dev` is what a local run needs: with no `public_url` in `factory.yml`, it creates the smee.io channel that relays Linear's webhooks to your machine (item 6). Without it, `init` creates no channel, says `No public URL for Linear's webhooks: …` and skips the Linear application; with a `public_url`, `--dev` changes nothing. A channel already in `factory.yml` is kept either way.
+
+`--dev` also draws `secrets_key`, the key that encrypts `secrets.json`, when `factory.yml` names none (ORC-470): it writes it to `FACTORY_HOME/secrets.key` (mode `0600`) and declares it in `factory.yml`, and never prints it. Linear's values and tokens are never written in clear: without `secrets_key`, `init` refuses before asking anything when it would ask them, and `factory up` and `factory doctor` refuse as soon as `factory.yml` has a `linear` section or `secrets.json` exists (`Linear's tokens and credentials are kept in secrets.json, never in clear: set secrets_key in factory.yml …`). Keep `secrets.key` with `secrets.json`: losing it loses the Linear values (run `factory init --dev` again, then « Connect Linear »). On a server, write `secrets_key` yourself, from a sealed source ([`configuration.md`](configuration.md#secretsjson)).
 
 It asks the Linear team key, then prints what to create in Linear, with your instance's URLs:
 
@@ -99,11 +101,11 @@ Wrote /home/<user>/.factory/factory.yml: its secrets are references; export them
   export CLAUDE_CODE_OAUTH_TOKEN=<token of claude setup-token>
 ```
 
-It ends with `Configuration written.` and its next steps. It wrote `FACTORY_HOME/factory.yml` (its secrets as references, then the project, the relay, `dev: true`) and `FACTORY_HOME/secrets.json` (mode `0600`). There is no `config.yaml` any more (ORC-199): the daemon reads `factory.yml` alone, refuses to start without it, and names a `config.yaml` left from an older install, never read, to delete.
+It ends with `Configuration written.` and its next steps. It wrote `FACTORY_HOME/factory.yml` (its secrets as references, then the project, the relay, `dev: true`, and the reference of `secrets_key`), `FACTORY_HOME/secrets.key` and `FACTORY_HOME/secrets.json` (both mode `0600`, `secrets.json` encrypted). There is no `config.yaml` any more (ORC-199): the daemon reads `factory.yml` alone, refuses to start without it, and names a `config.yaml` left from an older install, never read, to delete.
 
 Run again, `factory init` erases nothing (ORC-83): an empty answer keeps the team key and the stored Linear values (and « Connect Linear »'s tokens, as long as the client ID is the same), the project's roles stay, and of an existing `factory.yml` it writes only the projects and the webhook relay, the rest of the file and its comments kept (`… factory.yml: its projects and webhook relay written, the rest kept as it is.`). A new client ID asks for its secrets: nothing of the old application is kept.
 
-`FACTORY_HOME/factory.yml` is read whole by `factory up`, `factory doctor` and `factory plan` with the daemon's environment, by `factory validate` for its budgets, `max_diff` and tools, and by the other commands for its port and projects alone. The one `init` wrote:
+`FACTORY_HOME/factory.yml` is read whole by `factory up` and `factory doctor` with the daemon's environment, by `factory validate` for its budgets, `max_diff` and tools, and by the other commands for its port and projects alone. The one `init` wrote:
 
 ```yaml
 # Written by factory init: every secret is a reference, read from the daemon's environment.
@@ -130,6 +132,11 @@ projects:
   - id: pilot
     repo_path: /home/<user>/code/pilot
     linear_team_key: PIL
+secret_sources:                  # the key --dev drew (ORC-470), never its value
+  factory_home:
+    kind: file
+    dir: /home/<user>/.factory
+secrets_key: factory_home:secrets.key
 ```
 
 Now add by hand, under the project, the roles of items 11 and 12:
@@ -193,7 +200,8 @@ Visual proof on this instance: unavailable — FACTORY_BROWSER_IMAGE is not set 
 Server secrets:
   github.private_key (env:GH_APP_KEY): in clear — warning: in clear in the daemon's environment: a sealed source (systemd-creds) keeps it off the disk
   claude.accounts[0].token (env:CLAUDE_CODE_OAUTH_TOKEN): in clear — warning: in clear in the daemon's environment: a sealed source (systemd-creds) keeps it off the disk
-  secrets.json: in clear — warning: in clear on disk: set secrets_key in factory.yml to encrypt it
+  secrets_key (factory_home:secrets.key): in clear, rotated <date> — warning: in clear in a file, its owner's alone: for a workstation; on a server, a sealed source (systemd-creds) keeps it off the disk
+  secrets.json: sealed
 ```
 
 These warnings are expected on a workstation. Two other warnings must not be there for a first run:
@@ -214,7 +222,7 @@ then each GitHub Actions workflow with its verdict (or `No GitHub Actions workfl
 
 | Output | Cause | Fix |
 |---|---|---|
-| `invalid factory.yml:` then `github.app_id: the environment variable GH_APP_ID is not set` (or `claude.accounts[0].token: …`) | a variable `factory.yml` references is not in this shell (`factory plan` says the same) | run it in the daemon's environment (step 2) |
+| `invalid factory.yml:` then `github.app_id: the environment variable GH_APP_ID is not set` (or `claude.accounts[0].token: …`) | a variable `factory.yml` references is not in this shell | run it in the daemon's environment (step 2) |
 | `invalid factory.yml:` then `claude.default_model: required` or `` claude.runtime: only `claude-code` exists `` | the `claude` section | as in step 2 |
 | any message `factory up` refuses to start with (`factory.yml: statuses.…`, `host: … exposes …`) | the same as at the start: `doctor` runs the start's checks of `factory.yml` (`no factory.yml in FACTORY_HOME: …` without one) | as the message says |
 | `` GitHub App not configured: `factory doctor` needs github.app_id and github.private_key in factory.yml (or GH_APP_ID and GH_APP_KEY) … `` | no `github` in `factory.yml`, and no `GH_APP_*` | item 4 |
@@ -263,7 +271,7 @@ The GitHub webhooks line is expected locally: a merge or a CI verdict then reach
 
 Then open `http://localhost:4100`, click **Connect Linear** and authorize the application: « Linear is connected. You can close this tab. ». The factory creates the missing statuses of the team (Todo, Spec, In Progress, Human Review, AI Review, Done) and the `Bloqué` label.
 
-In another terminal, with the same `FACTORY_HOME`: `factory status` (`Linear: connected · queue: active …`) and `factory plan`, which lists the tickets delegated to the agent and whether each would be picked up, without starting anything (`` Linear not connected: run `factory up`, then connect Linear. `` before the connection).
+In another terminal, with the same `FACTORY_HOME`: `factory status` (`Linear: connected · queue: 0 waiting`), which lists the tickets the factory holds and their runs.
 
 Then the dry run of the pilot, with the project's `id` in `factory.yml` (`pilot` in step 2), in that same terminal:
 
@@ -297,5 +305,5 @@ A blocked ticket waits for a human: reply on the ticket (comment or session) and
 
 ## Troubleshooting
 
-- **`factory status` says `Orchestrator did not answer through …/cli/factory.sock (connect EINVAL …)`**, and the daemon logged `CLI socket: … cannot be listened on (listen EINVAL …)`: the socket's path is longer than Linux allows (108 bytes). `status`, `pause`, `resume` and `stop` then fail; use a shorter `FACTORY_HOME` and restart the daemon.
+- **`factory status` says `Orchestrator did not answer through …/cli/factory.sock (connect EINVAL …)`**, and the daemon logged `CLI socket: … cannot be listened on (listen EINVAL …)`: the socket's path is longer than Linux allows (108 bytes). `status`, `stop` and `dry-run` then fail; use a shorter `FACTORY_HOME` and restart the daemon.
 - More: [`operations.md`](operations.md#troubleshooting).

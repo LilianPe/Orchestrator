@@ -39,7 +39,7 @@ async function storedTickets(store: Store, team: string[], ticketId: string): Pr
 }
 
 /** A team's delegated issues, read once per pass, each with the project it goes to (sticky routing, ORC-291). */
-export async function routedIssues(d: { tracker: Pick<Tracker, 'listDelegated'>; store: Store }, teamKey: string, team: string[]): Promise<RoutedIssue[]> {
+async function routedIssues(d: { tracker: Pick<Tracker, 'listDelegated'>; store: Store }, teamKey: string, team: string[]): Promise<RoutedIssue[]> {
   const issues: RoutedIssue[] = [];
   for (const issue of await d.tracker.listDelegated(teamKey)) {
     issues.push({ ...issue, ...resolveRoute(team, await storedTickets(d.store, team, issue.identifier), issue.labels) });

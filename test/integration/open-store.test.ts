@@ -32,7 +32,7 @@ describe.skipIf(!PG_URL)('openStore and the daemon on Postgres', () => {
       (await c.query<{ name: string }>(`select table_name as name from information_schema.tables where table_schema = current_schema()`)).rows.map((r) => r.name),
     );
 
-  it('opens Postgres without migrating it with `migrate: false` (factory plan)', async () => {
+  it('opens Postgres without migrating it with `migrate: false` (the commands of the CLI)', async () => {
     const store = await openStore({ env: { [DATABASE_URL_ENV]: other.url }, migrationsFolder, migrate: false });
     expect(store).toBeInstanceOf(PgStore);
     await store.close();

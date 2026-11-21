@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { generateKeyPairSync } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -11,16 +11,25 @@ import { Daemon, type DaemonDeps } from '../runtime/daemon.js';
 import type { TicketState } from '../core/types.js';
 import type { RunRecord } from '../store/types.js';
 import { TimerService } from '../runtime/timers.js';
-import { oldInstanceFileWarnings, saveInstance, saveSecrets, validatorWarnings } from '../config/instance.js';
+import { oldInstanceFileWarnings, saveInstance, saveSecrets, validatorWarnings, type LinearSecrets } from '../config/instance.js';
+import { LINEAR_NEEDS_SECRETS_KEY } from '../config/secrets-file.js';
 import { defaultWorkflow } from '../presets/workflow.js';
 import { createMissingStatuses, startFactory, type BootOptions } from './bootstrap.js';
-import { runQueueCommand, runStatusCommand } from '../cli/control.js';
+import { runStatusCommand } from '../cli/control.js';
 import { MemoryStore } from '../store/memory-store.js';
 import { oldDatabaseWarnings } from '../store/old-databases.js';
 import { TrackerSwitch } from './tracker-switch.js';
 
 /** A start on a MemoryStore of its own, Postgres being the instance's only store (ORC-178): test/integration/open-store.test.ts starts on it. */
 const startOnMemory = (o: BootOptions) => startFactory({ store: new MemoryStore(), ...o });
+
+/** The daemon's `secrets_key`, from its environment: Linear's tokens are never written in clear (ORC-470). */
+const KEY_ENV = { FACTORY_SECRETS_KEY: 'k'.repeat(44) };
+/** Linear's values in `home`'s secrets.json, sealed with the `secrets_key` factory.yml names, read from `KEY_ENV`. */
+function storeLinear(home: string, linear: LinearSecrets): void {
+  appendFileSync(join(home, 'factory.yml'), 'secrets_key: env:FACTORY_SECRETS_KEY\n');
+  saveSecrets(home, { linear }, KEY_ENV.FACTORY_SECRETS_KEY);
+}
 
 describe('bootstrap', () => {
   it('starts without Linear, serves state and stops cleanly', async () => {
@@ -195,7 +204,8 @@ describe('bootstrap', () => {
       writeFileSync(join(credentials, 'github-key'), privateKey.export({ type: 'pkcs8', format: 'pem' }).toString());
       writeFileSync(join(credentials, 'secrets-key'), 'a-secrets-key-of-at-least-32-characters\n');
       saveInstance(home, { port: 4174, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
-      saveSecrets(home, { linear: { clientId: 'c', clientSecret: 'linear-client-secret', webhookSecret: 'linear-webhook-secret', accessToken: 'linear-access-token' } });
+      // Written in clear before ORC-398.
+      writeFileSync(join(home, 'secrets.json'), JSON.stringify({ linear: { clientId: 'c', clientSecret: 'linear-client-secret', webhookSecret: 'linear-webhook-secret', accessToken: 'linear-access-token' } }));
       appendFileSync(join(home, 'factory.yml'), SEALED_YML);
       const logs: string[] = [];
       const app = await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: { CREDENTIALS_DIRECTORY: credentials } });
@@ -245,6 +255,26 @@ describe('bootstrap', () => {
     expect(await planned()).toEqual([['a', '_reconcile.a:reconcile'], ['b', '_reconcile.b:reconcile']]);
     await start([a]);
     expect(await planned()).toEqual([['a', '_reconcile.a:reconcile']]);
+  });
+
+  // ORC-200: nothing pauses or resumes the queue any more; a pause left from before would hold every launch for good.
+  it('lifts a pause of the queue left from before the global pause was removed, and says so', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    saveInstance(home, { port: 4177, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', repoPath: mkdtempSync(join(tmpdir(), 'factory-repo-')), linearTeamKey: 'REL' }] });
+    const store = new MemoryStore();
+    await store.setMeta('paused', '1');
+    const logs: string[] = [];
+    const app = await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {}, store });
+    try {
+      await vi.waitFor(async () => expect(await store.getMeta('paused')).toBe('0'), { timeout: 5000, interval: 50 });
+      expect(logs).toContain('The queue was paused, and nothing pauses it any more (ORC-200): it is resumed.');
+    } finally {
+      await app.stop();
+    }
+    // Once only: a queue not paused is left as it is.
+    logs.length = 0;
+    await (await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {}, store })).stop();
+    expect(logs.join('\n')).not.toContain('ORC-200');
   });
 
   it('starts without a GitHub App, warning that it reads no PR and publishes nothing: no gh fallback (ORC-181)', async () => {
@@ -350,9 +380,9 @@ describe('bootstrap', () => {
   ])('warns at startup only when the webhook signing secret is unusable ($webhookSecret)', async ({ webhookSecret, warns, port }) => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     saveInstance(home, { port, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
-    if (webhookSecret !== undefined) saveSecrets(home, { linear: { clientId: 'cid', clientSecret: 'cs', webhookSecret } });
+    if (webhookSecret !== undefined) storeLinear(home, { clientId: 'cid', clientSecret: 'cs', webhookSecret });
     const logs: string[] = [];
-    const app = await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m) });
+    const app = await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: KEY_ENV });
     await app.stop();
     expect(logs.some((m) => m.includes('webhook secret') && m.includes('refused'))).toBe(warns);
   });
@@ -474,7 +504,27 @@ describe('bootstrap', () => {
     await expect(start(client)).rejects.toThrow(/public_url.*https/);
   });
 
-  // ORC-398: exposed, secrets.json must be encrypted at rest; on the loopback, secrets_key stays optional.
+  // ORC-470: on the loopback too, as soon as Linear is there: a linear section of factory.yml, or a secrets.json, sealed or not.
+  it('refuses on the loopback without secrets_key beside Linear, before writing anything, and starts once it is set', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    saveInstance(home, { port: 4171, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
+    const refusal = `${LINEAR_NEEDS_SECRETS_KEY}.`;
+    const plain = JSON.stringify({ linear: { clientId: 'cid', clientSecret: 'canary-client-secret-470', webhookSecret: 'canary-webhook-secret-470' } });
+    writeFileSync(join(home, 'secrets.json'), plain);
+    await expect(startOnMemory({ home, fakeRunner: true, log: () => {}, env: {} })).rejects.toThrow(refusal);
+    expect(readFileSync(join(home, 'secrets.json'), 'utf8')).toBe(plain);
+    rmSync(join(home, 'secrets.json'));
+    appendFileSync(join(home, 'factory.yml'), 'linear: { app_client_id: cid, client_secret: env:LINEAR_CLIENT_SECRET, webhook_secret: env:LINEAR_WEBHOOK_SECRET }\n');
+    const env = { LINEAR_CLIENT_SECRET: 'canary-client-secret-470', LINEAR_WEBHOOK_SECRET: 'canary-webhook-secret-470' };
+    await expect(startOnMemory({ home, fakeRunner: true, log: () => {}, env })).rejects.toThrow(refusal);
+    expect(existsSync(join(home, 'secrets.json'))).toBe(false);
+    // Set, the start goes on: Connect Linear writes its tokens sealed.
+    storeLinear(home, { clientId: 'cid', clientSecret: '', webhookSecret: '' });
+    const app = await startOnMemory({ home, fakeRunner: true, log: () => {}, env: { ...env, ...KEY_ENV } });
+    await app.stop();
+  });
+
+  // ORC-398: exposed, secrets.json must be encrypted at rest; without Linear on the loopback, secrets_key stays optional.
   it('refuses a non-loopback host without secrets_key, naming it; starts on the loopback without it', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     const env = { GH_APP_CLIENT_ID: 'Iv1.client', GH_APP_CLIENT_SECRET: 'client-secret' };
@@ -549,10 +599,8 @@ describe('bootstrap', () => {
         expect(statSync(join(home, 'cli')).mode & 0o777).toBe(0o700);
         const lines: string[] = [];
         const cli = { api: 'http://127.0.0.1:4195', socket, out: (l: string) => void lines.push(l) };
-        expect(await runQueueCommand(cli, 'pause')).toBe(0);
         expect(await runStatusCommand(cli)).toBe(0);
-        expect(lines[0]).toBe('Queue paused.');
-        expect(lines[1]).toMatch(/^Linear: not connected · queue: /);
+        expect(lines[0]).toBe('Linear: not connected · queue: 0 waiting');
       }
       // A page sends the browser to GitHub, to the App's authorization, coming back to the public URL.
       const page = await fetch('http://127.0.0.1:4195/', { headers: { accept: 'text/html' }, redirect: 'manual' });
@@ -574,8 +622,8 @@ describe('bootstrap', () => {
     const boot = (port: number, relay: Parameters<typeof saveInstance>[1]['relay'], o: { env?: NodeJS.ProcessEnv; log?: (m: string) => void } = {}) => {
       const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
       saveInstance(home, { port, host: '127.0.0.1', relay, projects: [] });
-      saveSecrets(home, { linear: { clientId: 'cid', clientSecret: 'cs', webhookSecret: 'linear-secret' } });
-      return startOnMemory({ home, fakeRunner: true, log: o.log ?? (() => {}), env: o.env ?? {} });
+      storeLinear(home, { clientId: 'cid', clientSecret: 'cs', webhookSecret: 'linear-secret' });
+      return startOnMemory({ home, fakeRunner: true, log: o.log ?? (() => {}), env: { ...KEY_ENV, ...o.env } });
     };
 
     it('refuses on each webhook route a body unsigned, signed with another secret, or stale, and takes a signed fresh one', async () => {

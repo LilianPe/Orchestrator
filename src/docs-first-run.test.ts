@@ -3,10 +3,11 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 // The first-run guide (ORC-429) must not drift from the CLI: every `factory` command it quotes, with its flags, is one
-// src/cli/factory.ts dispatches and lists in its usage.
+// src/cli/factory.ts dispatches and src/cli/usage.ts lists in its usage.
 const root = join(import.meta.dirname, '..');
 const guide = readFileSync(join(root, 'docs/first-run.md'), 'utf8');
-const cli = readFileSync(join(root, 'src/cli/factory.ts'), 'utf8');
+// The dispatch and its parseArgs options, then the usage (ORC-200).
+const cli = ['src/cli/factory.ts', 'src/cli/usage.ts'].map((f) => readFileSync(join(root, f), 'utf8')).join('\n');
 
 /** The commands of the CLI's usage, each with the flags its line names, and the flags `parseArgs` accepts. */
 function cliDefinitions(source: string) {
@@ -71,7 +72,7 @@ describe('docs/first-run.md', () => {
   const quoted = quotedCommands(guide);
 
   it('quotes the commands of a first run, flags included', () => {
-    for (const cmd of ['factory init', 'factory init --dev', 'factory validate', 'factory doctor', 'factory doctor --json', 'factory up', 'factory plan', 'factory status', 'factory stop <ID>']) {
+    for (const cmd of ['factory init', 'factory init --dev', 'factory validate', 'factory doctor', 'factory doctor --json', 'factory up', 'factory status', 'factory stop <ID>']) {
       expect(quoted).toContain(cmd);
     }
   });
@@ -85,10 +86,10 @@ describe('docs/first-run.md', () => {
     expect(problem('factory teleport')).toMatch(/not a command/);
     expect(problem('factory doctor --fix')).toMatch(/--fix is not in the usage of `doctor`/);
     expect(problem('factory up --json')).toMatch(/--json is not in the usage of `up`/);
-    expect(problem('factory up --fake-runner')).toBeUndefined();
+    expect(problem('factory up --fake-runner')).toMatch(/--fake-runner is not in the usage of `up`/);
     expect(problem('factory validate')).toBeUndefined();
-    expect(problem('factory pause')).toBeUndefined();
-    expect(problem('factory resume')).toBeUndefined();
+    expect(problem('factory plan')).toMatch(/not a command/);
+    expect(problem('factory pause')).toMatch(/not a command/);
     expect(problem('factory --json')).toMatch(/no command before --json/);
     expect(problem('factory')).toBeUndefined();
     expect(quotedCommands('```sh\n$ factory dry-run\n```')).toEqual(['factory dry-run']);

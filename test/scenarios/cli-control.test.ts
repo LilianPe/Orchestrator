@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { nothingReached, runDryRunCommand, runQueueCommand, runStatusCommand, runStopCommand, type ControlDeps } from '../../src/cli/control.js';
+import { nothingReached, runDryRunCommand, runStatusCommand, runStopCommand, type ControlDeps } from '../../src/cli/control.js';
 import type { DryRun } from '../../src/core/dry-run.js';
 import { EventBus } from '../../src/server/live-feed.js';
 import { newTicketState, type FactoryEvent } from '../../src/core/types.js';
@@ -48,10 +48,11 @@ describe('factory status and factory stop (ORC-220)', () => {
     await h.advance(5 * 60_000);
     const c = control(h);
     expect(await runStatusCommand(c, h.clock.now())).toBe(0);
-    expect(c.lines[0]).toContain('dev slots 1/3');
-    expect(c.lines[0]).not.toContain('cost today'); // No day counted in dollars (ORC-194).
+    // Neither dev slots nor dollars (ORC-194, ORC-200).
+    expect(c.lines[0]).toBe('Linear: connected · queue: 0 waiting');
     expect(c.lines).toContain('  REL-1  dev  Export CSV');
-    expect(c.lines).toContain(`    run ${runId}: dev, for 5 min, 0.00 $`);
+    expect(c.lines).toContain(`    run ${runId}: dev, for 5 min`);
+    expect(c.lines.join('\n')).not.toMatch(/\$|slots|paused/);
   });
 
   it('status tells a lease expired that nothing took up yet, and a blocked ticket its reason', async () => {
@@ -100,16 +101,8 @@ describe('factory status and factory stop (ORC-220)', () => {
     expect(c.lines[0]).toContain('REL-9 unknown');
   });
 
-  it('pauses and resumes the queue, and says so only once the daemon has taken the command', async () => {
-    const h = createHarness();
-    const c = control(h);
-    expect(await runQueueCommand(c, 'pause')).toBe(0);
-    expect(await runQueueCommand(c, 'resume')).toBe(0);
-    expect(c.lines).toEqual(['Queue paused.', 'Queue resumed.']);
-  });
-
   // ORC-399: off the loopback the daemon asks for a GitHub sign-in the CLI cannot give: each command says so, and never that
-  // the queue is paused.
+  // it took the command.
   it('says what to do when the daemon is down or asks for a GitHub sign-in, and never that it took the command', async () => {
     const lines: string[] = [];
     const deps = { api: 'http://127.0.0.1:1', out: (l: string) => void lines.push(l) };
@@ -120,11 +113,9 @@ describe('factory status and factory stop (ORC-220)', () => {
     expect(lines.at(-1)).toContain('factory up');
     expect(await runStopCommand({ ...deps, fetch: signIn }, 'REL-1')).toBe(1);
     expect(lines.at(-1)).toBe(SIGN_IN);
-    expect(await runQueueCommand({ ...deps, fetch: signIn }, 'pause')).toBe(1);
-    expect(lines.at(-1)).toBe(SIGN_IN);
-    expect(await runQueueCommand({ ...deps, fetch: down }, 'resume')).toBe(1);
+    expect(await runStopCommand({ ...deps, fetch: down }, 'REL-1')).toBe(1);
     expect(lines.at(-1)).toContain('factory up');
-    expect(lines.join('\n')).not.toMatch(/Queue (paused|resumed)\./);
+    expect(lines.join('\n')).not.toMatch(/Stop requested/);
   });
 });
 
@@ -224,24 +215,18 @@ describe.skipIf(process.platform === 'win32')("the CLI through the daemon's Unix
   }
   const close = (s: Server) => new Promise((r) => s.close(r));
 
-  // Criterion 1: status, stop and pause work on the server of an exposed daemon, without a GitHub sign-in.
-  it('runs status, pause, resume and stop on an exposed daemon, without a GitHub sign-in, as cli:<host>', async () => {
+  // Criterion 1: status and stop work on the server of an exposed daemon, without a GitHub sign-in.
+  it('runs status and stop on an exposed daemon, without a GitHub sign-in, as cli:<host>', async () => {
     const { h, server, submitted, lines, deps } = await exposed();
     try {
       await heldRun(h);
       expect(await runStatusCommand(deps, h.clock.now())).toBe(0);
       expect(lines).toContain('  REL-1  dev  Export CSV');
-      expect(await runQueueCommand(deps, 'pause')).toBe(0);
-      expect(await runQueueCommand(deps, 'resume')).toBe(0);
       expect(await runStopCommand(deps, 'REL-1')).toBe(0);
-      expect(lines.slice(-3)).toEqual(['Queue paused.', 'Queue resumed.', 'Stop requested for REL-1.']);
+      expect(lines.at(-1)).toBe('Stop requested for REL-1.');
       await h.orch.drained();
       // Checked on the matrix as an operator (ORC-186), and decided: the ticket is stopped.
-      expect(submitted.map((e) => [e.type, e.actor, e.roles])).toEqual([
-        ['control.pause', 'cli:srv-1', ['operator']],
-        ['control.resume', 'cli:srv-1', ['operator']],
-        ['control.stop', 'cli:srv-1', ['operator']],
-      ]);
+      expect(submitted.map((e) => [e.type, e.actor, e.roles])).toEqual([['control.stop', 'cli:srv-1', ['operator']]]);
       expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Stopped on request' });
     } finally {
       await close(server);
@@ -265,7 +250,8 @@ describe.skipIf(process.platform === 'win32')("the CLI through the daemon's Unix
     const log = (l: string) => void logs.push(l);
     // A second daemon on the same FACTORY_HOME: the first keeps its socket, and the CLI still reaches it.
     expect(await listenCliSocket(first.app, first.socket, { host: 'srv-2', log })).toBeUndefined();
-    expect(await runQueueCommand(first.deps, 'pause')).toBe(0);
+    await heldRun(first.h);
+    expect(await runStopCommand(first.deps, 'REL-1')).toBe(0);
     expect(first.submitted.map((e) => e.actor)).toEqual(['cli:srv-1']);
     const notASocket = join(mkdtempSync(join(tmpdir(), 'factory-home-')), 'factory.sock');
     writeFileSync(notASocket, 'kept');
@@ -280,7 +266,7 @@ describe.skipIf(process.platform === 'win32')("the CLI through the daemon's Unix
     expect(statSync(stale).isSocket()).toBe(true);
     const again = await listenCliSocket(first.app, stale, { host: 'srv-3', log });
     expect(again).toBeDefined();
-    expect(await runQueueCommand({ ...first.deps, socket: stale }, 'resume')).toBe(0);
+    expect(await runStopCommand({ ...first.deps, socket: stale }, 'REL-1')).toBe(0);
     expect(first.submitted.map((e) => e.actor)).toEqual(['cli:srv-1', 'cli:srv-3']);
     await close(again!);
     await close(first.server);
@@ -310,7 +296,7 @@ describe.skipIf(process.platform === 'win32')("the CLI through the daemon's Unix
     const tooLong = join(tmpdir(), 'x'.repeat(200), 'factory.sock');
     expect(await runStatusCommand({ ...c, socket: tooLong, fetch: (url, init) => (asked.push(url), c.fetch!(url, init)) })).toBe(0);
     expect(asked).toEqual(['http://127.0.0.1:4100/api/state']);
-    expect(c.lines[0]).toContain('dev slots 1/3');
+    expect(c.lines[0]).toBe('Linear: connected · queue: 0 waiting');
   });
 });
 
@@ -318,8 +304,8 @@ describe.skipIf(process.platform === 'win32')("the CLI through the daemon's Unix
  * A daemon that takes the request and never ends its answer (ORC-434), on the loopback or on a Unix socket: silent, or as
  * `answer` starts it; and the lines of the CLI's commands against it, which wait 0.2 s.
  */
-async function mute(o: { socket?: string; answer?: (res: import('node:http').ServerResponse) => void } = {}) {
-  const server = createServer((_req, res) => o.answer?.(res));
+async function mute(o: { socket?: string; answer?: (res: import('node:http').ServerResponse, req: import('node:http').IncomingMessage) => void } = {}) {
+  const server = createServer((req, res) => o.answer?.(res, req));
   await new Promise<void>((r) => (o.socket ? server.listen(o.socket, r) : server.listen(0, '127.0.0.1', r)));
   const lines: string[] = [];
   const api = o.socket ? 'http://127.0.0.1:1' : `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -355,11 +341,13 @@ describe('the CLI against a daemon that does not answer (ORC-434)', () => {
     }
   });
 
-  it.skipIf(process.platform === 'win32')('pause gives up through the Unix socket, never falls back to HTTP, and says the command may have been taken', async () => {
+  it.skipIf(process.platform === 'win32')('stop gives up through the Unix socket, never falls back to HTTP, and says the command may have been taken', async () => {
     const socket = join(mkdtempSync(join(tmpdir(), 'factory-home-')), 'factory.sock');
-    const daemon = await mute({ socket });
+    // The state answered, the stop never.
+    const state = JSON.stringify({ linearConnected: true, queue: [], activeRuns: [], tickets: [{ projectId: 'p', ticketId: 'REL-1', logical: 'dev', title: 'Export CSV' }] });
+    const daemon = await mute({ socket, answer: (res, req) => req.method === 'GET' && res.writeHead(200, { 'content-type': 'application/json' }).end(state) });
     try {
-      expect(await runQueueCommand({ ...daemon.deps, socket, fetch: () => expect.unreachable() }, 'pause')).toBe(1);
+      expect(await runStopCommand({ ...daemon.deps, socket, fetch: () => expect.unreachable() }, 'REL-1')).toBe(1);
       expect(daemon.lines).toEqual([`${PRODUCT_NAME} did not answer through ${socket} within 0.2 s: ${STUCK}; the command may have been taken, check with \`factory status\`.`]);
     } finally {
       await daemon.close();

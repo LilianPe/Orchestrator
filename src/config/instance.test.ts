@@ -20,7 +20,7 @@ import {
   sealSecretsAtRest,
   secretValues,
 } from './instance.js';
-import { isSealed } from './secrets-file.js';
+import { isSealed, LINEAR_NEEDS_SECRETS_KEY, openSecretsFile } from './secrets-file.js';
 
 describe('instance config', () => {
   it('resolves home', () => {
@@ -69,8 +69,8 @@ describe('instance config', () => {
   it.skipIf(process.platform === 'win32')('writes secrets with mode 600', () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-home-'));
     expect(loadSecrets(home)).toEqual({});
-    saveSecrets(home, { linear: { clientId: 'c', clientSecret: 's', webhookSecret: 'w' } });
-    expect(loadSecrets(home).linear!.clientId).toBe('c');
+    saveSecrets(home, { linear: { clientId: 'c', clientSecret: 's', webhookSecret: 'w' } }, 'k'.repeat(32));
+    expect(loadSecrets(home, 'k'.repeat(32)).linear!.clientId).toBe('c');
     expect(statSync(homePaths(home).secrets).mode & 0o777).toBe(0o600);
   });
 
@@ -92,7 +92,7 @@ describe('instance config', () => {
 describe('the files of the instance before factory.yml (ORC-199)', () => {
   it('names each one left in the home, never reading it, and does not create logs/', () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-home-'));
-    saveSecrets(home, {});
+    saveSecrets(home, {}, 'k'.repeat(32));
     saveInstance(home, loadInstance(home));
     expect(existsSync(join(home, 'logs'))).toBe(false);
     expect(oldInstanceFileWarnings(home)).toEqual([]);
@@ -154,17 +154,18 @@ describe('factory.yml and secrets.json (ORC-209, part B)', () => {
 
   it('takes the static Linear values from factory.yml, the OAuth tokens from secrets.json', () => {
     const h = home('linear: { app_client_id: env:LINEAR_CLIENT_ID, client_secret: env:LINEAR_CLIENT_SECRET, webhook_secret: env:LINEAR_WEBHOOK_SECRET }\n');
-    saveSecrets(h, { linear: { clientId: 'old', clientSecret: 'old', webhookSecret: 'old-webhook-secret', accessToken: 'tok' } });
+    writeFileSync(homePaths(h).secrets, JSON.stringify({ linear: { clientId: 'old', clientSecret: 'old', webhookSecret: 'old-webhook-secret', accessToken: 'tok' } }));
     expect(linearSettings(h, loadFactoryYml(h, env))).toMatchObject({ clientId: 'yml-client', clientSecret: 'yml-secret', webhookSecret: 'yml-webhook-secret-1', accessToken: 'tok' });
   });
 
   it('saves refreshed tokens without copying a secret of the environment to secrets.json', () => {
-    const h = home('linear: { app_client_id: env:LINEAR_CLIENT_ID, client_secret: env:LINEAR_CLIENT_SECRET, webhook_secret: env:LINEAR_WEBHOOK_SECRET }\n');
-    saveLinearTokens(h, { accessToken: 'new', refreshToken: 'r' });
-    const stored = readFileSync(homePaths(h).secrets, 'utf8');
+    const h = home('linear: { app_client_id: env:LINEAR_CLIENT_ID, client_secret: env:LINEAR_CLIENT_SECRET, webhook_secret: env:LINEAR_WEBHOOK_SECRET }\nsecrets_key: env:SECRETS_KEY\n');
+    const yml = loadFactoryYml(h, { ...env, SECRETS_KEY: 'k'.repeat(32) });
+    saveLinearTokens(h, { accessToken: 'new', refreshToken: 'r' }, yml);
+    const stored = openSecretsFile(readFileSync(homePaths(h).secrets, 'utf8'), 'k'.repeat(32));
     expect(stored).toContain('new');
     expect(stored).not.toContain('yml-secret');
-    expect(linearSettings(h, loadFactoryYml(h, env))).toMatchObject({ clientSecret: 'yml-secret', accessToken: 'new' });
+    expect(linearSettings(h, yml)).toMatchObject({ clientSecret: 'yml-secret', accessToken: 'new' });
   });
 
   it('masks the secrets of factory.yml in run transcripts too', () => {
@@ -207,6 +208,13 @@ describe('secrets.json encrypted at rest (ORC-398)', () => {
     expect(() => loadSecrets(h)).toThrow('secrets.json is encrypted at rest: it is read with the key secrets_key of factory.yml names');
   });
 
+  // ORC-470: on the loopback too, Connect Linear and a refresh write nothing without it.
+  it('refuses to write Linear tokens without secrets_key, writing nothing', () => {
+    const h = home();
+    for (const yml of [undefined, {}]) expect(() => saveLinearTokens(h, { accessToken: 'canary-access-token-470' }, yml)).toThrow(`${LINEAR_NEEDS_SECRETS_KEY}.`);
+    expect(existsSync(homePaths(h).secrets)).toBe(false);
+  });
+
   it('Linear tokens saved and read through factory.yml\'s key stay sealed', () => {
     const h = home();
     saveLinearTokens(h, { accessToken: 'refreshed-token-value' }, { secretsKey: KEY });
@@ -217,7 +225,8 @@ describe('secrets.json encrypted at rest (ORC-398)', () => {
   it('seals a plaintext file at the start, once, and leaves a home without one alone', () => {
     const h = home();
     expect(sealSecretsAtRest(h, KEY)).toBe(false);
-    saveSecrets(h, { linear });
+    // Written in clear before ORC-398.
+    writeFileSync(homePaths(h).secrets, JSON.stringify({ linear }));
     expect(sealSecretsAtRest(h, KEY)).toBe(true);
     expect(readFileSync(homePaths(h).secrets, 'utf8')).not.toContain('access-token-value');
     expect(sealSecretsAtRest(h, KEY)).toBe(false);

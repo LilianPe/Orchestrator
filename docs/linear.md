@@ -19,7 +19,7 @@ Create the application, then copy into `factory init`:
 - the **Client secret**;
 - the **Webhook signing secret**.
 
-They are saved in `<FACTORY_HOME>/secrets.json` (mode `0600`, see [`configuration.md`](configuration.md#secretsjson)).
+They are saved in `<FACTORY_HOME>/secrets.json` (mode `0600`, encrypted with `secrets_key`, never in clear: ORC-470, see [`configuration.md`](configuration.md#secretsjson)).
 
 Linear may refuse a callback URL on `http://localhost`: in that case, temporarily expose the factory through a tunnel (`cloudflared tunnel --url http://localhost:4100`), put the tunnel URL in `public_url` in `factory.yml`, update the application's Callback URL and restart `factory up` for the duration of the connection. This point is to be checked during the acceptance run ([`acceptance.md`](acceptance.md)).
 
@@ -104,7 +104,7 @@ After the PR is merged (detected by the GitHub webhook, or by the PR read of the
 
 A team with several repositories: each ticket designates its own with a `repo:<id>` label ([`projects-and-workspaces.md`](projects-and-workspaces.md#one-team-several-repositories)).
 
-Only tickets **delegated** to the agent receive code work; a mention on a non-delegated ticket only gets an answer. All this behavior is the `factory/default` preset's, coded in the factory (a repository's workflow file is ignored, ORC-388): [`preset.md`](preset.md#the-workflow-the-engine-runs-orc-389). The checks before taking a ticket (description of at least 30 characters, no existing branch…) are described in [`preset.md`](preset.md#pickup-checks); `factory plan` applies them as a dry run.
+Only tickets **delegated** to the agent receive code work; a mention on a non-delegated ticket only gets an answer. All this behavior is the `factory/default` preset's, coded in the factory (a repository's workflow file is ignored, ORC-388): [`preset.md`](preset.md#the-workflow-the-engine-runs-orc-389). The checks before taking a ticket (description of at least 30 characters, no existing branch…) are described in [`preset.md`](preset.md#pickup-checks).
 
 A blocked ticket (failure, cap, question, stop, lease expired twice, too many relaunches after an outage) is waiting for a human: reply in the ticket.
 

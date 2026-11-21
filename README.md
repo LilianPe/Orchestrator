@@ -32,7 +32,6 @@ factory up           # http://localhost:4100, then « Connect Linear »
 4. In Linear, create a clear ticket (at least 30 characters of description) and **delegate it to `Orchestrator`** (the Linear application). Within 10 s: the comment « Got it. » and the plan in the session; then the spec, approved by a validator with `/approve`, status *In Progress*, live output in the interface, then the PR opened, its AI review, status *Human Review* and a summary in the Linear session.
 5. Reply in the session to request changes; merge the PR on GitHub, or move the ticket to *Done* for the factory to merge it: the ticket ends in *Done*.
 
-Without tokens, to try the interface: `factory up --fake-runner`.
 
 ## Documentation
 
@@ -52,7 +51,7 @@ Without tokens, to try the interface: `factory up --fake-runner`.
 - [Pack and skills](docs/pack-and-skills.md): job skills and method skills (TDD, debugging, verification, tiered review), always-on rules, permissions, customizing or creating a skill.
 
 ### Use
-- [Command line](docs/cli.md): `factory init|validate|doctor|up|plan|status|pause|resume|stop|dry-run|replay|run repair|flaky|baseline|ghost`.
+- [Command line](docs/cli.md): `factory init|validate|doctor|up|status|stop|dry-run|replay|run repair|flaky|baseline|ghost`.
 - [Web interface and security](docs/interface-and-security.md): interface, exposed routes, password, CSRF, known limitations.
 - [Threat model](docs/threat-model.md): the five threats, each attack linked to its defense and its test, the open holes, the limitations lifted.
 

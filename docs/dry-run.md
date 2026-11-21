@@ -120,7 +120,7 @@ the config's blob.
 - **It cannot run** (the engine, the forge or a registry not answering): the launch fails, as any launch error, and nothing is
   recorded.
 
-No gate without sandboxes, where no dry run can run (`--fake-runner`), nor for a replayed ticket
+No gate without sandboxes, where no dry run can run (the test harness's fake runner), nor for a replayed ticket
 ([ORC-231](ghost-replay.md)). A ticket already under way is never stopped by a red dry run: the gate is at its first run only.
 
 What the fingerprint does not see (a variable's value in `factory.yml`, a registry that refused, a flaky test now on the known

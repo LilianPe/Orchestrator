@@ -5,7 +5,7 @@ The factory is configured at these levels:
 | Level | File | Scope | Doc |
 |---|---|---|---|
 | Server | `<FACTORY_HOME>/factory.yml`, **required** | The instance (port, host, public URL, projects, webhook relay, knowledge base, ORC-199), secrets as references, the GitHub App, Claude accounts, budgets, tools, repositories' variables and secrets (ORC-209). | [instance](#the-instance-in-factoryyml-orc-199), [the rest](#factoryyml-orc-209) |
-| Secrets | `<FACTORY_HOME>/secrets.json` | Linear's OAuth tokens, which the daemon writes itself, encrypted at rest with `secrets_key` (ORC-398); the Linear credentials `factory init` asks. | this page |
+| Secrets | `<FACTORY_HOME>/secrets.json` | Linear's OAuth tokens, which the daemon writes itself, and the Linear credentials `factory init` asks, encrypted at rest with `secrets_key` (ORC-398), never written in clear (ORC-470). | this page |
 | Project | `.factory/config.yml` in each repository, read on its default branch | Its setup, its checks, its sensitive paths and limits; it can only tighten the preset. A `.factory/workflow.yml` is ignored since ORC-388: the workflow is the `factory/default` preset ([`preset.md`](preset.md)). | [`repository-configuration.md`](repository-configuration.md) |
 
 The instance files are read **at startup** of `factory up`: restart after a change (but `claude.active` of `factory.yml`, ORC-215).
@@ -17,8 +17,8 @@ The instance files are read **at startup** of `factory up`: restart after a chan
 | Variable | Read by | Default | Effect | Secret |
 |---|---|---|---|---|
 | `FACTORY_HOME` | all `factory` commands | `$HOME/.factory` | Instance directory (see [`installation.md`](installation.md#the-daemons-home-directory)). | no |
-| `FACTORY_DATABASE_URL` | `factory up`, `factory init`, the commands on the store | — | Postgres connection string (`postgres://user:password@host:5432/database`), **required**: Postgres is the only store (ORC-178). The daemon keeps its state there (`PgStore`) and applies the Drizzle migrations from `drizzle/` at startup (`factory plan` reads it without migrating it). Absent, the daemon and the commands that open the store (`plan`, `replay --export`, `run repair`…) refuse to start, so a variable lost in a deployment never starts the factory on an empty database; `factory init` finishes and says the maturity cards are not stored. An unreachable database prevents startup. A SQLite database file left from before Postgres is never read ([`operations.md`](operations.md#archiving-the-sqlite-data-orc-178)). Never passed to runs (`FACTORY_` prefix), never written to the daemon's log. | **yes** |
-| `FACTORY_CONTAINER_CLI` | `factory up` | — | `docker` or `podman`. When set, each attempt runs in a disposable container (ORC-204): created when it launches, destroyed when it ends, and those a crash left behind are destroyed at the next startup. The repository's `setup` and `verify` run there too. Absent: `factory up` refuses to start, without exception: no run executes on the host (ORC-349, ORC-179). No effect with `--fake-runner`. See [`first-run.md`](first-run.md). | no |
+| `FACTORY_DATABASE_URL` | `factory up`, `factory init`, the commands on the store | — | Postgres connection string (`postgres://user:password@host:5432/database`), **required**: Postgres is the only store (ORC-178). The daemon keeps its state there (`PgStore`) and applies the Drizzle migrations from `drizzle/` at startup (`factory run repair`, `flaky`, `baseline`, `ghost` and `replay --export` read it without migrating it). Absent, the daemon and the commands that open the store (`replay --export`, `run repair`, `flaky`…) refuse to start, so a variable lost in a deployment never starts the factory on an empty database; `factory init` finishes and says the maturity cards are not stored. An unreachable database prevents startup. A SQLite database file left from before Postgres is never read ([`operations.md`](operations.md#archiving-the-sqlite-data-orc-178)). Never passed to runs (`FACTORY_` prefix), never written to the daemon's log. | **yes** |
+| `FACTORY_CONTAINER_CLI` | `factory up` | — | `docker` or `podman`. When set, each attempt runs in a disposable container (ORC-204): created when it launches, destroyed when it ends, and those a crash left behind are destroyed at the next startup. The repository's `setup` and `verify` run there too. Absent: `factory up` refuses to start, without exception: no run executes on the host (ORC-349, ORC-179). See [`first-run.md`](first-run.md). | no |
 | `FACTORY_MESSAGE_MODEL` | `factory up` | — | `off`, `0`, `false` or `none` (any case): no small model classifies human messages, the `?` fallback rule does it alone (ORC-336). Any other value is logged as a warning and leaves the model on. See [`operations.md`](operations.md#the-small-model-of-messages). | no |
 | `FACTORY_RUNNER_IMAGE` | `factory up` | — | Image of the run containers (`docker/runner.Dockerfile`: node and pnpm, python and uv, git, gitleaks, claude): without gitleaks, every `verify` is a failure (ORC-151). Required with `FACTORY_CONTAINER_CLI`. | no |
 | `FACTORY_BROWSER_IMAGE` | `factory up`, `factory doctor` | — | The capture image of the visual proof (`docker/browser.Dockerfile`, ORC-404): the runner image plus Playwright's Chromium. When the engine has it with its label `factory.browser`, built on `FACTORY_RUNNER_IMAGE` (an image left from before the runner's update is refused), the sandboxes that shoot run it and the daemon wires the browser; otherwise a required visual proof is unavailable, its check neutral. Said at startup and by `factory doctor`. No effect without `FACTORY_CONTAINER_CLI`. | no |
@@ -137,7 +137,7 @@ There is no budget in dollars (ORC-216): a run's cost (`costUsd`, the one Claude
 
 ## `secrets.json`
 
-Written by `factory init` (application credentials) then by the OAuth connection (tokens), always with mode `0600`.
+Written by `factory init` (application credentials) then by the OAuth connection (tokens), always with mode `0600`, always encrypted with `secrets_key` (below): its content, once decrypted:
 
 ```json
 {
@@ -163,7 +163,19 @@ Written by `factory init` (application credentials) then by the OAuth connection
 
 Rerunning `factory init` with the **same** client ID keeps the tokens; with a different one, Linear must be reconnected.
 
-**Encrypted at rest (ORC-398).** `secrets_key` is required when the daemon is exposed off the loopback (`host` other than `localhost`, `::1` or `127.x.x.x`, as for the GitHub sign-in of ORC-399): without it the daemon refuses to start and names `secrets_key`. On the loopback it stays optional, and `factory doctor` warns of `secrets.json` in clear. With `secrets_key` in `factory.yml` (a reference, read at the start like the other server secrets, at least 32 characters: `openssl rand -base64 32`), the daemon encrypts `secrets.json` at its start if it is still in clear (`secrets.json: encrypted at rest with secrets_key` in its log), and at each write. Envelope encryption: a data key drawn at each write encrypts the JSON (AES-256-GCM), and is itself encrypted by a key derived from `secrets_key` (HKDF-SHA256). A sealed file without its key cannot be read: `factory init`, `plan` and `baseline` then need the daemon's environment, and `init` refuses (`secrets.json is encrypted at rest…`) once the file is sealed: write the Linear values in `factory.yml` instead. Losing `secrets_key` loses the Linear tokens: reconnect Linear.
+**Encrypted at rest (ORC-398, ORC-470).** `secrets_key` is required when the daemon is exposed off the loopback (`host` other than `localhost`, `::1` or `127.x.x.x`, as for the GitHub sign-in of ORC-399), and, on the loopback too, as soon as Linear is there: a `linear` section in `factory.yml`, or a `secrets.json`, sealed or not (ORC-470). Without it the daemon refuses to start, and `factory doctor` refuses with the same message (`Linear's tokens and credentials are kept in secrets.json, never in clear: set secrets_key in factory.yml …`); « Connect Linear » and a token refresh write nothing without it, and `factory init` refuses before asking anything when it would ask the Linear values. On a workstation, `factory init --dev` draws one when `factory.yml` names none ([below](#the-key-of-a-workstation-orc-470)). With `secrets_key` in `factory.yml` (a reference, read at the start like the other server secrets, at least 32 characters: `openssl rand -base64 32`), the daemon encrypts `secrets.json` at its start if it is still in clear (`secrets.json: encrypted at rest with secrets_key` in its log), and at each write. Envelope encryption: a data key drawn at each write encrypts the JSON (AES-256-GCM), and is itself encrypted by a key derived from `secrets_key` (HKDF-SHA256). A sealed file without its key cannot be read: `factory init`, `doctor` and `baseline` then need the daemon's environment, and `init` refuses (`secrets.json is encrypted at rest…`) once the file is sealed: write the Linear values in `factory.yml` instead. Losing `secrets_key` loses the Linear tokens: reconnect Linear.
+
+### The key of a workstation (ORC-470)
+
+`factory init --dev` draws a `secrets_key` when `factory.yml` names none and `host` is on the loopback (never for an exposed server): 32 random bytes in base64, written to `<FACTORY_HOME>/secrets.key` (mode `0600`, beside `secrets.json`, never in it), then declared in `factory.yml` as a `file` source:
+
+```yaml
+secret_sources:
+  factory_home: { kind: file, dir: /home/<user>/.factory }
+secrets_key: factory_home:secrets.key
+```
+
+The key is never printed. Run again, `init --dev` keeps the file it drew, and `init` without `--dev` reads it the same way. It refuses, before asking anything, a key file shorter than 32 characters, a `secret_sources.factory_home` already declared, and a `secrets.json` already encrypted with a key `factory.yml` no longer names (a new key would never open it). A `secrets_key` whose source `init`'s shell cannot read (`systemd-creds` outside the service) stops `init` when it would ask the Linear values: run it where the source is readable, or write the Linear values in `factory.yml`'s `linear` section. `factory doctor` says this key `in clear`, with the file's date: a file on the workstation's disk, its owner's alone; on a server, keep `secrets_key` in a sealed source (`systemd-creds`, [Server secrets](#server-secrets-orc-398)). The `file` source refuses a file others than its owner can read, or a symbolic link ([its options](ports/secret-source.md#file)).
 
 ## `factory.yml` (ORC-209)
 
@@ -252,9 +264,9 @@ secrets_key: creds:factory-secrets-key
 
 - Switching sources is a change of `factory.yml`, not of the code. An option of a source written `env:NAME` is resolved at the start and masked.
 - A Claude account read from another source than `env` keeps the value read at the start; one added since waits for the next start.
-- `factory doctor` says, before the workflows, each server secret in clear (`env`, a GitHub key in `GH_APP_KEY`, `secrets.json` without `secrets_key`) and the rotation date of the sealed ones (a warning past 180 days, or when unknown). Never part of its verdict.
+- `factory doctor` says, before the workflows, each server secret in clear (`env`, a `file` source, a GitHub key in `GH_APP_KEY`, `secrets.json` not yet encrypted) and the rotation date of the sealed ones (a warning past 180 days, or when unknown). Never part of its verdict.
 
-`init` writes the instance keys of `factory.yml` alone, the rest of the file kept, never a secret; token writing never copies any of its values into `secrets.json`. Its secrets are masked in the runs' transcripts, like those of `secrets.json`.
+`init` writes the instance keys of `factory.yml` alone, the rest of the file kept, never a secret (with `--dev`, the reference of the `secrets_key` it drew, never its value, ORC-470); token writing never copies any of its values into `secrets.json`. Its secrets are masked in the runs' transcripts, like those of `secrets.json`.
 
 ## What does not leave the daemon
 

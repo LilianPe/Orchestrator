@@ -184,10 +184,9 @@ const cliHostOf = (c: Context): string | undefined => (c.env as { [CLI_HOST]?: s
 /** What no guard of the interface holds: a public path, or a request of the CLI's socket (ORC-405). */
 const unguarded = (c: Context) => isPublicPath(c.req.method, c.req.path) || cliHostOf(c) !== undefined;
 
-/** What `factory status|stop|pause|resume|dry-run` call (src/cli/control.ts). */
+/** What `factory status|stop|dry-run` call (src/cli/control.ts). */
 const CLI_ROUTES: readonly (readonly [string, RegExp])[] = [
   ['GET', /^\/api\/state$/],
-  ['POST', /^\/api\/control\/(pause|resume)$/],
   ['POST', /^\/api\/tickets\/[^/]+\/[^/]+\/stop$/],
   ['POST', /^\/api\/projects\/[^/]+\/dry-run$/],
 ];
@@ -609,14 +608,6 @@ export function createApp(d: ServerDeps): Hono {
     return c.json({ ...detail, transcript });
   });
 
-  // The answer waits for the inbox write (ORC-147): `ok` means the command is recorded, with who asked it.
-  const control = (type: 'control.pause' | 'control.resume') => async (c: Context) => {
-    const at = d.clock.now();
-    await d.submit({ ...TRUSTED, ...operator(c), id: `ui:${type}:${at}`, type, at, projectId: '*', payload: {} } as FactoryEvent);
-    return c.json({ ok: true });
-  };
-  app.post('/api/control/pause', control('control.pause'));
-  app.post('/api/control/resume', control('control.resume'));
   // A stop is checked on the matrix by `decide` (ORC-301), on the operator journaled with it.
   app.post('/api/tickets/:projectId/:ticketId/stop', async (c) => {
     const at = d.clock.now();
