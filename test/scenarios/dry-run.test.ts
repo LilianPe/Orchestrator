@@ -28,6 +28,19 @@ describe('the dry run of a project', () => {
     expect(await h.store.lastDryRun('p')).toEqual(run);
   });
 
+  it("reads a private forge with the daemon's git env for the project's repository, none without it (ORC-442)", async () => {
+    const asked: DryRunRequest[] = [];
+    const dryRunner = async (req: DryRunRequest): Promise<DryRun> => {
+      asked.push(req);
+      return { id: req.runId, projectId: req.projectId, sha: 'c'.repeat(40), target: 'main', ok: true, fingerprint: FINGERPRINT, breaks: [], commands: [], startedAt: 0, endedAt: 0 };
+    };
+    const gitAuth = vi.fn(async (repoPath: string) => ({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader', GIT_CONFIG_VALUE_0: `for ${repoPath}` }));
+    await createHarness({ sandboxed: true, dryRunner, gitAuth }).orch.dryRun('p');
+    expect(await asked[0]!.forgeEnv!()).toMatchObject({ GIT_CONFIG_VALUE_0: 'for /repo' });
+    await createHarness({ sandboxed: true, dryRunner }).orch.dryRun('p');
+    expect(asked[1]).not.toHaveProperty('forgeEnv');
+  });
+
   it('on a commit given, it asks for that commit', async () => {
     const asked: DryRunRequest[] = [];
     const h = createHarness({

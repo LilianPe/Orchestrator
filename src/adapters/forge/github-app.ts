@@ -39,6 +39,8 @@ export const fetchHttp: HttpClient = async (url, init) => {
 /** GitHub rejects installation tokens older than one hour; cache them with a safety margin. */
 export const TOKEN_SAFETY_MARGIN_MS = 60_000;
 const ONE_HOUR_MS = 60 * 60_000;
+/** How long a repository GitHub refused the App a token for is read with the machine's credentials before asking again (ORC-442). */
+const NO_TOKEN_MS = 10 * 60_000;
 /** Pages of 100 read from one list, at most: a bound against a server that ignores `page`, not a GitHub limit. */
 const MAX_PAGES = 10;
 
@@ -90,6 +92,11 @@ export interface GitHubAppForgeOptions {
   /** Known installation; otherwise discovered with GET /repos/{owner}/{repo}/installation. */
   installationId?: string | number;
   apiBase?: string;
+  /**
+   * Where the repositories are served over HTTPS, the scope of the git token (`gitAccess`); `https://github.com` by default. Another
+   * value is for tests, with `resolveRepo`: an origin elsewhere is not parsed (`parseGitHubRemote`), GitHub Enterprise is not supported.
+   */
+  webBase?: string;
   http?: HttpClient;
   exec?: Exec;
   /** Overrides `git remote get-url origin` (tests). */
@@ -270,10 +277,19 @@ function unreadable(method: string, path: string, what: string, data: unknown, s
   return new UnreadableAnswerError(`${apiLabel(method, path)}: unreadable answer, not ${what}${shown}`);
 }
 
-/** `/repos/{owner}/{name}`, encoded. */
 /** The repository's page: the root of a link to one of its files (ORC-407), and of its git URL. */
-const repoWebUrl = (repo: GitHubRepoRef): string => `https://github.com/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`;
+const repoWebUrl = (repo: GitHubRepoRef, base = 'https://github.com'): string => `${base}/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`;
 
+/** Whether `url` is served by `base` (scheme, host and port), its userinfo aside; false for an scp-like `git@host:path` or a path. */
+function sameOrigin(url: string, base: string): boolean {
+  try {
+    return new URL(url).origin === new URL(base).origin;
+  } catch {
+    return false;
+  }
+}
+
+/** `/repos/{owner}/{name}`, encoded. */
 export function repoApi(repo: GitHubRepoRef): string {
   return `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`;
 }
@@ -318,7 +334,15 @@ export class GitHubApiError extends Error {
     if (apiMessage) this.apiMessage = apiMessage;
     this.rateLimited = rateLimited;
   }
+
+  /** An answer worth asking again (`isTransient`, ORC-343): a rate limit, a 5xx, a 408 or a 429. */
+  get retryable(): boolean {
+    return this.rateLimited || retryableStatus(this.status);
+  }
 }
+
+/** A status worth asking again, of GitHub's API or Linear's. */
+export const retryableStatus = (status: number): boolean => status >= 500 || status === 408 || status === 429;
 
 /** GitHub answered with a 2xx it cannot read: told apart from a call that failed (`doctor` refuses it, ORC-439). */
 export class UnreadableAnswerError extends Error {
@@ -335,9 +359,10 @@ export class GitHubAppAuth {
   readonly #privateKey: string;
   protected readonly installationId: string | undefined;
   protected readonly apiBase: string;
+  protected readonly webBase: string;
   protected readonly http: HttpClient;
   protected readonly exec: Exec;
-  private readonly resolveRepoFn: ((repoPath: string) => Promise<GitHubRepoRef>) | undefined;
+  protected readonly resolveRepoFn: ((repoPath: string) => Promise<GitHubRepoRef>) | undefined;
   protected readonly now: () => number;
   protected readonly log: ((message: string) => void) | undefined;
   readonly #tokens = new Map<string, { token: string; expiresAt: number }>();
@@ -348,6 +373,7 @@ export class GitHubAppAuth {
     this.#privateKey = options.privateKey;
     this.installationId = options.installationId === undefined ? undefined : String(options.installationId);
     this.apiBase = (options.apiBase ?? 'https://api.github.com').replace(/\/+$/, '');
+    this.webBase = (options.webBase ?? 'https://github.com').replace(/\/+$/, '');
     this.http = options.http ?? fetchHttp;
     this.exec = options.exec ?? execCmd;
     this.resolveRepoFn = options.resolveRepo;
@@ -602,13 +628,42 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
   /** In the environment: a command line is visible to every process of the host, and git quotes it in its errors. */
   async gitAccess(repoPath: string): Promise<GitAccess> {
     const repo = await this.repo(repoPath);
-    const token = await this.installationToken(repo);
-    const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
-    return {
-      url: `${repoWebUrl(repo)}.git`,
-      env: { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader', GIT_CONFIG_VALUE_0: `Authorization: Basic ${basic}` },
-    };
+    return { url: `${repoWebUrl(repo, this.webBase)}.git`, env: this.tokenEnv(await this.installationToken(repo)) };
   }
+
+  /** The token as git's extraheader for the App's forge, through `GIT_CONFIG_*` alone. */
+  private tokenEnv(token: string): Record<string, string> {
+    const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
+    return { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: `http.${this.webBase}/.extraheader`, GIT_CONFIG_VALUE_0: `Authorization: Basic ${basic}` };
+  }
+
+  /**
+   * The env of the daemon's own git that reads the repository (ORC-442): a fetch, the knowledge base's pull and push. The
+   * installation token as `gitAccess` gives it, for an origin served over HTTPS by the App's forge. Empty for any other origin
+   * (ssh, a path, another host), and when GitHub refuses the App a token for the repository (a 4xx: not installed there, not in
+   * its installation), said once per `NO_TOKEN_MS`: the machine's own git credentials serve then, as on a workstation. Any other
+   * failure (a 5xx, a rate limit, the network) rejects: the read fails with it, a transient one retried, never read without the
+   * token it needs.
+   */
+  async fetchEnv(repoPath: string): Promise<Record<string, string>> {
+    const origin = await this.exec('git', ['remote', 'get-url', 'origin'], { cwd: repoPath });
+    const url = origin.stdout.trim();
+    if (origin.code !== 0 || !sameOrigin(url, this.webBase)) return {};
+    const repo = this.resolveRepoFn ? await this.resolveRepoFn(repoPath) : parseGitHubRemote(url);
+    const refused = this.#noToken.get(repoPath);
+    if (!repo || (refused !== undefined && refused > this.now())) return {};
+    try {
+      return this.tokenEnv(await this.installationToken(repo));
+    } catch (err) {
+      if (!(err instanceof GitHubApiError) || err.retryable || err.status < 400) throw err;
+      this.#noToken.set(repoPath, this.now() + NO_TOKEN_MS);
+      this.log?.(`GitHub App: no installation token to read ${repoPath}, read with the machine's git credentials: ${err.message}`);
+      return {};
+    }
+  }
+
+  /** The repositories GitHub refused the App a token for (`fetchEnv`), until when: not asked again before. */
+  readonly #noToken = new Map<string, number>();
 
   /**
    * Creates the check run, or updates the one of the sha whose `external_id` is the request's

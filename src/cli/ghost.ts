@@ -6,7 +6,7 @@ import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { execCmd, mustExec } from '../adapters/exec.js';
 import type { GitHubAppForge } from '../adapters/forge/github-app.js';
-import type { PullRequestView } from '../adapters/forge/types.js';
+import type { GitAuth, PullRequestView } from '../adapters/forge/types.js';
 import { fetchOrigin, originHeadOf } from '../adapters/workspace/git-workspaces.js';
 import { repoRoot } from '../app/root.js';
 import { homePaths, loadInstance } from '../config/instance.js';
@@ -313,6 +313,12 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
   const branches: Record<string, Promise<string>> = {};
   // Resolved at the first PR read: `collect`, `judge`, `report` and `list` need no App.
   let forge: Promise<GitHubAppForge> | undefined;
+  // A private repository read with the App's token (ORC-442), as the daemon reads it: in git's environment alone. Without the App,
+  // the user's own git credentials, as before: `judge` needs no App.
+  const auth: GitAuth = async (repoPath) => {
+    const app = await (forge ??= githubForge(home)).catch(() => undefined);
+    return app ? app.fetchEnv(repoPath) : {};
+  };
   try {
     let user = 'cli';
     try {
@@ -331,14 +337,14 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
       humanPr: async (repoPath, number) => (await (forge ??= githubForge(home))).pullRequest(repoPath, number),
       // The merge commit fetched from origin, with its history: the start is one of its ancestors.
       humanDiff: async (repoPath, { start, mergeSha }) => {
-        await fetchOrigin(execCmd, repoPath, { refspecs: [mergeSha] });
+        await fetchOrigin(execCmd, repoPath, { refspecs: [mergeSha], auth });
         // The format of the factory's side whatever the user's git config, which would tell the sides apart on a blind screen.
         return mustExec(execCmd, 'git', ['-C', repoPath, 'diff', '--no-color', '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/', start, mergeSha]);
       },
       environment: async ({ repoPath, mergeSha, prCommits, dir, memory }) => {
         const remote = (await mustExec(execCmd, 'git', ['-C', repoPath, 'remote', 'get-url', 'origin'])).trim();
         const repo = join(dir, 'repo');
-        const start = await cloneAtStart({ remote, mergeSha, prCommits, dir: repo });
+        const start = await cloneAtStart({ remote, mergeSha, prCommits, dir: repo, env: await auth(repoPath) });
         // The run's repository (ORC-376): the start on the project's default branch, its own origin.
         branches[repoPath] ??= originHeadOf(execCmd, repoPath).then((h) => h.name.replace(/^origin\//, ''));
         await asRepository({ dir: repo, branch: await branches[repoPath] });

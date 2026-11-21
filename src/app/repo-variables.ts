@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { execCmd, execFailure, mustExec, type Exec } from '../adapters/exec.js';
 import { githubRepoOf } from '../adapters/forge/github-ingest.js';
+import type { GitAuth } from '../adapters/forge/types.js';
 import { fetchOrigin, originHeadOf } from '../adapters/workspace/git-workspaces.js';
 import type { FactoryYml } from '../config/factory-yml.js';
 import { parseRepoConfig, REPO_CONFIG_DIR, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
@@ -17,7 +18,7 @@ import { isTable, parseToml, type TomlTable, type TomlValue } from '../checks/to
  * has neither `origin` nor `origin/HEAD` of this repository to write: its git dir is its own (ORC-317). No file: the
  * socle. An invalid file, or a default branch git cannot read, rejects: no run starts on a config half read.
  */
-export function makeRepoConfig(o: { exec?: Exec; fetchDeadlineMs?: number; log?: (message: string) => void } = {}): (project: { repoPath: string }, read?: RepoConfigRead) => Promise<RepoConfig> {
+export function makeRepoConfig(o: { exec?: Exec; fetchDeadlineMs?: number; log?: (message: string) => void; auth?: GitAuth } = {}): (project: { repoPath: string }, read?: RepoConfigRead) => Promise<RepoConfig> {
   const exec = o.exec ?? execCmd;
   return async ({ repoPath }, { fetch = true } = {}) => {
     // A failure's message reaches the ticket (Linear): never the server's path nor the command, which go to the daemon's log.
@@ -29,7 +30,7 @@ export function makeRepoConfig(o: { exec?: Exec; fetchDeadlineMs?: number; log?:
     };
     // A worktree that already exists is prepared without a fetch: what was merged since applies all the same.
     // A forge that does not answer refuses the launch, which never waits for it forever.
-    if (fetch) await fetchOrigin(exec, repoPath, { deadlineMs: o.fetchDeadlineMs, log: (m) => o.log?.(`${REPO_CONFIG_PATH}: ${m}`) });
+    if (fetch) await fetchOrigin(exec, repoPath, { deadlineMs: o.fetchDeadlineMs, auth: o.auth, log: (m) => o.log?.(`${REPO_CONFIG_PATH}: ${m}`) });
     const { ref, name, set } = await originHeadOf(exec, repoPath);
     // The hint only when `origin/HEAD` is missing: `origin/main` is then a guess, perhaps not the default branch.
     const unreadable = `unreadable default branch (${name})${set ? '' : `: origin/HEAD is not set on the factory's repository; if ${name} is not the default branch, run \`git remote set-head origin --auto\` on this repository`}`;

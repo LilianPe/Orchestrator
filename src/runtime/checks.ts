@@ -235,6 +235,12 @@ export abstract class DaemonChecks extends DaemonBase {
     return run.ok ? undefined : run;
   }
 
+  /** What a clone of ours reads a private forge with (ORC-442), as the project's repository is fetched. */
+  private forgeEnvOf(project: ProjectRuntime): { forgeEnv?: () => Promise<Record<string, string>> } {
+    const auth = this.d.gitAuth;
+    return auth ? { forgeEnv: () => auth(project.repoPath) } : {};
+  }
+
   private async runDry(projectId: string, sha?: string): Promise<DryRun> {
     const project = this.d.projects.find((p) => p.id === projectId);
     if (!project) throw new Error(`no project ${projectId}`);
@@ -250,6 +256,7 @@ export abstract class DaemonChecks extends DaemonBase {
         runId: id,
         projectId,
         originUrl: await originUrl(project),
+        ...this.forgeEnvOf(project),
         ...(sha ? { sha } : {}),
         workDir,
         setup: project.workflow.workspace.setup,
@@ -294,6 +301,7 @@ export abstract class DaemonChecks extends DaemonBase {
         branch: t.branch,
         worktree: t.worktreePath ?? '',
         originUrl: await originUrl(project),
+        ...this.forgeEnvOf(project),
         workDir,
         setup: project.workflow.workspace.setup,
         commands: job.verify,

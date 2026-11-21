@@ -72,6 +72,8 @@ export interface DryRunRequest {
   projectId: string;
   /** Where the commit is read: on the forge, with the daemon's credentials. */
   originUrl: string;
+  /** As `CleanVerifyRequest.forgeEnv`: the App's token for a private forge (ORC-442). */
+  forgeEnv?: () => Promise<Record<string, string>>;
   /** A commit given; absent, the forge's default branch. */
   sha?: string;
   /** On the host, empty, and the caller's to remove: the clone the sandboxes mount is in its `clone/`, the host git's config beside it. */

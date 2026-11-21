@@ -8,6 +8,7 @@ import { forkPoint, gitAt, gitReader, isYes, parseRawDiff, within, zFields, type
 import { STALLED } from '../../publish/publish.js';
 import { execCmd, execFailure, HARDENING, mustExec, TIMED_OUT, type Exec } from '../exec.js';
 import { readCapped } from '../read-capped.js';
+import type { GitAuth } from '../forge/types.js';
 import type { StepDiff, Workspace, WorkspaceManager, WorkspaceRequest } from './types.js';
 
 function assertSafe(id: string): void {
@@ -123,16 +124,18 @@ const FETCH_GRACE_MS = 5_000;
  * `git fetch origin` in `repo`, never longer than `deadlineMs` and never a prompt for a credential: past the deadline,
  * git and what stayed in its process group (its ssh) are killed, and the launch stops waiting a few seconds later
  * whatever still holds git's output. A failure's message reaches the ticket (Linear): it names neither the server's
- * path nor the command, which go to `log`. `refspecs`: what to fetch, instead of what the remote's config says.
+ * path nor the command, which go to `log`. `refspecs`: what to fetch, instead of what the remote's config says. `auth`: the
+ * App's token for a private repository (ORC-442), in git's environment.
  */
-export async function fetchOrigin(exec: Exec, repo: string, o: { deadlineMs?: number; log?: (message: string) => void; refspecs?: readonly string[] } = {}): Promise<void> {
+export async function fetchOrigin(exec: Exec, repo: string, o: { deadlineMs?: number; log?: (message: string) => void; refspecs?: readonly string[]; auth?: GitAuth } = {}): Promise<void> {
   const deadlineMs = o.deadlineMs ?? FETCH_DEADLINE_MS;
   const silent = `the forge no longer responds after ${deadlineMs / 1000} s`;
   const args = ['-C', repo, 'fetch', '--quiet', 'origin', ...(o.refspecs ?? [])];
   const expired = () => o.log?.(`git ${args.join(' ')}: killed at ${deadlineMs / 1000} s, its output still held ${FETCH_GRACE_MS / 1000} s later by a process out of its group`);
   // A forge silent past the deadline, whichever of git or `within` gives up first: a timeout (`isTransient`, ORC-343).
   const timedOut = () => Object.assign(new Error(silent), { code: 'ETIMEDOUT' });
-  const r = await within(exec('git', args, { env: { GIT_TERMINAL_PROMPT: '0', ...STALLED }, timeoutMs: deadlineMs }), deadlineMs + FETCH_GRACE_MS, silent, expired).catch((err: Error) => {
+  const env = await remoteGitEnv(o.auth, repo, deadlineMs);
+  const r = await within(exec('git', args, { env, timeoutMs: deadlineMs }), deadlineMs + FETCH_GRACE_MS, silent, expired).catch((err: Error) => {
     throw err.message === silent ? timedOut() : err;
   });
   if (r.code === 0) return;
@@ -141,6 +144,21 @@ export async function fetchOrigin(exec: Exec, repo: string, o: { deadlineMs?: nu
   if (r.code === TIMED_OUT) throw timedOut();
   // git's own words stay out of the message, which reaches the ticket, but in its cause: `isTransient` reads them (ORC-343).
   throw new Error(`the forge could not be read (git fetch, code ${r.code})`, { cause: failure });
+}
+
+/**
+ * The env of a git that reaches `repo`'s remote: never a prompt, a stalled transfer aborted, and `auth`'s token (ORC-442),
+ * asked of GitHub's API within `deadlineMs`, which can stall as the forge can: past it, a timeout (`isTransient`); any other
+ * failure as `auth` rejected, its cause kept for `isTransient`.
+ */
+export async function remoteGitEnv(auth: GitAuth | undefined, repo: string, deadlineMs: number): Promise<Record<string, string>> {
+  const silent = `GitHub gave no installation token after ${deadlineMs / 1000} s`;
+  const token = auth
+    ? await within(auth(repo), deadlineMs, silent).catch((err: Error) => {
+        throw err.message === silent ? Object.assign(new Error(silent), { code: 'ETIMEDOUT' }) : new Error('the forge could not be read (no installation token)', { cause: err });
+      })
+    : {};
+  return { GIT_TERMINAL_PROMPT: '0', ...STALLED, ...token };
 }
 
 /**
@@ -156,8 +174,8 @@ async function trunkDiff(git: CloneGit, trunk: string, head: string, past?: stri
 export class GitWorkspaces implements WorkspaceManager {
   private exec: Exec;
 
-  /** `log`: the detail of a failed fetch (the server's path, git's own words), which the ticket never gets. */
-  constructor(private o: { root: string; exec?: Exec; fetchDeadlineMs?: number; log?: (message: string) => void }) {
+  /** `log`: the detail of a failed fetch (the server's path, git's own words), which the ticket never gets. `auth`: what reads a private forge (ORC-442). */
+  constructor(private o: { root: string; exec?: Exec; fetchDeadlineMs?: number; log?: (message: string) => void; auth?: GitAuth }) {
     this.exec = o.exec ?? execCmd;
   }
 
@@ -167,7 +185,7 @@ export class GitWorkspaces implements WorkspaceManager {
 
   /** Bounded: a forge that does not answer refuses the launch, which never waits for it forever (ORC-209). */
   private fetch(repo: string, refspecs?: readonly string[]): Promise<void> {
-    return fetchOrigin(this.exec, repo, { deadlineMs: this.o.fetchDeadlineMs, log: this.o.log, ...(refspecs ? { refspecs } : {}) });
+    return fetchOrigin(this.exec, repo, { deadlineMs: this.o.fetchDeadlineMs, log: this.o.log, auth: this.o.auth, ...(refspecs ? { refspecs } : {}) });
   }
 
   async prepare(req: WorkspaceRequest): Promise<Workspace> {

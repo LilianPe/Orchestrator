@@ -165,6 +165,12 @@ export interface ArtifactHost {
   pruneArtifacts(repoPath: string, expired: (folder: string) => Promise<boolean>): Promise<string[]>;
 }
 
+/**
+ * The env of the daemon's own git that reads a repository's forge (ORC-442), the App's token in it; `{}` where the machine's own
+ * git credentials serve (no App, an origin elsewhere). In the environment only: never in a URL, a command line nor a config.
+ */
+export type GitAuth = (repoPath: string) => Promise<Record<string, string>>;
+
 export interface ForgeWriter {
   /**
    * Merges the PR if its head is still `sha`, the commit shown to the human reviewer: GitHub checks it in the same
