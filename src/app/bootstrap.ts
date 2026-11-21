@@ -65,8 +65,9 @@ import { TrackerSwitch } from './tracker-switch.js';
 import { PRODUCT_NAME } from '../product.js';
 
 /**
- * The statuses a connected team lacks, created at start as « Connect Linear » creates them (ORC-457): a team connected before
- * Spec was a default gets it, or every delegation's move to it would fail. One Linear refuses is said, as `doctor` says it (ORC-382).
+ * The spec's status a connected team lacks, created at start as « Connect Linear » creates it (ORC-457): a team connected before
+ * Spec was a default gets it, or every delegation's move to it would fail. Only that one: another status the team lacks (a typo
+ * in factory.yml, one deleted on purpose) is said, as `doctor` says it (ORC-382), never written to the team at each start.
  */
 export async function createMissingStatuses(
   tracker: Pick<LinearTracker, 'teamStatuses' | 'ensureSetup'>,
@@ -75,15 +76,20 @@ export async function createMissingStatuses(
 ): Promise<void> {
   for (const p of projects) {
     // As `warm` just read them.
-    const team = await tracker.teamStatuses(p.teamKey, false).catch(() => undefined);
-    if (!team || Object.values(p.workflow.states).every((name) => team.includes(name))) continue;
-    try {
-      const created = await tracker.ensureSetup(p.teamKey, p.workflow.states, FACTORY_LABELS);
-      if (created.length) log(`Linear ${p.teamKey}: created ${created.join(', ')}`);
-    } catch (error) {
-      log(missingStatusWarning(p, p.workflow.states, team)!);
-      log(`Linear ${p.teamKey}: statuses not created: ${(error as Error).message}`);
+    let team = await tracker.teamStatuses(p.teamKey, false).catch(() => undefined);
+    if (!team) continue;
+    const spec = p.workflow.states.spec;
+    if (spec && !team.includes(spec)) {
+      try {
+        const created = await tracker.ensureSetup(p.teamKey, { spec }, []);
+        if (created.length) log(`Linear ${p.teamKey}: created ${created.join(', ')}`);
+        team = [...team, ...created];
+      } catch (error) {
+        log(`Linear ${p.teamKey}: « ${spec} » not created: ${(error as Error).message}`);
+      }
     }
+    const warning = missingStatusWarning(p, p.workflow.states, team);
+    if (warning) log(warning);
   }
 }
 

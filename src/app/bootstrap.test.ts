@@ -430,7 +430,15 @@ describe('bootstrap', () => {
     it('a creation Linear refuses keeps the warning: a move to that status will fail', async () => {
       const logs: string[] = [];
       await createMissingStatuses(tracker(ORC_170, new Error('Linear answered 403')), [project], (l) => logs.push(l));
-      expect(logs).toEqual([expect.stringMatching(/^Warning: p: the Linear team REL has no status « Spec »/), 'Linear REL: statuses not created: Linear answered 403']);
+      expect(logs).toEqual(['Linear REL: « Spec » not created: Linear answered 403', expect.stringMatching(/^Warning: p: the Linear team REL has no status « Spec »/)]);
+    });
+
+    it('creates only « Spec », nor any label: another status the team lacks (a typo, one deleted on purpose) is warned of, as before', async () => {
+      const t = tracker(['Todo', 'In Progress', 'Human Review', 'Done']);
+      const logs: string[] = [];
+      await createMissingStatuses(t, [project], (l) => logs.push(l));
+      expect(t.created).toEqual([['Spec']]);
+      expect(logs).toEqual(['Linear REL: created Spec', expect.stringMatching(/^Warning: p: the Linear team REL has no status « AI Review »,/)]);
     });
   });
 
