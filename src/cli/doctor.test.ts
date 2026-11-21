@@ -12,6 +12,7 @@ import { checkHost, runDoctor, runDoctorCommand, type DoctorApi, type HostReport
 import { GITHUB_APP_PERMISSIONS } from './init.js';
 import { startFactory } from '../app/bootstrap.js';
 import { MemoryStore } from '../store/memory-store.js';
+import { OLD_DATABASES, oldDatabaseWarnings } from '../store/old-databases.js';
 import { saveInstance, type InstanceConfig } from '../config/instance.js';
 
 interface FakeOptions {
@@ -933,23 +934,18 @@ describe('an old SQLite database in FACTORY_HOME (ORC-463)', () => {
     const home = tempHome();
     saveInstance(home, { port: 4160, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
     // Not a SQLite file: a doctor that opened one would fail on it.
-    writeFileSync(join(home, 'relais.db'), 'not a database'); // transition, à retirer
-    writeFileSync(join(home, 'factory.db'), 'not a database either');
+    for (const name of OLD_DATABASES) writeFileSync(join(home, name), 'not a database');
     return home;
   };
 
+  // The start logs exactly these (bootstrap.test.ts): both say `startRefusals`' warnings.
   it("warns with the start's message, before it needs the GitHub App", async () => {
     const home = homeWithOldDatabases();
-    const logs: string[] = [];
-    // On a MemoryStore: the start's warnings, not the missing FACTORY_DATABASE_URL.
-    await (await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {}, store: new MemoryStore() })).stop();
-    const started = logs.filter((m) => m.includes('left from the SQLite store'));
-    expect(started).toHaveLength(2);
     const lines: string[] = [];
     expect(await runDoctorCommand({ repoPath: '/repo', home, env: {}, out: (line) => lines.push(line) })).toBe(1);
-    const warned = lines.filter((l) => l.includes('left from the SQLite store'));
-    expect(warned).toEqual(started);
-    expect(warned[0]).toMatch(/archive it off the server, then delete it \(docs\/operations\.md\)$/);
+    const warned = oldDatabaseWarnings(home);
+    expect(warned).toHaveLength(2);
+    expect(lines.filter((l) => warned.includes(l))).toEqual(warned);
     expect(lines.indexOf(warned[1]!)).toBeLessThan(lines.findIndex((l) => l.includes('GitHub App not configured')));
   });
 
@@ -958,10 +954,7 @@ describe('an old SQLite database in FACTORY_HOME (ORC-463)', () => {
     const lines: string[] = [];
     expect(await runDoctorCommand({ repoPath: '/repo', home, env: {}, json: true, out: (line) => lines.push(line) })).toBe(1);
     expect(lines).toHaveLength(1);
-    expect(JSON.parse(lines[0]!)).toMatchObject({
-      error: expect.stringContaining('GitHub App not configured'),
-      startWarnings: [expect.stringMatching(/^relais\.db: left from the SQLite store/), expect.stringMatching(/^factory\.db: left from the SQLite store/)],
-    });
+    expect(JSON.parse(lines[0]!)).toMatchObject({ error: expect.stringContaining('GitHub App not configured'), startWarnings: oldDatabaseWarnings(home) });
   });
 });
 

@@ -15,9 +15,11 @@ export interface StartChecks {
 
 /**
  * The refusals of the daemon's start that config.yaml and factory.yml decide before anything opens, for the start and
- * `factory doctor` alike (ORC-448): the first one throws, with the message the start gives; its warnings are returned: the
- * Smee relay's (ORC-446), and a SQLite file left in `home` from before Postgres, named, never opened (ORC-178, ORC-463). The App's OAuth client whole (ORC-399); off the loopback, the dashboard's GitHub sign-in (that client,
- * who may sign in, an HTTPS publicUrl GitHub calls back to) and `secrets_key`, which encrypts secrets.json at rest (ORC-398).
+ * `factory doctor` alike (ORC-448): the first one throws, with the message the start gives. The App's OAuth client whole
+ * (ORC-399); off the loopback, the dashboard's GitHub sign-in (that client, who may sign in, an HTTPS publicUrl GitHub calls
+ * back to) and `secrets_key`, which encrypts secrets.json at rest (ORC-398).
+ * `warnings`: the Smee relay's (ORC-446), and each SQLite file left in `home` from before Postgres, looked at by its presence
+ * alone, never opened (ORC-178, ORC-463).
  * `signIn`: what the dashboard's sign-in is built from, off the loopback alone.
  */
 export function startRefusals(home: string, instance: InstanceConfig, yml: FactoryYml | undefined, env: NodeJS.ProcessEnv): StartChecks {
