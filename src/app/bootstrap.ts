@@ -417,7 +417,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const githubReconciler = new GithubReconciler({ store, forge, projects, submit: accept, clock, log });
     reconcileProject = async (p) => {
       await reconcileOnce({ tracker: trackerSwitch, store, projects: fromLinear, only: p.id, submit: accept, clock, log, serial: labelsTurn });
-      await githubReconciler.once(p.id);
+      // Without the App every read would fail, ticket by ticket, at each pass: the start said why once.
+      if (githubApp) await githubReconciler.once(p.id);
     };
     // GitHub webhooks (ORC-134) write to the inbox beside the reconciliation (every 5 min, ORC-185): both name a fact the
     // same way, so the inbox keeps it once.

@@ -57,6 +57,8 @@ interface PullRequestDto {
   merge_commit_sha?: string | null;
   /** Its author; null when GitHub no longer has the account. */
   user?: { login: string } | null;
+  /** How many commits it has, as `GET /pulls/{n}` counts them. */
+  commits?: number;
   head: { ref: string; sha: string };
   base?: { ref: string; sha: string };
 }
@@ -189,7 +191,11 @@ const isPulls = (v: unknown): v is PullRequestDto[] => Array.isArray(v) && v.eve
 
 /** A PR as `pullRequest` reads it: its author's login too, when GitHub still has the account. */
 const isAuthoredPull = (p: unknown): p is PullRequestDto =>
-  isPull(p) && (p.user == null || (isRecord(p.user) && typeof p.user.login === 'string'));
+  isPull(p) && (p.user == null || (isRecord(p.user) && typeof p.user.login === 'string')) && (p.commits === undefined || typeof p.commits === 'number');
+
+/** A commit message's subject as git's `%s` gives it, which `cloneAtStart` compares with: its first paragraph, on one line. */
+const gitSubject = (message: string): string =>
+  message.replace(/\r\n?/g, '\n').trim().split(/\n\s*\n/)[0]!.split('\n').map((l) => l.trim()).join(' ');
 
 /** A commit of a PR's list: its message. */
 const isPullCommit = (c: unknown): c is { commit: { message: string } } => isRecord(c) && isRecord(c.commit) && typeof c.commit.message === 'string';
@@ -711,12 +717,14 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     const path = `${repoApi(repo)}/pulls/${number}`;
     const pr = await this.read('GET', path, token, isAuthoredPull, 'a pull request');
     const commits = await this.allPages(`${path}/commits`, null, 'a list of commits', isPullCommit, token);
+    // GitHub lists 250 commits at most: a longer PR's list is never read as complete.
+    if (pr.commits !== undefined && commits.length !== pr.commits) throw new Error(`${apiLabel('GET', `${path}/commits`)}: ${commits.length} commits of ${pr.commits}, never read as complete`);
     return {
       number: pr.number,
       url: pr.html_url,
       author: pr.user?.login ?? '',
       ...(pr.merged_at && pr.merge_commit_sha ? { mergeSha: pr.merge_commit_sha } : {}),
-      commits: commits.map((c) => c.commit.message.split('\n')[0]!),
+      commits: commits.map((c) => gitSubject(c.commit.message)),
     };
   }
 

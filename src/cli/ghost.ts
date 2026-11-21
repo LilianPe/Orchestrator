@@ -338,7 +338,8 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
       // The merge commit fetched from origin, with its history: the start is one of its ancestors.
       humanDiff: async (repoPath, { start, mergeSha }) => {
         await mustExec(execCmd, 'git', ['-C', repoPath, 'fetch', '--quiet', 'origin', mergeSha]);
-        return mustExec(execCmd, 'git', ['-C', repoPath, 'diff', start, mergeSha]);
+        // The format of the factory's side whatever the user's git config, which would tell the sides apart on a blind screen.
+        return mustExec(execCmd, 'git', ['-C', repoPath, 'diff', '--no-color', '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/', start, mergeSha]);
       },
       environment: async ({ repoPath, mergeSha, prCommits, dir, memory }) => {
         const remote = (await mustExec(execCmd, 'git', ['-C', repoPath, 'remote', 'get-url', 'origin'])).trim();
