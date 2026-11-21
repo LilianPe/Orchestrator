@@ -313,8 +313,12 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
   const branches: Record<string, Promise<string>> = {};
   // Resolved at the first PR read: `collect`, `judge`, `report` and `list` need no App.
   let forge: Promise<GitHubAppForge> | undefined;
-  // A private repository read with the App's token (ORC-442), as the daemon reads it: in git's environment alone.
-  const auth: GitAuth = async (repoPath) => (await (forge ??= githubForge(home))).fetchEnv(repoPath);
+  // A private repository read with the App's token (ORC-442), as the daemon reads it: in git's environment alone. Without the App,
+  // the user's own git credentials, as before: `judge` needs no App.
+  const auth: GitAuth = async (repoPath) => {
+    const app = await (forge ??= githubForge(home)).catch(() => undefined);
+    return app ? app.fetchEnv(repoPath) : {};
+  };
   try {
     let user = 'cli';
     try {

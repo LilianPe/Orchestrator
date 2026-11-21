@@ -39,6 +39,8 @@ export const fetchHttp: HttpClient = async (url, init) => {
 /** GitHub rejects installation tokens older than one hour; cache them with a safety margin. */
 export const TOKEN_SAFETY_MARGIN_MS = 60_000;
 const ONE_HOUR_MS = 60 * 60_000;
+/** How long a repository GitHub refused the App a token for is read with the machine's credentials before asking again (ORC-442). */
+const NO_TOKEN_MS = 10 * 60_000;
 /** Pages of 100 read from one list, at most: a bound against a server that ignores `page`, not a GitHub limit. */
 const MAX_PAGES = 10;
 
@@ -90,7 +92,10 @@ export interface GitHubAppForgeOptions {
   /** Known installation; otherwise discovered with GET /repos/{owner}/{repo}/installation. */
   installationId?: string | number;
   apiBase?: string;
-  /** Where the repositories are served over HTTPS, the scope of the git token (`gitAccess`); `https://github.com` by default. */
+  /**
+   * Where the repositories are served over HTTPS, the scope of the git token (`gitAccess`); `https://github.com` by default. Another
+   * value is for tests, with `resolveRepo`: an origin elsewhere is not parsed (`parseGitHubRemote`), GitHub Enterprise is not supported.
+   */
   webBase?: string;
   http?: HttpClient;
   exec?: Exec;
@@ -624,21 +629,30 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
   }
 
   /**
-   * The env of the daemon's own git that reads the repository (ORC-442): a fetch, an `ls-remote`, the knowledge base's pull and
-   * push. The installation token as `gitAccess` gives it, for an origin served over HTTPS by the App's forge. Empty for any other
-   * origin (ssh, a path, another host) and when the App has no token for the repository (not installed there): the machine's own
-   * git credentials serve then, as on a workstation.
+   * The env of the daemon's own git that reads the repository (ORC-442): a fetch, the knowledge base's pull and push. The
+   * installation token as `gitAccess` gives it, for an origin served over HTTPS by the App's forge. Empty for any other origin
+   * (ssh, a path, another host), and when GitHub refuses the App a token for the repository (a 4xx: not installed there, not in
+   * its installation), said once per `NO_TOKEN_MS`: the machine's own git credentials serve then, as on a workstation. Any other
+   * failure (a 5xx, a rate limit, the network) rejects: the read fails with it, a transient one retried, never read without the
+   * token it needs.
    */
   async fetchEnv(repoPath: string): Promise<Record<string, string>> {
     const origin = await this.exec('git', ['remote', 'get-url', 'origin'], { cwd: repoPath });
     if (origin.code !== 0 || !sameOrigin(origin.stdout.trim(), this.webBase)) return {};
+    const refused = this.#noToken.get(repoPath);
+    if (refused !== undefined && refused > this.now()) return {};
     try {
       return (await this.gitAccess(repoPath)).env;
     } catch (err) {
-      this.log?.(`GitHub App: no installation token to read ${repoPath}, read with the machine's git credentials: ${(err as Error).message}`);
+      if (!(err instanceof GitHubApiError) || err.rateLimited || err.status < 400 || err.status >= 500 || err.status === 408 || err.status === 429) throw err;
+      this.#noToken.set(repoPath, this.now() + NO_TOKEN_MS);
+      this.log?.(`GitHub App: no installation token to read ${repoPath}, read with the machine's git credentials: ${err.message}`);
       return {};
     }
   }
+
+  /** The repositories GitHub refused the App a token for (`fetchEnv`), until when: not asked again before. */
+  readonly #noToken = new Map<string, number>();
 
   /**
    * Creates the check run, or updates the one of the sha whose `external_id` is the request's

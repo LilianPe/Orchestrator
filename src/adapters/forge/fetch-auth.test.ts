@@ -15,6 +15,7 @@ import { makeRepoConfig } from '../../app/repo-variables.js';
 import { fetchFromForge } from '../../core/clean-verify.js';
 import { cloneAtStart } from '../../ghost/history.js';
 import { KnowledgeBase } from '../../knowledge/kb.js';
+import { isTransient } from '../../runtime/transient.js';
 import { fetchOrigin, GitWorkspaces } from '../workspace/git-workspaces.js';
 
 /**
@@ -148,10 +149,7 @@ type Fixture = Awaited<ReturnType<typeof fixture>>;
 const READS: Record<string, (f: Fixture, auth?: GitAuth) => Promise<unknown>> = {
   "a launch's fetch (GitWorkspaces)": (f, auth) =>
     new GitWorkspaces({ root: join(f.dir, 'ws'), exec: f.exec, ...(auth ? { auth } : {}) }).prepare({ projectId: 'p', repoPath: f.repo, ticketId: 'T-1', title: 't', kind: 'trunk-readonly', slot: 0, portBase: 0, runId: 'r1' }),
-  "a ticket's branch on origin (ls-remote)": async (f, auth) => {
-    if (!(await new GitWorkspaces({ root: join(f.dir, 'ws'), exec: f.exec, ...(auth ? { auth } : {}) }).remoteBranchExists(f.repo, (n) => n === 'main'))) throw new Error('main not seen');
-  },
-  "the repository's config, on its default branch (verify, doctor's branch)": (f, auth) => makeRepoConfig({ exec: f.exec, ...(auth ? { auth } : {}) })({ repoPath: f.repo }),
+  "the repository's config, on its default branch (read before a launch)": (f, auth) => makeRepoConfig({ exec: f.exec, ...(auth ? { auth } : {}) })({ repoPath: f.repo }),
   "verify's and the dry run's clone": async (f, auth) => {
     const clone = mkdtempSync(join(f.dir, 'clone-'));
     git(clone, 'init', '--quiet');
@@ -167,6 +165,45 @@ const READS: Record<string, (f: Fixture, auth?: GitAuth) => Promise<unknown>> = 
   },
   "the ghost's clone at the start": async (f, auth) => cloneAtStart({ remote: f.url, mergeSha: f.second, dir: join(f.dir, auth ? 'ghost' : 'ghost-refused'), exec: f.exec, ...(auth ? { env: await auth(f.repo) } : {}) }),
 };
+
+describe('when GitHub does not give the token (ORC-442)', () => {
+  const answering = (status: number, asked: string[]): HttpClient => async (url) => {
+    asked.push(new URL(url).pathname);
+    return { ok: false, status, headers: { get: () => null }, text: async () => JSON.stringify({ message: `answer ${status}` }) };
+  };
+  const forgeOn = (f: Fixture, http: HttpClient, now = () => Date.now()) =>
+    new GitHubAppForge({ appId: '1', privateKey: privatePem, installationId: 42, http, exec: f.exec, webBase: f.server.base, resolveRepo: async () => ({ owner: 'acme', name: 'app' }), log: (m) => f.logs.push(m), now });
+
+  it('a 5xx fails the read as a transient error, never a read without the token', async () => {
+    const f = await fixture();
+    const forge = forgeOn(f, answering(502, []));
+    const err = await fetchOrigin(f.exec, f.repo, { auth: (r) => forge.fetchEnv(r) }).catch((e: Error) => e);
+    expect((err as Error).message).toMatch(/no installation token/);
+    expect(isTransient(err)).toBe(true);
+    expect(f.lines.some((l) => l.includes(' fetch '))).toBe(false);
+  });
+
+  it('a refusal (4xx) falls back to the machine credentials, asked again only after 10 minutes, said once', async () => {
+    const f = await fixture();
+    const asked: string[] = [];
+    let now = Date.parse('2026-11-21T10:00:00Z');
+    const forge = forgeOn(f, answering(404, asked), () => now);
+    expect(await forge.fetchEnv(f.repo)).toEqual({});
+    expect(await forge.fetchEnv(f.repo)).toEqual({});
+    expect(asked).toHaveLength(1);
+    expect(f.logs.filter((l) => l.includes('no installation token'))).toHaveLength(1);
+    now += 10 * 60_000 + 1;
+    await forge.fetchEnv(f.repo);
+    expect(asked).toHaveLength(2);
+  });
+
+  it('a token that does not come within the deadline is a forge silent: a timeout, transient', async () => {
+    const f = await fixture();
+    const err = await fetchOrigin(f.exec, f.repo, { deadlineMs: 50, auth: () => new Promise(() => {}) }).catch((e: Error) => e);
+    expect(err).toMatchObject({ code: 'ETIMEDOUT' });
+    expect(isTransient(err)).toBe(true);
+  });
+});
 
 describe('every read of the forge by the daemon goes through the App token (ORC-442)', () => {
   for (const [name, read] of Object.entries(READS)) {

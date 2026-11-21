@@ -134,7 +134,9 @@ export async function fetchOrigin(exec: Exec, repo: string, o: { deadlineMs?: nu
   const expired = () => o.log?.(`git ${args.join(' ')}: killed at ${deadlineMs / 1000} s, its output still held ${FETCH_GRACE_MS / 1000} s later by a process out of its group`);
   // A forge silent past the deadline, whichever of git or `within` gives up first: a timeout (`isTransient`, ORC-343).
   const timedOut = () => Object.assign(new Error(silent), { code: 'ETIMEDOUT' });
-  const env = { GIT_TERMINAL_PROMPT: '0', ...STALLED, ...(await o.auth?.(repo)) };
+  const env = { GIT_TERMINAL_PROMPT: '0', ...STALLED, ...(await authEnv(o.auth, repo, deadlineMs).catch((err: Error) => {
+    throw err.message === AUTH_SILENT ? timedOut() : err;
+  })) };
   const r = await within(exec('git', args, { env, timeoutMs: deadlineMs }), deadlineMs + FETCH_GRACE_MS, silent, expired).catch((err: Error) => {
     throw err.message === silent ? timedOut() : err;
   });
@@ -144,6 +146,19 @@ export async function fetchOrigin(exec: Exec, repo: string, o: { deadlineMs?: nu
   if (r.code === TIMED_OUT) throw timedOut();
   // git's own words stay out of the message, which reaches the ticket, but in its cause: `isTransient` reads them (ORC-343).
   throw new Error(`the forge could not be read (git fetch, code ${r.code})`, { cause: failure });
+}
+
+const AUTH_SILENT = 'GitHub gave no installation token in time';
+
+/**
+ * `auth`'s env for `repo` (ORC-442), never longer than `deadlineMs`: the token is asked of GitHub's API, which can stall as the
+ * forge can. Past it, it rejects with `AUTH_SILENT`; any other failure as `auth` rejected, its cause kept for `isTransient`.
+ */
+export async function authEnv(auth: GitAuth | undefined, repo: string, deadlineMs: number): Promise<Record<string, string>> {
+  if (!auth) return {};
+  return within(auth(repo), deadlineMs, AUTH_SILENT).catch((err: Error) => {
+    throw err.message === AUTH_SILENT ? err : new Error('the forge could not be read (no installation token)', { cause: err });
+  });
 }
 
 /**
@@ -408,7 +423,7 @@ export class GitWorkspaces implements WorkspaceManager {
   }
 
   async remoteBranchExists(repoPath: string, matches: (name: string) => boolean): Promise<boolean> {
-    const out = await mustExec(this.exec, 'git', ['-C', repoPath, 'ls-remote', '--heads', 'origin'], { env: { GIT_TERMINAL_PROMPT: '0', ...(await this.o.auth?.(repoPath)) } });
+    const out = await this.git(repoPath, 'ls-remote', '--heads', 'origin');
     return out
       .split('\n')
       .map((l) => l.split('\t')[1]?.replace(/^refs\/heads\//, ''))

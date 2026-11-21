@@ -64,9 +64,11 @@ There is no fallback any more (ORC-181: the `gh` CLI and `GH_TOKEN` are gone). W
 
 ### The daemon's own git
 
-The daemon's git reads the forge with the App's installation token too (ORC-442), as the factory's push does ([Publishing](#publishing)): the `git fetch` of the clones before a launch, `git ls-remote` of a ticket's branch, the default branch `verify`, the dry run and `doctor` read, the knowledge base's pull and its note's push, `factory ghost`'s clones and diffs. A private repository is read without any git credential on the machine: that is how the Docker image reads it, which configures none since ORC-181 ([`deployment.md`](deployment.md#current-limits)).
+The daemon's git reads the forge with the App's installation token too (ORC-442), as the factory's push does ([Publishing](#publishing)): the `git fetch` of the clones before a launch and of the default branch read before it (`.factory/config.yml`, which `doctor` then reads without a fetch), the clones of `verify` and of the dry run, the knowledge base's pull and its note's push, `factory ghost`'s clones and diffs. `factory plan`'s `git ls-remote` (whether a ticket's branch exists) is a command line's, and still uses the machine's credentials. A private repository is read without any git credential on the machine: that is how the Docker image reads it, which configures none since ORC-181 ([`deployment.md`](deployment.md#current-limits)).
 
 - **Which repositories**: those whose `origin` is an `https://github.com/` URL, the token being the one of that repository (limited to it), so the App must be installed on the knowledge base's repository as well to read a private one. An `origin` over SSH (`git@github.com:…`), on another host or a path, and a repository the App has no token for (not installed there, logged `GitHub App: no installation token to read …`), are read with the git credentials of the machine that runs the daemon, as before: an SSH key or agent, or a git credential helper.
+- **When GitHub does not answer**: the token is asked within the read's deadline. A 5xx, a rate limit or the network fails the read as a transient error, retried; it is never read without the token. A refusal (a 4xx: the App not installed there) falls back to the machine's credentials for 10 minutes, said once in the log.
+- **The knowledge base's note** (ORC-386) is pushed as the App, with its *Contents* (write), when the App is installed on the knowledge base's repository: a protection of its default branch must let the App push there, or the note is undone in the clone, as for any refused push.
 - **Without the App** (a run on a workstation, `factory init` before the App): nothing changes, the user's own git credentials read `origin`. Check with `git fetch` from the repository.
 - **Where the token goes**: in git's environment alone, as an `http.https://github.com/.extraheader` passed through `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n`. Never in a URL, a command line (visible to every process of the host, and quoted in git's errors), a log line, nor a repository's `.git/config`: the clone's `origin` stays the URL it was. A test with a fake private git server holds it (`src/adapters/forge/fetch-auth.test.ts`).
 
@@ -110,7 +112,7 @@ On the agent side: `git push` and `gh` writes are refused by the pack and its ho
 
 ### Read access for the daemon's git
 
-On each repository entrusted to Relais, the daemon's git must read its branches (`git fetch`, `git ls-remote`). With an `https://github.com/` origin, the App's token does it (*Contents*, [above](#the-daemons-own-git)); with an SSH origin, the machine's credentials must: with a deploy key, read-only is enough. The PRs, checks and review threads are read by the App.
+On each repository entrusted to Relais, the daemon's git must read its branches (`git fetch`). With an `https://github.com/` origin, the App's token does it (*Contents*, [above](#the-daemons-own-git)); with an SSH origin, the machine's credentials must: with a deploy key, read-only is enough. The PRs, checks and review threads are read by the App.
 
 ## Human permissions
 
