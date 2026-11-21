@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -15,10 +15,17 @@ function docPages(): string[] {
   return ['README.md', ...docs.sort()];
 }
 
+/** A fenced block, ``` or ~~~, up to its closing fence. */
+const FENCE = /^(```|~~~)[^\n]*\n[\s\S]*?^\1[^\n]*$/gm;
+/** A link's target, `<a b.md>` or `a.md`, then its optional title, "t", 't' or (t). */
+const TARGET = String.raw`(?:<([^>\n]+)>|([^)\s]+))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?`;
+const INLINE = new RegExp(String.raw`\]\(\s*${TARGET}\s*\)`, 'g');
+const REFERENCE = new RegExp(String.raw`^\s*\[[^\]]+\]:\s*${TARGET}\s*$`);
+
 /** The page without its fenced blocks and inline code, which hold no links; lines kept, so a line number stays right. */
 function prose(markdown: string): string {
   return markdown
-    .replace(/^(```|~~~)[^\n]*\n[\s\S]*?^\1[^\n]*$/gm, (block) => block.replace(/[^\n]/g, ''))
+    .replace(FENCE, (block) => block.replace(/[^\n]/g, ''))
     .replace(/(`+)[^`\n][\s\S]*?\1/g, (code) => code.replace(/[^\n]/g, ' '));
 }
 
@@ -38,7 +45,7 @@ function slug(heading: string): string {
 function anchors(markdown: string): Set<string> {
   const found = new Set<string>();
   const seen = new Map<string, number>();
-  const text = markdown.replace(/^(```|~~~)[^\n]*\n[\s\S]*?^\1[^\n]*$/gm, '');
+  const text = markdown.replace(FENCE, '');
   for (const [, heading] of text.matchAll(/^#{1,6}[ \t]+(.+?)[ \t#]*$/gm)) {
     const base = slug(heading!);
     const n = seen.get(base) ?? 0;
@@ -51,25 +58,23 @@ function anchors(markdown: string): Set<string> {
 
 /** The relative links of a page, inline `[text](target)` and reference `[label]: target`, with their line. */
 function links(markdown: string): { line: number; target: string }[] {
-  const found: { line: number; target: string }[] = [];
-  prose(markdown)
+  return prose(markdown)
     .split('\n')
-    .forEach((text, i) => {
-      const inline = [...text.matchAll(/\]\(\s*(?:<([^>\n]+)>|([^)\s]+))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g)].map((m) => (m[1] ?? m[2])!);
-      const reference = /^\s*\[[^\]]+\]:\s*(?:<([^>]+)>|(\S+))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*$/.exec(text);
-      if (reference) inline.push((reference[1] ?? reference[2])!);
-      for (const target of inline) {
+    .flatMap((text, i) =>
+      [...text.matchAll(INLINE), ...[REFERENCE.exec(text) ?? []]]
+        .filter((m) => m.length)
+        .map((m) => (m[1] ?? m[2])!)
         // A scheme (https:, mailto:) or `//host` leaves the repository: not followed.
-        if (!/^([a-z][a-z0-9+.-]*:|\/\/)/i.test(target)) found.push({ line: i + 1, target });
-      }
-    });
-  return found;
+        .filter((target) => !/^([a-z][a-z0-9+.-]*:|\/\/)/i.test(target))
+        .map((target) => ({ line: i + 1, target })),
+    );
 }
 
 const pageCache = new Map<string, Set<string>>();
 const anchorsOf = (path: string): Set<string> => {
-  if (!pageCache.has(path)) pageCache.set(path, anchors(readFileSync(join(root, path), 'utf8')));
-  return pageCache.get(path)!;
+  let found = pageCache.get(path);
+  if (!found) pageCache.set(path, (found = anchors(readFileSync(join(root, path), 'utf8'))));
+  return found;
 };
 
 /** Why a link of `page` is dead, or undefined when it resolves. */
@@ -81,16 +86,16 @@ function deadLink(page: string, target: string): string | undefined {
   const file = path === '' ? page : relative(root, join(base, path)).split(sep).join('/');
   if (file.startsWith('..')) return `${target}: outside the repository`;
   if (!existsSync(join(root, file))) return `${target}: no file ${file}`;
-  if (!anchor || !file.endsWith('.md') || statSync(join(root, file)).isDirectory()) return undefined;
+  if (!anchor || !file.endsWith('.md')) return undefined;
   return anchorsOf(file).has(decodeURIComponent(anchor)) ? undefined : `${target}: no heading #${anchor} in ${file}`;
 }
 
 describe('links between README.md and docs/ (ORC-202)', () => {
   it.each(docPages())('every relative link of %s resolves, its #anchor included', (page) => {
-    const dead = links(readFileSync(join(root, page), 'utf8'))
-      .map(({ line, target }) => [line, deadLink(page, target)] as const)
-      .filter(([, why]) => why)
-      .map(([line, why]) => `${page}:${line} ${why}`);
+    const dead = links(readFileSync(join(root, page), 'utf8')).flatMap(({ line, target }) => {
+      const why = deadLink(page, target);
+      return why ? [`${page}:${line} ${why}`] : [];
+    });
     expect(dead).toEqual([]);
   });
 

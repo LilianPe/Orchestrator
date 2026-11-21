@@ -31,15 +31,15 @@ function docPages(): string[] {
 }
 
 /** The forbidden terms of a page, outside its historical notes, each with its line. */
-function forbidden(markdown: string): string[] {
-  const found: string[] = [];
+function forbidden(markdown: string): { line: number; term: string; text: string }[] {
+  const found: { line: number; term: string; text: string }[] = [];
   let inNote = false;
   markdown.split('\n').forEach((line, i) => {
     if (MARKER.test(line)) inNote = true;
     else if (!line.startsWith('>')) inNote = false;
     if (inNote) return;
     for (const term of TERMS) {
-      if (term.pattern.test(line) && !term.allowedOn?.test(line)) found.push(`${i + 1}: ${term.name}: ${line.trim().slice(0, 120)}`);
+      if (term.pattern.test(line) && !term.allowedOn?.test(line)) found.push({ line: i + 1, term: term.name, text: line.trim().slice(0, 120) });
     }
   });
   return found;
@@ -49,7 +49,7 @@ describe('the docs speak of the factory, Relais only in a historical note (ORC-2
   const pages = docPages().filter((page) => !HISTORICAL_PAGES.some((p) => p.test(page)));
 
   it.each(pages)('%s names no retired term outside a historical note', (page) => {
-    expect(forbidden(readFileSync(join(root, page), 'utf8'))).toEqual([]);
+    expect(forbidden(readFileSync(join(root, page), 'utf8')).map((f) => `${f.line}: ${f.term}: ${f.text}`)).toEqual([]);
   });
 
   it('exempts a historical note, and only it', () => {
@@ -66,6 +66,6 @@ describe('the docs speak of the factory, Relais only in a historical note (ORC-2
       'smee relays the webhooks on a workstation (`factory init --dev`).',
       'smee in production; a local tunnel is optional.',
     ].join('\n');
-    expect(forbidden(md).map((f) => f.split(':').slice(0, 2).join(':'))).toEqual(['1: relais', '7: ANTHROPIC_API_KEY', '8: smee', '11: smee']);
+    expect(forbidden(md).map((f) => `${f.line}: ${f.term}`)).toEqual(['1: relais', '7: ANTHROPIC_API_KEY', '8: smee', '11: smee']);
   });
 });
