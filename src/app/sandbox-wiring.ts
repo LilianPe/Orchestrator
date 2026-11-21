@@ -132,7 +132,7 @@ export function visualProofLine(v: { image?: string; detail: string }): string {
 
 /**
  * Each limit of the attempt containers: unset, the default; `0` or `none`, left out (a host whose cgroups lack the controller);
- * or the reason the first malformed one is refused.
+ * or the reasons every malformed one is refused, together (ORC-455).
  */
 export function sandboxLimits(env: NodeJS.ProcessEnv): SandboxLimits | { refused: string } {
   const d = defaultLimits();
@@ -142,9 +142,10 @@ export function sandboxLimits(env: NodeJS.ProcessEnv): SandboxLimits | { refused
     hint: `at least ${MIN_MEMORY}`,
   });
   const cpus = limit(env, 'FACTORY_SANDBOX_CPUS', /^(\d+|\d*\.\d+)$/, 'a number of CPUs such as 2 or 0.5', d.cpus, Number);
-  if (typeof pids === 'object') return pids;
-  if (typeof memory === 'object') return memory;
-  if (typeof cpus === 'object') return cpus;
+  if (typeof pids === 'object' || typeof memory === 'object' || typeof cpus === 'object') {
+    const refusals = [pids, memory, cpus].flatMap((l) => (typeof l === 'object' ? [l.refused] : []));
+    return { refused: refusals.join(' ') };
+  }
   return { pids, memory, cpus };
 }
 

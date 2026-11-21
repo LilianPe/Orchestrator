@@ -96,9 +96,13 @@ export async function checkHost(env: NodeJS.ProcessEnv, run: Exec = execCmd): Pr
   const sandbox = sandboxConfig(env);
   if (!sandbox) return { verdict: 'refused', reasons: ['no container engine (FACTORY_CONTAINER_CLI is not set): nothing limits the sandbox'] };
   // What the start refuses of this environment, with its message (ORC-449): another CLI, unasked; no runner image, said beside the engine's answer.
-  const refused = 'refusal' in sandbox ? [sandbox.refusal] : [];
   const { cli } = sandbox;
-  if (!cli) return { verdict: 'refused', reasons: refused };
+  if (!cli) return { verdict: 'refused', reasons: 'refusal' in sandbox ? [sandbox.refusal] : [] };
+  // Only the limits set (ORC-451): one at `none` is the way out of a host without its controller. A malformed or too small one
+  // (ORC-452) leaves them unread: every controller stays required. Its refusal is said even when the start refuses first for
+  // another reason, which `sandboxConfig` returns alone (ORC-455).
+  const limits = sandboxLimits(env);
+  const refused = [...new Set(['refusal' in sandbox ? sandbox.refusal : '', 'refused' in limits ? limits.refused : ''].filter(Boolean))];
   let cgroups: EngineCgroups;
   try {
     const args = cli === 'docker' ? ['info', '--format', '{{json .}}'] : ['info', '--format', 'json'];
@@ -110,9 +114,6 @@ export async function checkHost(env: NodeJS.ProcessEnv, run: Exec = execCmd): Pr
   const { cgroupV2, controllers, rootless, manager } = cgroups;
   const linger = 'sudo loginctl enable-linger <user>, docs/tests.md';
   const reasons = [...refused];
-  // Only the limits set (ORC-451): one at `none` is the way out of a host without its controller. A malformed or too small one
-  // (ORC-452), refused above, leaves them unread: every controller stays required.
-  const limits = sandboxLimits(env);
   const required = Object.entries(LIMIT_CONTROLLERS)
     .filter(([limit]) => 'refused' in limits || limits[limit as keyof SandboxLimits] !== undefined)
     .map(([, controller]) => controller);
