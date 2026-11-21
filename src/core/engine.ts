@@ -746,7 +746,11 @@ function resetRedCi(out: Decision, ticket: TicketState | undefined): void {
  */
 function unblock(out: Decision, event: FactoryEvent, ticket: TicketState): void {
   out.events.push({ type: 'ticket.unblocked' });
-  if (!relaunchedByHuman(event, ticket)) return;
+  if (relaunchedByHuman(event, ticket)) giveBoundsBack(out, ticket);
+}
+
+/** What a human relaunch of a blocked ticket gives back (`unblock`), even when the lift waits on blockers (ORC-432, `startReaction`). */
+function giveBoundsBack(out: Decision, ticket: TicketState): void {
   resetRedCi(out, ticket);
   // The human review rounds too (ORC-190): the reply to their own bound relaunches on the feedback it kept.
   resetHumanRounds(out, ticket);
@@ -864,21 +868,30 @@ function usageLimitDecision(out: Decision, event: FactoryEvent<'run.finished'>, 
 /**
  * The tickets a waiting ticket was « blocked by » are done or no longer linked (ORC-363): the wait ends and its start is made,
  * unless the ticket moved on meanwhile: blocked, undelegated or at work (which ended the wait already), or moved by a human
- * out of the states a delegation starts from.
+ * out of the states a delegation starts from. A blocked ticket a human relaunched while it waited (`lift`, ORC-432) has its
+ * block lifted and the step that relaunch resumed started in place of the start.
  */
 function blockersDone(out: Decision, event: FactoryEvent<'blockers.done'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
   const wait = ticket?.waitingOn;
-  const job = wait && workflow.jobs[wait.start.job];
+  // Blocked, a human relaunched it while it waited: the block is lifted here, the bounds given back by the relaunch itself.
+  const lifting = !!wait?.lift && !!ticket?.blocked;
+  const start = wait && (wait.lift ?? wait.start);
+  const job = start && workflow.jobs[start.job];
   if (wait) out.events.push({ type: 'ticket.patched', patch: { waitingOn: null } });
   const startable = ticket?.logical === 'todo' || ticket?.logical === 'dev';
-  if (!ticket || !wait || !job || !startable || refusesDevWork(ticket, job) || ticket.blocked || ticket.activeRunId || ticket.verifyingRunId) {
+  if (!ticket || !start || !job || !startable || refusesDevWork(ticket, job) || (ticket.blocked && !lifting) || ticket.activeRunId || ticket.verifyingRunId) {
     out.trace.push('blockers.done: the ticket no longer waits, nothing started');
+    // The ack of the relaunch said it would resume: the human hears it will not.
+    if (lifting) out.effects.push({ kind: 'activity', type: 'thought', body: LIFT_DROPPED });
     return out;
   }
   out.effects.push({ kind: 'activity', type: 'thought', body: `Nothing blocks this ticket any more (${event.payload.blockers.join(', ')} done or no longer linked): starting.` });
-  startAs(out, event, ticket, job, wait.start);
+  if (lifting) out.events.push({ type: 'ticket.unblocked' });
+  startAs(out, event, ticket, job, start);
   return out;
 }
+
+const LIFT_DROPPED = 'The tickets this one waited for are done, but it moved on meanwhile: it stays blocked, and nothing resumes. Reply here to resume it.';
 
 /** A run, its check or a job waiting to start: the work whose end is the ticket's next step boundary. */
 const workInFlight = (t: TicketState): boolean => !!(t.activeRunId || t.verifyingRunId || t.pendingJob);
@@ -1533,22 +1546,31 @@ function startReaction(out: Decision, event: FactoryEvent, ticket: TicketState |
   const job = handed ?? resumed ?? r.job;
   // The ticket keeps its block for a run refused, and for a run of the questions queue, which resumes no step of it (ORC-415).
   const merged = refused(ticket, job);
-  if (!merged && ticket?.blocked && job.queue !== 'questions') unblock(out, event, ticket);
+  const lifts = !merged && !!ticket?.blocked && job.queue !== 'questions';
   // A human who starts work gives the review and CI loop its whole bound back, blocked or not (ORC-184): the count is the run's.
-  else if (!merged && !ticket?.blocked && HUMAN_RELAUNCH.has(event.type)) resetRedCi(out, ticket);
-  // Waiting on its blockers, the ticket starts no dev work for a message or a move: a reply stays in the inbox (ORC-363).
+  if (!merged && !ticket?.blocked && HUMAN_RELAUNCH.has(event.type)) resetRedCi(out, ticket);
+  // The step it resumes reads the reply: read again for the run's input.
+  const input = resumed ? 'feedback' : (r.input ?? job.input);
+  // Waiting on its blockers, the ticket starts no dev work for a message or a move: a reply stays in the inbox (ORC-363). A
+  // blocked one keeps its block, never lifted with nothing at work (ORC-432): the step it resumes waits on the wait (`lift`), which
+  // `blockers.done` lifts and starts; a human gives the bounds back now.
   const waits = heldByWait(ticket, job);
   if (waits) {
+    if (lifts) {
+      if (relaunchedByHuman(event, ticket!)) giveBoundsBack(out, ticket!);
+      out.events.push({ type: 'ticket.patched', patch: { waitingOn: { ...ticket!.waitingOn!, lift: { job: job.name, ...(input ? { input } : {}) } } } });
+    }
     out.trace.push(`${job.name} not started, ${waits}`);
     return out;
   }
+  if (lifts) unblock(out, event, ticket!);
   if (r.debounceMs && !merged) {
     const inbox = ((event.type === 'session.prompted' || event.type === 'session.mentioned') && !!event.payload.kind) || event.type === 'pr.reviewed';
     out.timers.push({ kind: 'debounce', slot: job.name, ms: r.debounceMs, payload: { job: job.name, ...(inbox ? { inbox: true as const } : {}) } });
   } else {
     // A mention that answers the block is read from the inbox, in the ticket's session, as a reply is (ORC-415).
     const threaded = !reply && (event.type === 'session.mentioned' || event.type === 'command');
-    const run = { input: resumed ? 'feedback' : (r.input ?? job.input), inputText: threaded ? event.payload.body : undefined, linearSessionId: threaded ? event.payload.linearSessionId : undefined };
+    const run = { input, inputText: threaded ? event.payload.body : undefined, linearSessionId: threaded ? event.payload.linearSessionId : undefined };
     humanRound(out, ticket, workflow, job, () => startRun(out, event, ticket, job, run));
   }
   return out;
@@ -1931,6 +1953,8 @@ function noticeMasked(out: Decision, event: FactoryEvent): void {
 /** The sign of life of a message (ORC-180): what will come of it, as this decision has it. */
 function messageAck(out: Decision, state: TicketState | undefined): string {
   if (out.events.some((e) => e.type === 'ticket.unblocked')) return 'Noted, resuming.';
+  const blockers = state?.waitingOn?.blockers;
+  if (blockers && out.events.some((e) => e.type === 'ticket.patched' && e.patch.waitingOn?.lift)) return `Noted: I resume once ${blockers.join(', ')} ${blockers.length > 1 ? 'are' : 'is'} done.`;
   if (out.effects.some((e) => e.kind === 'start_run' && e.input === 'thread')) return 'Noted, I am looking into it and will answer here.';
   const settled = state && settledTicket(state);
   if (settled === 'delivered') return 'Noted, but this ticket is delivered: no step will pick it up again.';
