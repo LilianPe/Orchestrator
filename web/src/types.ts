@@ -226,6 +226,17 @@ export interface AuditSheetView {
   defects: ReviewDefectView[];
 }
 
+/** `MaturityCard` of src/store/types.ts (ORC-410): a point of a project's maturity report, approved by whom and when, or not yet. */
+export interface MaturityCardView {
+  projectId: string;
+  key: string;
+  title: string;
+  value: string;
+  detectedAt: number;
+  approvedBy?: string;
+  approvedAt?: number;
+}
+
 /** `GET /api/security` (ORC-300): `SecurityStats` of src/store/types.ts over `[since, until)`, hosts not a plain name merged. */
 export interface SecurityPeriodView {
   since: number;

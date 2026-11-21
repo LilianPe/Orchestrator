@@ -46,4 +46,10 @@ describe('the standard blocking comment (ORC-196)', () => {
     const body = composeBlockComment({ ...facts, waits: 'never' }, {});
     expect(body.split('\n').at(-1)).toBe('This ticket will not resume: a reply here changes nothing.');
   });
+
+  it('titles a refusal as one: no block, no attempt (ORC-425)', () => {
+    const body = composeBlockComment({ ...facts, step: 'old frozen workflow version', reason: 'Frozen on an old format.', waits: 'never' }, {});
+    expect(body.split('\n')[0]).toBe('⛔ Refused: old frozen workflow version');
+    expect(body).not.toMatch(/Blocked|attempt/);
+  });
 });

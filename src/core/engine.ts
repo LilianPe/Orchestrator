@@ -14,7 +14,7 @@ import { factoryDefault } from '../presets/factory-default.js';
 import { FANTOME_APPROVER } from '../presets/fantome.js';
 import { PRODUCT_NAME } from '../product.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
-import { heldByOther, isOwnMoveEcho, pendingOf, reduce } from './reduce.js';
+import { heldByOther, isOwnMoveEcho, pendingOf, reduce, samePending } from './reduce.js';
 import { blockingTotal, isBlocking } from './review.js';
 import { holds, isNoRepo, isUnrouted, repoLabel, unroutedReason } from './routing.js';
 import { guardFindings } from './intake-checks.js';
@@ -893,7 +893,11 @@ function blockersDone(out: Decision, event: FactoryEvent<'blockers.done'>, ticke
     return out;
   }
   out.effects.push({ kind: 'activity', type: 'thought', body: `Nothing blocks this ticket any more (${event.payload.blockers.join(', ')} done or no longer linked): starting.` });
-  if (lifting) out.events.push({ type: 'ticket.unblocked' });
+  if (lifting) {
+    out.events.push({ type: 'ticket.unblocked' });
+    // The lift a pending job's start deferred (ORC-435): off the ticket with this decision, as `startPending` takes it.
+    if (samePending(ticket.pendingJob, start)) out.events.push({ type: 'pending.cleared', job: start });
+  }
   // The status of the step it starts, which the end of intake left to this start (ORC-382).
   const to = job.step !== undefined ? statusReached(workflow, job.step) : undefined;
   if (movesTo(ticket, to)) out.effects.push({ kind: 'move', to });
@@ -1523,10 +1527,19 @@ function admitReply(out: Decision, event: FactoryEvent<'ticket.commented' | 'ses
   return true;
 }
 
-/** Starts a stranded pending job as it was set pending, its input and restrictions, and takes it off the ticket with this decision. */
+/**
+ * Starts a stranded pending job as it was set pending, its input and restrictions, and takes it off the ticket with this decision.
+ * On a ticket waiting on its blockers, the block is kept and the job is the wait's lift (`liftOnWait`), which `blockers.done` starts (ORC-435).
+ */
 function startPending(out: Decision, event: FactoryEvent, ticket: TicketState, workflow: Workflow, pending: PendingJob): Decision {
   const job = workflow.jobs[pending.job]!;
   if (refused(ticket, job)) return out;
+  const waits = heldByWait(ticket, job);
+  if (waits) {
+    liftOnWait(out, event, ticket, pending);
+    out.trace.push(`${pending.job} not started, ${waits}`);
+    return out;
+  }
   unblock(out, event, ticket);
   // Off the ticket with this decision: the start it makes is the outbox's now, at least once.
   out.events.push({ type: 'pending.cleared', job: pending });
@@ -1534,6 +1547,15 @@ function startPending(out: Decision, event: FactoryEvent, ticket: TicketState, w
   if (relaunchedByHuman(event, ticket)) humanRound(out, ticket, workflow, job, () => startAs(out, event, ticket, job, pending));
   else startAs(out, event, ticket, job, pending);
   return out;
+}
+
+/**
+ * A blocked ticket relaunched while it waits on its blockers keeps its block (ORC-432): `lift`, the step the relaunch resumes, is
+ * made in place of the wait's start once they are done, with the block's lift (`blockersDone`); a human gives the bounds back now.
+ */
+function liftOnWait(out: Decision, event: FactoryEvent, ticket: TicketState, lift: PendingJob): void {
+  if (relaunchedByHuman(event, ticket)) giveBoundsBack(out, ticket);
+  out.events.push({ type: 'ticket.patched', patch: { waitingOn: { ...ticket.waitingOn!, lift } } });
 }
 
 /** Starts `job` as `pending` was set aside: its input and its restrictions. */
@@ -1564,14 +1586,10 @@ function startReaction(out: Decision, event: FactoryEvent, ticket: TicketState |
   // The step it resumes reads the reply: read again for the run's input.
   const input = resumed ? 'feedback' : (r.input ?? job.input);
   // Waiting on its blockers, the ticket starts no dev work for a message or a move: a reply stays in the inbox (ORC-363). A
-  // blocked one keeps its block, never lifted with nothing at work (ORC-432): the step it resumes waits on the wait (`lift`), which
-  // `blockers.done` lifts and starts; a human gives the bounds back now.
+  // blocked one keeps its block, the step it resumes the wait's lift (`liftOnWait`, ORC-432).
   const waits = heldByWait(ticket, job);
   if (waits) {
-    if (lifts) {
-      if (relaunchedByHuman(event, ticket!)) giveBoundsBack(out, ticket!);
-      out.events.push({ type: 'ticket.patched', patch: { waitingOn: { ...ticket!.waitingOn!, lift: { job: job.name, ...(input ? { input } : {}) } } } });
-    }
+    if (lifts) liftOnWait(out, event, ticket!, { job: job.name, ...(input ? { input } : {}) });
     out.trace.push(`${job.name} not started, ${waits}`);
     return out;
   }
