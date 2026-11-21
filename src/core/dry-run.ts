@@ -122,14 +122,18 @@ const OUTPUT_MAX = 4000;
 const DETAIL_MAX = 300;
 const DEPENDENCY = `a dependency is missing, or younger than the ${RELEASE_AGE_DAYS} days the setup allows`;
 
-/** What names a cause, in its order: the first pattern a line matches wins. A module named by a path is the repository's own, not a dependency. */
+/**
+ * What names a cause, in its order: the first pattern a line matches wins. A module is a dependency when named as a package
+ * (`zod`, `@acme/ui/x`: npm's names, lower case) or by a path into `node_modules`; a path starting with `.` or `/` elsewhere, or an
+ * alias (`@/lib/db`, `~/x`), is the repository's own. A bare path resolved through `baseUrl` (`src/x`) reads as a package name.
+ */
 const DEPENDENCY_LINES = [
   /No matching version found for \S+/,
   /ERR_PNPM_NO_MATURE_MATCHING_VERSION|minimumReleaseAge/,
   /Because there (?:is|are) no versions? of \S+|was not found in the package registry/,
   /No matching distribution found for \S+|Could not find a version that satisfies the requirement/,
   /Couldn't find any versions for|Couldn't find package/,
-  /Cannot find (?:module|package) '(?![./~]|@\/)[^']+'/,
+  /Cannot find (?:module|package) '(?:(?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*(?:\/[^']*)?|[^']*\/node_modules\/[^']+)'/,
   /ModuleNotFoundError: No module named/,
   /No solution found when resolving/,
 ];
@@ -142,33 +146,68 @@ const INSTALL_LINES = [
 /** The egress proxy's refusal of a host it does not allow: the repository needs a registry the factory does not let it reach. */
 const REFUSED_LINES = [/egress proxy:|\b403\b.*Forbidden/];
 /**
- * Each with the variable's name as its first group, upper case: a lower-case word is not one. Where nothing says it is a
- * variable, its name must hold a `_`: `URL is not defined` is a global, not a variable of the environment.
+ * Each with the variable's names as its first group, upper case: a lower-case word is not one; the first, a list of them
+ * (`Missing environment variables: API_URL, STRIPE_KEY`). Where nothing says it is a variable, its name must hold a `_`:
+ * `URL is not defined` is a global, not a variable of the environment.
  */
 const VARIABLE_LINES = [
-  /(?:[Mm]issing|[Uu]ndefined|[Rr]equired|[Uu]nset) (?:required )?(?:environment |env )?variables?:?\s*[`'"]?([A-Z][A-Z0-9_]{2,})/,
-  /[Ee]nvironment variable [`'"]?([A-Z][A-Z0-9_]{2,})/,
-  /\b([A-Z][A-Z0-9]*_[A-Z0-9_]+)[`'"]?\s+(?:is not set|is not defined|is undefined|is required|must be set|is missing)\b/,
-  /KeyError: '([A-Z][A-Z0-9]*_[A-Z0-9_]+)'/,
+  /(?:[Mm]issing|[Uu]ndefined|[Rr]equired|[Uu]nset) (?:required )?(?:environment |env )?variables?:?\s*[`'"]?([A-Z][A-Z0-9_]{2,}(?:[`'"]?\s*,\s*[`'"]?[A-Z][A-Z0-9_]{2,})*)/g,
+  /[Ee]nvironment variable [`'"]?([A-Z][A-Z0-9_]{2,})/g,
+  /\b([A-Z][A-Z0-9]*_[A-Z0-9_]+)[`'"]?\s+(?:is not set|is not defined|is undefined|is required|must be set|is missing)\b/g,
+  /KeyError: '([A-Z][A-Z0-9]*_[A-Z0-9_]+)'/g,
 ];
-/** On the loopback, where the services listen; `:3128` is the egress proxy's relay, never a service. */
-const SERVICE_LINES = [/ECONNREFUSED (?:127\.0\.0\.1|localhost|::1|\[::1\])(?!:3128\b)(?::\d+)?/, /could not connect to (?:server|database)/i, /Is the server running/];
-/** A registry or the egress proxy not answering: nothing of the repository's state, which the dry run then does not record. */
+const NAME = /[A-Z][A-Z0-9_]{2,}/g;
+/** On the loopback, where the services listen. */
+const SERVICE_LINES = [/ECONNREFUSED (?:127\.0\.0\.1|localhost|::1|\[::1\])(?::\d+)?/, /could not connect to (?:server|database)/i, /Is the server running/];
+/** A line about the egress proxy's relay, whatever the tool's words (`port 3128 …: Could not connect to server`, curl's and git's). */
+const PROXY_RELAY = /\b3128\b/;
+const serviceLine = (line: string) => !PROXY_RELAY.test(line) && SERVICE_LINES.some((p) => p.test(line));
+/**
+ * A registry or the egress proxy not answering: nothing of the repository's state, which the dry run then does not record. The
+ * proxy's 502 says so in its body (`egress proxy: getaddrinfo ENOTFOUND …`, `egress proxy: not sent on: …`), pip in a `ProxyError`.
+ */
 const UNREACHABLE_LINES = [
   /\b(?:ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ECONNRESET|ESOCKETTIMEDOUT)\b|\b50[234]\b.*(?:Bad Gateway|Service Unavailable|Gateway Time-?out)/,
   // pip's and uv's.
   /Failed to establish a new connection|Temporary failure in name resolution|\bdns error\b/,
+  /egress proxy: not sent on|\bProxyError\b|Cannot connect to proxy/,
 ];
 const ERROR_LINE = /\b(?:error|fail(?:ed|ure)?|assert\w*|exception|traceback|panic)\b/i;
 
 const brief = (line: string) => line.trim().slice(0, DETAIL_MAX);
 const linesOf = (output: string) => output.replace(ANSI, '').split('\n').filter((l) => l.trim());
 
-function firstLine(lines: readonly string[], patterns: readonly RegExp[], keep: (m: RegExpExecArray) => boolean = () => true): string | undefined {
+function firstLine(lines: readonly string[], patterns: readonly RegExp[]): string | undefined {
   for (const p of patterns) {
+    for (const line of lines) if (p.test(line)) return line;
+  }
+  return undefined;
+}
+
+/**
+ * The variables of the repository (ORC-211): the names `.factory/config.yml` declares under `env`, those of them the server
+ * gives a value (`factory.yml`), the only ones in the sandbox, and the secrets it declares under `setup_secrets`: the dry run's
+ * setup gets none, and no command gets one in any run, so what a line says of them is not read as a variable's cause.
+ */
+export interface DryRunVariables {
+  env: readonly string[];
+  provided: readonly string[];
+  secrets: readonly string[];
+}
+
+/**
+ * The first line that names a variable the code asks for and does not get, each of its names read: one the repository does not
+ * declare, or failing that one it declares and the server gives no value. A name it is given, or a secret of its setup, is not that.
+ */
+function variableCause(lines: readonly string[], vars: DryRunVariables): string | undefined {
+  for (const p of VARIABLE_LINES) {
     for (const line of lines) {
-      const m = p.exec(line);
-      if (m && keep(m)) return line;
+      const names = [...line.matchAll(p)].flatMap((m) => m[1]!.match(NAME) ?? []);
+      const read = names.filter((n) => !vars.secrets.includes(n));
+      const undeclared = read.filter((n) => !vars.env.includes(n));
+      if (undeclared.length) return `a variable the repository does not declare under \`env\` (${undeclared.join(', ')}): ${brief(line)}`;
+      const unprovided = read.filter((n) => !vars.provided.includes(n));
+      if (unprovided.length) return `a variable the repository declares under \`env\` and \`factory.yml\` gives no value (${unprovided.join(', ')}): ${brief(line)}`;
     }
   }
   return undefined;
@@ -176,39 +215,45 @@ function firstLine(lines: readonly string[], patterns: readonly RegExp[], keep: 
 
 /**
  * What a failed setup or command broke on, read from its output: a dependency missing or too recent (in the setup, a registry the
- * egress proxy refuses too), a variable the code reads and the repository does not declare, a service that does not answer on the
- * loopback; anything else, a failure, said by its first error line. A reading of text: what a tool prints otherwise is a failure,
- * never a guess.
+ * egress proxy refuses too), a variable the code reads and does not get (undeclared, or with no value), a service that does not
+ * answer on the loopback; anything else, a failure, said by its first error line. A reading of text: what a tool prints otherwise
+ * is a failure, never a guess.
  */
-export function classifyBreak(output: string, step: DryRunBreak['step'], declared: Pick<RepoConfig, 'env'>): { kind: DryRunBreakKind; detail: string } {
+export function classifyBreak(output: string, step: DryRunBreak['step'], vars: DryRunVariables): { kind: DryRunBreakKind; detail: string } {
   const lines = linesOf(output);
   const dependency = firstLine(lines, step === 'setup' ? [...DEPENDENCY_LINES, ...INSTALL_LINES] : DEPENDENCY_LINES);
   if (dependency) return { kind: 'dependency', detail: `${DEPENDENCY}: ${brief(dependency)}` };
   const refused = step === 'setup' ? firstLine(lines, REFUSED_LINES) : undefined;
   if (refused) return { kind: 'dependency', detail: `a registry the egress proxy does not allow: ${brief(refused)}` };
-  const variable = firstLine(lines, VARIABLE_LINES, (m) => !declared.env.includes(m[1]!));
-  if (variable) return { kind: 'variable', detail: `a variable the repository does not declare under \`env\`: ${brief(variable)}` };
-  const service = firstLine(lines, SERVICE_LINES);
+  const variable = variableCause(lines, vars);
+  if (variable) return { kind: 'variable', detail: variable };
+  const service = lines.find(serviceLine);
   if (service) return { kind: 'service', detail: `a service does not answer: ${brief(service)}` };
   const error = lines.find((l) => ERROR_LINE.test(l)) ?? lines.at(-1);
   return { kind: 'failure', detail: error ? brief(error) : 'it printed nothing' };
 }
 
-/** The line of a setup's output that says a registry or the egress proxy did not answer: a breakdown, not the repository's state. */
+/**
+ * The line of a setup's output that says a registry or the egress proxy did not answer: a breakdown, not the repository's state.
+ * An output where a service of its own refuses on the loopback (`serviceLine`) is the repository's, none: the error that says
+ * so spans lines of which only the first names the address (Node's `  code: 'ECONNREFUSED',` below it).
+ */
 export function unreachable(output: string): string | undefined {
-  const line = firstLine(linesOf(output), UNREACHABLE_LINES);
+  const lines = linesOf(output);
+  if (lines.some(serviceLine)) return undefined;
+  const line = firstLine(lines, UNREACHABLE_LINES);
   return line && brief(line);
 }
 
-const breakOf = (step: DryRunBreak['step'], command: string, output: string, declared: Pick<RepoConfig, 'env'>): DryRunBreak => ({
-  ...classifyBreak(output, step, declared), step, command, output: logExcerpt(output, OUTPUT_MAX),
+const breakOf = (step: DryRunBreak['step'], command: string, output: string, vars: DryRunVariables): DryRunBreak => ({
+  ...classifyBreak(output, step, vars), step, command, output: logExcerpt(output, OUTPUT_MAX),
 });
 
 /**
  * The breaks of the failed commands: a failing test that passed on its rerun is flaky; a command that failed on its flaky tests
  * alone has no other break, one that failed on more is classified by its output. A known flaky test of the repository does not count.
  */
-export function breaksOfRuns(runs: readonly CommandRun[], standing: Standing, declared: Pick<RepoConfig, 'env'>): DryRunBreak[] {
+export function breaksOfRuns(runs: readonly CommandRun[], standing: Standing, vars: DryRunVariables): DryRunBreak[] {
   return runs.flatMap((run) => {
     const settled = settle([run], standing);
     if (!settled.failures.length) return [];
@@ -218,7 +263,7 @@ export function breaksOfRuns(runs: readonly CommandRun[], standing: Standing, de
     const breaks = flaky.map((t): DryRunBreak => ({ kind: 'flaky', step: 'command', command: run.command, detail: `${t.test} failed, then passed on its rerun`, output }));
     // `withoutIndicative` is set only when every failing test is a known flaky one, none of them counted.
     const onlyFlaky = flaky.length > 0 && flaky.length === counted.length && !run.notRerun && run.withoutIndicative === undefined;
-    return onlyFlaky ? breaks : [...breaks, breakOf('command', run.command, run.output, declared)];
+    return onlyFlaky ? breaks : [...breaks, breakOf('command', run.command, run.output, vars)];
   });
 }
 
@@ -295,18 +340,20 @@ export async function runDryRun(req: DryRunRequest): Promise<DryRun> {
   // Read before any of its code runs, and before the setup opens services that a failure here would leave behind.
   const tests = await testCommands(git, sha, commands);
   const env = await req.env(config);
+  const vars: DryRunVariables = { env: config.env, provided: Object.keys(env), secrets: config.setupSecrets };
   if (setup.length) {
     try {
       await runSealedSetup(sandboxes, { runId: `${req.runId}-run`, ticketId: req.projectId, workspacePath: cloneDir, mounts: [], commands: setup, argv: verifyCommand, env, secrets: {}, services: config.services, now: new Date(req.now()) });
     } catch (err) {
       if (!(err instanceof SetupFailure)) throw err;
+      // A registry or the proxy that did not answer says nothing of the repository, whatever the installer printed after it
+      // (pip's `No matching distribution` past a `ProxyError`), and whether the setup failed or ran over its cap: no dry run,
+      // as for the forge or the engine.
+      const down = unreachable(err.output);
+      if (down) throw new Error(`${err.command}: a registry or the egress proxy did not answer, no dry run recorded: ${down}`, { cause: err });
       const broke: DryRunBreak = err.exitCode === null
         ? { kind: 'failure', step: 'setup', command: err.command, detail: err.message, output: logExcerpt(err.output, OUTPUT_MAX) }
-        : breakOf('setup', err.command, err.output, config);
-      // A registry or the proxy that did not answer says nothing of the repository: no dry run, as for the forge or the engine.
-      // A dependency it then says is missing was not reached; a service of the repository's own that refuses is its own.
-      const down = broke.kind === 'failure' || broke.kind === 'dependency' ? unreachable(err.output) : undefined;
-      if (down) throw new Error(`${err.command}: a registry or the egress proxy did not answer, no dry run recorded: ${down}`, { cause: err });
+        : breakOf('setup', err.command, err.output, vars);
       return dryRun([broke], setup, []);
     }
   }
@@ -319,7 +366,7 @@ export async function runDryRun(req: DryRunRequest): Promise<DryRun> {
       if (run) failed.push(run);
     }
   }, { ...DEFAULT_REQUIREMENTS, services: config.services });
-  return dryRun(breaksOfRuns(failed, standing, config), setup, commands);
+  return dryRun(breaksOfRuns(failed, standing, vars), setup, commands);
 }
 
 /**
