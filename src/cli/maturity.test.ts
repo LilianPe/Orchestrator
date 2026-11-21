@@ -128,13 +128,16 @@ describe('the maturity report: what it must not mistake (ORC-410)', () => {
     expect(valueOf(repoOf({ 'app.py': '', 'test_app.py': '' }))['untested']).toBe('none: every source directory has a test file');
   });
 
-  it('files of code with no directory of code are tested by a directory of tests beside them, or a root test/', () => {
+  it('files of code with no directory of code are tested by any test file of the repository', () => {
     const none = 'none: every source directory has a test file';
+    expect(valueOf(repoOf({ 'src/index.ts': '', '__tests__/index.test.ts': '' }))['untested']).toBe(none);
+    expect(valueOf(repoOf({ 'src/index.ts': '', 'spec/index.spec.ts': '' }))['untested']).toBe(none);
+    expect(valueOf(repoOf({ 'src/index.ts': '', 'tests/index.test.ts': '' }))['untested']).toBe(none);
     expect(valueOf(repoOf({ 'src/index.ts': '', 'src/__tests__/index.test.ts': '' }))['untested']).toBe(none);
     expect(valueOf(repoOf({ 'src/index.ts': '', 'src/test/index.test.ts': '' }))['untested']).toBe(none);
     expect(valueOf(repoOf({ 'src/index.ts': '', 'test/index.test.ts': '' }))['untested']).toBe(none);
     expect(valueOf(repoOf({ 'app.py': '', 'tests/test_app.py': '' }))['untested']).toBe(none);
-    expect(valueOf(repoOf({ 'src/index.ts': '', 'src/__tests__/helpers.ts': '' }))['untested']).toBe('src/ (its own files)');
+    expect(valueOf(repoOf({ 'src/index.ts': '', 'docs/index.md': '', 'scripts/build.sh': '' }))['untested']).toBe('src/ (its own files)');
   });
 
   it('a Postgres image under a registry, an owner or a variant name is a Postgres; an image named after it is not', () => {
