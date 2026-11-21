@@ -156,7 +156,21 @@ function podmanCgroups(info: unknown): EngineCgroups {
 export interface BranchProtectionReport extends Partial<BranchProtection> {
   verdict: Verdict;
   reasons: string[];
+  /** What `doctor` cannot check and a human must: told with an accepted verdict, never part of it. */
+  warnings?: string[];
 }
+
+/**
+ * GitHub returns a ruleset's `bypass_actors` only to an account that can edit it, the Administration write permission the App
+ * must not have, and a classic protection's bypass settings need it too (ORC-428): who else bypasses goes unread. An actor
+ * the daemon's SSH keys push as lets a run on the host push to the default branch without a pull request.
+ */
+const BYPASS_ACTORS_WARNING =
+  'Warning: bypass actors not read: GitHub shows them only to an account with the Administration permission, which the App does not have. ' +
+  "Check by hand that the identity the daemon's SSH keys push with bypasses nothing on this branch: in each ruleset that requires a pull request, " +
+  'no bypass actor it holds (Repository admin or another role it has, its team, its user, or a Deploy key if one of the keys is one); ' +
+  'on a classic protection, "Do not allow bypassing the above settings" checked and no allowed bypass for it. ' +
+  'Otherwise a run on the host (FACTORY_ALLOW_HOST_RUNS=1) pushes to the default branch without a pull request (docs/github.md).';
 
 /**
  * Whether GitHub keeps the default branch for humans (ORC-208): a ruleset rule that requires a pull request, which the
@@ -164,7 +178,12 @@ export interface BranchProtectionReport extends Partial<BranchProtection> {
  * says what it must hold).
  */
 function judgeProtection(protection: BranchProtection): BranchProtectionReport {
-  const report = (verdict: Verdict, reason: string): BranchProtectionReport => ({ ...protection, verdict, reasons: [reason] });
+  const report = (verdict: Verdict, reason: string): BranchProtectionReport => ({
+    ...protection,
+    verdict,
+    reasons: [reason],
+    ...(verdict === 'accepted' ? { warnings: [BYPASS_ACTORS_WARNING] } : {}),
+  });
   const rules = protection.rules.join(', ');
   if (protection.pullRequestRulesets.some((ruleset) => ruleset.bypass === 'never')) {
     return report('accepted', `a ruleset the App cannot bypass requires a pull request (rules: ${rules})`);
@@ -715,7 +734,12 @@ interface Verdicts {
 /** The host's and the default branch's verdicts, in text, then a blank line. */
 function verdictLines({ host, branchProtection: protection }: Verdicts): string[] {
   const branch = protection.branch ? ` ${protection.branch}` : '';
-  return [`Host: ${host.verdict} — ${host.reasons.join(' ')}`, `Default branch${branch}: ${protection.verdict} — ${protection.reasons.join(' ')}`, ''];
+  return [
+    `Host: ${host.verdict} — ${host.reasons.join(' ')}`,
+    `Default branch${branch}: ${protection.verdict} — ${protection.reasons.join(' ')}`,
+    ...(protection.warnings ?? []).map((warning) => `  ${warning}`),
+    '',
+  ];
 }
 
 function doctorFailure(
