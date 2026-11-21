@@ -63,6 +63,9 @@ export const DEFAULT_STATES: Workflow['states'] = { todo: 'Todo', spec: 'Spec', 
 /** The value of `factory.yml`'s `statuses` that turns a step's status off (ORC-457): the ticket keeps the status it had. */
 const STATUS_OFF = 'off';
 
+/** How factory.yml turns the spec's status off, as its messages say it. */
+const SPEC_OFF = `statuses: { spec_draft: ${STATUS_OFF} }`;
+
 /**
  * The Linear status of each logical state, with `factory.yml`'s `statuses` (ORC-382): a step names the status the table of
  * `factory/default` gives it, so that two steps of one status name the same, and one Linear status names one logical state
@@ -78,27 +81,24 @@ function statesOf(statuses: Readonly<Record<string, string>> = {}): Workflow['st
       const what = preset.steps.some((s) => s.id === step) ? 'shows no status of its own' : 'is not a step';
       throw new WorkflowError(`factory.yml: statuses.${step}: ${what} of ${preset.name} (the steps with one: ${withOne})`);
     }
+    // The only status the factory can go without is the spec's: the ticket stays in Todo until `build` (ORC-212).
+    if (name === STATUS_OFF && status !== 'spec') {
+      throw new WorkflowError(`factory.yml: statuses.${step}: \`${STATUS_OFF}\` turns off only the status of spec_draft: the factory moves tickets to the others`);
+    }
     const before = namedBy.get(status);
-    if (before !== undefined && (states[status] ?? STATUS_OFF) !== name) {
-      throw new WorkflowError(`factory.yml: statuses.${step}: « ${name} », where ${before}, which shows the same status, names « ${states[status] ?? STATUS_OFF} »`);
+    if (before !== undefined && states[status] !== name) {
+      throw new WorkflowError(`factory.yml: statuses.${step}: « ${name} », where ${before}, which shows the same status, names « ${states[status]} »`);
     }
     namedBy.set(status, step);
-    if (name !== STATUS_OFF) {
-      states[status] = name;
-    } else if (status === 'spec') {
-      // The only status the factory can go without: the ticket stays in Todo until `build` (ORC-212).
-      delete states.spec;
-    } else {
-      const spec = Object.keys(preset.statuses).filter((s) => preset.statuses[s] === 'spec');
-      throw new WorkflowError(`factory.yml: statuses.${step}: \`${STATUS_OFF}\` turns off only the status of ${spec.join(', ')}: the factory moves tickets to the others`);
-    }
+    if (name === STATUS_OFF) delete states.spec;
+    else states[status] = name;
   }
   const seen = new Map<string, string>();
   for (const [status, name] of Object.entries(states)) {
     const other = seen.get(name);
     if (other) {
       // A name factory.yml gave before Spec was a default (ORC-457).
-      const spec = other === 'spec' || status === 'spec' ? ` (Spec is the spec's by default: rename it, or \`statuses: { spec_draft: ${STATUS_OFF} }\`)` : '';
+      const spec = other === 'spec' || status === 'spec' ? ` (Spec is the spec's by default: rename it, or \`${SPEC_OFF}\`)` : '';
       throw new WorkflowError(`factory.yml: statuses: « ${name} » would name both ${other} and ${status}: a Linear status names one${spec}`);
     }
     seen.set(name, status);
@@ -115,7 +115,7 @@ export function missingStatusWarning(p: { id: string; teamKey: string }, states:
   if (!missing.length) return undefined;
   const names = missing.map((n) => `« ${n} »`).join(', ');
   // The spec's is the one status a project can turn off (ORC-457).
-  const off = states.spec && missing.includes(states.spec) ? ` A ticket in its spec stays in Todo with \`statuses: { spec_draft: ${STATUS_OFF} }\` in factory.yml.` : '';
+  const off = states.spec && missing.includes(states.spec) ? ` A ticket in its spec stays in Todo with \`${SPEC_OFF}\` in factory.yml.` : '';
   return `Warning: ${p.id}: the Linear team ${p.teamKey} has no status ${names}, which the factory moves tickets to (ORC-170's, or as \`statuses\` in factory.yml names them): a move to it fails. Connect Linear again to create it, or name a status the team has.${off}`;
 }
 

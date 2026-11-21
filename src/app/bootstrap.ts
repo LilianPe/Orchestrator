@@ -76,13 +76,12 @@ export async function createMissingStatuses(
   for (const p of projects) {
     // As `warm` just read them.
     const team = await tracker.teamStatuses(p.teamKey, false).catch(() => undefined);
-    const warning = team && missingStatusWarning(p, p.workflow.states, team);
-    if (!warning) continue;
+    if (!team || Object.values(p.workflow.states).every((name) => team.includes(name))) continue;
     try {
       const created = await tracker.ensureSetup(p.teamKey, p.workflow.states, FACTORY_LABELS);
       if (created.length) log(`Linear ${p.teamKey}: created ${created.join(', ')}`);
     } catch (error) {
-      log(warning);
+      log(missingStatusWarning(p, p.workflow.states, team)!);
       log(`Linear ${p.teamKey}: statuses not created: ${(error as Error).message}`);
     }
   }
@@ -204,7 +203,6 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       const api = new LinearApi(() => tm.get());
       linearTracker = new LinearTracker(api, appUserId);
       for (const p of projects) await linearTracker.warm(p.teamKey).catch((e: Error) => log(`warm ${p.teamKey}: ${e.message}`));
-      await createMissingStatuses(linearTracker, fromLinear, log);
       trackerSwitch.set(linearTracker);
       return true;
     };
@@ -571,7 +569,11 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         daemon.supervise().catch((e: unknown) => log(`heartbeat: ${(e as Error).message}`));
       }, RUN_BEAT_MS);
       beatInterval.unref();
-      if (await connectLinear()) void reconciler.once();
+      if (await connectLinear()) {
+        // « Connect Linear » creates them at its callback; a team connected before Spec was a default gets it here.
+        await createMissingStatuses(linearTracker!, fromLinear, log);
+        void reconciler.once();
+      }
       else log(`Linear not connected: open ${baseUrl}/oauth/start`);
       // The worker (ORC-149) executes the effects decided before a crash, then the events written
       // before it (or whose processing failed), oldest first; it then polls the inbox and the outbox
