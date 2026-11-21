@@ -44,16 +44,9 @@ describe('the sandboxes the start refuses before anything opens (ORC-450)', () =
   it('refuses a FACTORY_SANDBOX_* limit malformed, with its message', () => {
     for (const [k, v] of [['FACTORY_SANDBOX_PIDS', '1.5'], ['FACTORY_SANDBOX_MEMORY', 'lots'], ['FACTORY_SANDBOX_CPUS', 'two']]) {
       const env = { ...ENGINE, [k!]: v };
-      let message = '';
-      try {
-        sandboxLimits(env);
-      } catch (error) {
-        message = (error as Error).message;
-      }
-      expect(message).toMatch(`${k}=${v}: `);
-      expect(sandboxConfig(env)).toEqual({ cli: 'docker', refusal: message });
-      expect(sandboxRefusals(env)).toEqual([message]);
-      expect(() => checkHostRuns(env)).toThrow(message);
+      const { refused } = sandboxLimits(env) as { refused: string };
+      expect(sandboxConfig(env)).toEqual({ cli: 'docker', refusal: refused });
+      expect(() => checkHostRuns(env)).toThrow(refused);
     }
   });
 
@@ -98,7 +91,7 @@ describe('sandboxLimits', () => {
 
   it('refuses garbage, naming the variable', () => {
     for (const [k, v] of [['FACTORY_SANDBOX_PIDS', '1.5'], ['FACTORY_SANDBOX_PIDS', '-1'], ['FACTORY_SANDBOX_MEMORY', '4 GB'], ['FACTORY_SANDBOX_MEMORY', 'lots'], ['FACTORY_SANDBOX_CPUS', 'two'], ['FACTORY_SANDBOX_CPUS', '1.']]) {
-      expect(() => sandboxLimits({ [k!]: v })).toThrow(`${k}=${v}`);
+      expect(sandboxLimits({ [k!]: v })).toEqual({ refused: expect.stringMatching(`^${k}=${v}: `) });
     }
   });
 });

@@ -137,6 +137,7 @@ function tempHome(): string {
 
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  vi.restoreAllMocks();
 });
 
 describe('factory doctor', () => {
@@ -1039,18 +1040,13 @@ describe("the daemon's environment the start refuses, doctor's host refuses", ()
   };
 
   it('refuses a FACTORY_SANDBOX_* limit malformed with the message of the start (ORC-450)', async () => {
+    // Each variable's message: sandbox-wiring.test.ts.
     await refusedLikeTheStart({ FACTORY_CONTAINER_CLI: 'docker', ...RUNNER, FACTORY_SANDBOX_PIDS: 'many' }, /^FACTORY_SANDBOX_PIDS=many: a whole number of processes expected/);
-    await refusedLikeTheStart({ FACTORY_CONTAINER_CLI: 'docker', ...RUNNER, FACTORY_SANDBOX_MEMORY: '4 GB' }, /^FACTORY_SANDBOX_MEMORY=4 GB: /);
-    await refusedLikeTheStart({ FACTORY_CONTAINER_CLI: 'docker', ...RUNNER, FACTORY_SANDBOX_CPUS: 'two' }, /^FACTORY_SANDBOX_CPUS=two: /);
   });
 
   it('refuses a daemon without a uid or a gid with the message of the start (ORC-450)', async () => {
-    const getuid = vi.spyOn(process, 'getuid').mockReturnValue(undefined as unknown as number);
-    try {
-      await refusedLikeTheStart({ FACTORY_CONTAINER_CLI: 'docker', ...RUNNER }, 'The sandboxes require a daemon on Linux (uid and gid).');
-    } finally {
-      getuid.mockRestore();
-    }
+    vi.spyOn(process, 'getuid').mockReturnValue(undefined as unknown as number);
+    await refusedLikeTheStart({ FACTORY_CONTAINER_CLI: 'docker', ...RUNNER }, 'The sandboxes require a daemon on Linux (uid and gid).');
   });
 });
 

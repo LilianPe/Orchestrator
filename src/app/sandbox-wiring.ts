@@ -12,7 +12,7 @@ export function instanceId(home: string): string {
 }
 
 /** What the sandboxes run with, as `sandboxConfig` checked it. */
-export interface SandboxConfig {
+interface SandboxConfig {
   cli: 'docker' | 'podman';
   image: string;
   uid: number;
@@ -34,11 +34,8 @@ export function sandboxConfig(env: NodeJS.ProcessEnv): SandboxConfig | { cli?: '
   const uid = process.getuid?.();
   const gid = process.getgid?.();
   if (uid === undefined || gid === undefined) return { cli, refusal: 'The sandboxes require a daemon on Linux (uid and gid).' };
-  try {
-    return { cli, image, uid, gid, limits: sandboxLimits(env) };
-  } catch (error) {
-    return { cli, refusal: (error as Error).message };
-  }
+  const limits = sandboxLimits(env);
+  return 'refused' in limits ? { cli, refusal: limits.refused } : { cli, image, uid, gid, limits };
 }
 
 /**
@@ -136,20 +133,25 @@ export function visualProofLine(v: { image?: string; detail: string }): string {
   return `Visual proof on this instance: ${v.image ? 'available' : 'unavailable'} — ${v.detail}`;
 }
 
-/** Each limit of the attempt containers: unset, the default; `0` or `none`, left out (a host whose cgroups lack the controller). */
-export function sandboxLimits(env: NodeJS.ProcessEnv): SandboxLimits {
+/**
+ * Each limit of the attempt containers: unset, the default; `0` or `none`, left out (a host whose cgroups lack the controller);
+ * or the reason the first malformed one is refused.
+ */
+export function sandboxLimits(env: NodeJS.ProcessEnv): SandboxLimits | { refused: string } {
   const d = defaultLimits();
-  return {
-    pids: limit(env, 'FACTORY_SANDBOX_PIDS', /^[1-9]\d*$/, 'a whole number of processes', d.pids, Number),
-    memory: limit(env, 'FACTORY_SANDBOX_MEMORY', /^[1-9]\d*[bkmg]?$/i, 'a size such as 4g or 512m', d.memory, String),
-    cpus: limit(env, 'FACTORY_SANDBOX_CPUS', /^(\d+|\d*\.\d+)$/, 'a number of CPUs such as 2 or 0.5', d.cpus, Number),
-  };
+  const pids = limit(env, 'FACTORY_SANDBOX_PIDS', /^[1-9]\d*$/, 'a whole number of processes', d.pids, Number);
+  const memory = limit(env, 'FACTORY_SANDBOX_MEMORY', /^[1-9]\d*[bkmg]?$/i, 'a size such as 4g or 512m', d.memory, String);
+  const cpus = limit(env, 'FACTORY_SANDBOX_CPUS', /^(\d+|\d*\.\d+)$/, 'a number of CPUs such as 2 or 0.5', d.cpus, Number);
+  if (typeof pids === 'object') return pids;
+  if (typeof memory === 'object') return memory;
+  if (typeof cpus === 'object') return cpus;
+  return { pids, memory, cpus };
 }
 
-function limit<T>(env: NodeJS.ProcessEnv, name: string, ok: RegExp, hint: string, def: T | undefined, cast: (v: string) => T): T | undefined {
+function limit<T extends number | string>(env: NodeJS.ProcessEnv, name: string, ok: RegExp, hint: string, def: T | undefined, cast: (v: string) => T): T | undefined | { refused: string } {
   const v = env[name]?.trim();
   if (!v) return def;
   if (/^(0|none)$/i.test(v)) return undefined;
-  if (!ok.test(v) || !(Number.parseFloat(v) > 0)) throw new Error(`${name}=${v}: ${hint} expected, or 0 / none for no limit.`);
+  if (!ok.test(v) || !(Number.parseFloat(v) > 0)) return { refused: `${name}=${v}: ${hint} expected, or 0 / none for no limit.` };
   return cast(v);
 }
