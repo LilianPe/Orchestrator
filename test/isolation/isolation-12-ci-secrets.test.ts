@@ -16,6 +16,8 @@ import { appOptions, gate, gh, GITHUB_ENV, LiveForge, REPO } from './github-live
  */
 const CANARY = '.github/workflows/iso-canary.yml';
 const ENVIRONMENT = 'iso-canary';
+/** A run of the canary workflow, by its path (a reusable call adds `@ref`). */
+const isCanaryRun = (path: string) => path === CANARY || path.startsWith(`${CANARY}@`);
 
 const { skip, title } = gate('isolation 12: a factory PR sees no CI secret', GITHUB_ENV);
 
@@ -68,7 +70,7 @@ describe.skipIf(skip)(title, () => {
     for (let i = 0; i < 60; i++) {
       const listed = await gh(`/repos/${REPO}/actions/runs?head_sha=${commit.body.sha}`, token);
       expect(listed.status, 'the runs are unreadable: the App needs Actions: read').toBe(200);
-      runs = (listed.body.workflow_runs as Run[]).filter((r) => r.path === CANARY || r.path.startsWith(`${CANARY}@`));
+      runs = (listed.body.workflow_runs as Run[]).filter((r) => isCanaryRun(r.path));
       if (runs.some((r) => r.event === 'pull_request') && runs.every((r) => ['waiting', 'completed'].includes(r.status))) break;
       await new Promise((r) => setTimeout(r, 5000));
     }
@@ -106,6 +108,7 @@ const protectionGate = gate("isolation 12: doctor reads the branch protection th
 
 describe.skipIf(protectionGate.skip)(protectionGate.title, () => {
   let token = '';
+  let live: GitHubAppApi;
 
   /**
    * The canary's runs on the test branches, which the pushes here start and its environment holds waiting: cancelled
@@ -114,13 +117,14 @@ describe.skipIf(protectionGate.skip)(protectionGate.title, () => {
   const cancelCanaryRuns = async () => {
     for (const { branch } of PROTECTION) {
       const { body } = await gh(`/repos/${REPO}/actions/runs?branch=${encodeURIComponent(branch)}&event=push`, token);
-      const runs = ((body?.workflow_runs ?? []) as { id: number; path: string; status: string }[]).filter((r) => r.path.startsWith(CANARY) && r.status !== 'completed');
+      const runs = ((body?.workflow_runs ?? []) as { id: number; path: string; status: string }[]).filter((r) => isCanaryRun(r.path) && r.status !== 'completed');
       for (const run of runs) await gh(`/repos/${REPO}/actions/runs/${run.id}/cancel`, token, { method: 'POST' });
     }
   };
 
   beforeAll(async () => {
     token = await new LiveForge(appOptions()).token(REPO);
+    live = new GitHubAppApi(appOptions());
     await cancelCanaryRuns();
   }, 120_000);
 
@@ -129,26 +133,27 @@ describe.skipIf(protectionGate.skip)(protectionGate.title, () => {
   }, 120_000);
 
   it.each(PROTECTION)('$branch ($ruleset): what doctor reads and judges matches a direct push of the App', async ({ branch, ruleset, bypassable }) => {
-    const live = new GitHubAppApi(appOptions());
-    let ref = await gh(`/repos/${REPO}/git/ref/heads/${branch}`, token);
+    const ref = await gh(`/repos/${REPO}/git/ref/heads/${branch}`, token);
+    let head: string;
     if (ref.status === 404) {
       const { body: repo } = await gh(`/repos/${REPO}`, token);
       const { body: base } = await gh(`/repos/${REPO}/commits/${repo.default_branch as string}`, token);
       const created = await gh(`/repos/${REPO}/git/refs`, token, { method: 'POST', body: { ref: `refs/heads/${branch}`, sha: base.sha } });
       expect(created.status, `cannot create ${branch}: create it by hand from the default branch (docs/tests.md)`).toBe(201);
-      ref = await gh(`/repos/${REPO}/git/ref/heads/${branch}`, token);
+      head = base.sha as string;
+    } else {
+      expect(ref.status).toBe(200);
+      head = ref.body.object.sha as string;
     }
-    expect(ref.status).toBe(200);
-    const head = ref.body.object.sha as string;
 
     // What doctor reads: the ruleset is there, and GitHub says whether the App may bypass it.
-    const protection = await live.branchProtection(REPO, branch);
+    const protection = await live.protectionOf(REPO, branch);
     expect(protection.pullRequestRulesets, `no active ruleset requires a pull request on ${branch}: create ${ruleset} (docs/tests.md)`).not.toEqual([]);
     expect(protection.pullRequestRulesets.map((r) => r.bypass)).toEqual(protection.pullRequestRulesets.map(() => (bypassable ? 'always' : 'never')));
 
     // What doctor judges, the other verdicts held accepted.
     const host: HostReport = { verdict: 'accepted', reasons: ['held accepted'] };
-    const api = { listWorkflows: async () => [], listEnvironments: async () => [], branchProtection: () => live.branchProtection(REPO, branch), installationPermissions: async () => ({}) };
+    const api = { listWorkflows: async () => [], listEnvironments: async () => [], branchProtection: async () => protection, installationPermissions: async () => ({}) };
     const lines: string[] = [];
     const code = await runDoctor({ repoPath: REPO, api, host, out: (l) => lines.push(l), json: true });
     const report = JSON.parse(lines.join('\n')) as { branchProtection: { branch: string; verdict: string } };

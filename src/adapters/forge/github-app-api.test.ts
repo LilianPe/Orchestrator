@@ -267,7 +267,7 @@ describe('GitHubAppApi.branchProtection (ORC-208)', () => {
     expect(protection.pullRequestRulesets).toEqual([{ id: 6, bypass: 'never' }]);
   });
 
-  it('reads a named branch instead of the default one, without asking the repository for it (ORC-427)', async () => {
+  it('protectionOf reads a named branch as branchProtection reads the default one, without asking the repository for it (ORC-427)', async () => {
     const calls: Call[] = [];
     const routes: Route[] = [
       tokenRoute(),
@@ -275,7 +275,7 @@ describe('GitHubAppApi.branchProtection (ORC-208)', () => {
       (url) => (url.pathname === '/repos/acme/app/branches/iso%2Fguarded' ? { body: { protection: { enabled: false } } } : undefined),
       (url) => (url.pathname === '/repos/acme/app/rules/branches/iso%2Fguarded' ? { body: [{ type: 'pull_request', ruleset_id: 4 }] } : undefined),
     ];
-    const protection = await makeApi(routes, calls).branchProtection('/repo', 'iso/guarded');
+    const protection = await makeApi(routes, calls).protectionOf('/repo', 'iso/guarded');
     expect(protection).toEqual({ branch: 'iso/guarded', classic: false, rules: ['pull_request'], pullRequestRulesets: [{ id: 4, bypass: 'always' }] });
     expect(calls.some((call) => new URL(call.url).pathname === '/repos/acme/app')).toBe(false);
   });
