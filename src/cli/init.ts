@@ -333,7 +333,7 @@ export async function runInit(d: InitDeps): Promise<void> {
       'Configuration written.',
       'Next:',
       '  1. factory up',
-      `  2. open http://localhost:${cfg.port} and click "Connect Linear" (installs the agent in your workspace)`,
+      `  2. open http://localhost:${cfg.port} and click "Connect Linear" (installs the agent in your workspace and creates the team's missing statuses, Spec included)`,
       `  3. delegate a ticket to @${PRODUCT_NAME} in Linear`,
       '',
     ].join('\n'),

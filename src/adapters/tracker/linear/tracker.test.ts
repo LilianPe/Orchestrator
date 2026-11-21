@@ -441,7 +441,7 @@ describe('LinearTracker', () => {
       LabelCreate: (v) => ({ issueLabelCreate: { success: true, issueLabel: { id: 'y', name: v.input.name } } }),
     });
     const created = await new LinearTracker(api, 'app-1').ensureSetup('REL', defaultWorkflow().states, FACTORY_LABELS);
-    expect(created).toEqual(['Todo', 'In Progress', 'Human Review', 'AI Review', 'Done', 'Bloqué']);
+    expect(created).toEqual(['Todo', 'Spec', 'In Progress', 'Human Review', 'AI Review', 'Done', 'Bloqué']);
   });
 
   it('creates a session on an issue', async () => {

@@ -191,6 +191,8 @@ These warnings are expected on a workstation. Two other warnings must not be the
 - `Warning: pilot: no spec validator (authz.validators in config.yaml): …`, or `one spec validator`: item 11. With none, every ticket stops at the spec gate; with one, the tickets they delegate.
 - `` Warning: .factory/config.yml has no `commands.test`: … ``: item 2, or the file is not yet on `origin/HEAD` (`git fetch`).
 
+`Warning: pilot: the Linear team … has no status « Spec », …` shows on a connected factory whose team lacks that status: the spec shows it by default (ORC-457), and « Connect Linear » and the daemon's start create it, so it goes once the daemon has started after the upgrade, unless Linear refused (the start logs why). Before « Connect Linear », `doctor` says `Linear statuses not checked: Linear not connected: …` instead. To keep tickets in Todo through their spec instead, set `statuses: { spec_draft: off }` in `factory.yml`.
+
 Then the verdicts. Expected:
 
 ```text
@@ -249,7 +251,7 @@ The GitHub webhooks line is expected locally: a merge or a CI verdict then reach
 | `Warning: <project>: no spec validator …` | item 11 |
 | `error: sandboxes not listed, … spawn podman ENOENT` | Podman is not on the daemon's `PATH` |
 
-Then open `http://localhost:4100`, click **Connect Linear** and authorize the application: « Linear is connected. You can close this tab. ». The factory creates the missing statuses of the team (Todo, In Progress, Human Review, AI Review, Done) and the `Bloqué` label.
+Then open `http://localhost:4100`, click **Connect Linear** and authorize the application: « Linear is connected. You can close this tab. ». The factory creates the missing statuses of the team (Todo, Spec, In Progress, Human Review, AI Review, Done) and the `Bloqué` label.
 
 In another terminal, with the same `FACTORY_HOME`: `factory status` (`Linear: connected · queue: active …`) and `factory plan`, which lists the tickets delegated to the agent and whether each would be picked up, without starting anything (`` Linear not connected: run `factory up`, then connect Linear. `` before the connection).
 
@@ -270,9 +272,9 @@ What you should see, step by step ([`preset.md`](preset.md#sequence)):
 | Step | In Linear / GitHub | If it breaks |
 |---|---|---|
 | Delegation | within 10 s, the comment « Got it. » and the session's plan | Nothing at all: a webhook that does not arrive (the workstation's smee channel, `publicUrl`, the clock: Linear's signature is refused past 60 s of offset) or a refused signature; the log says `relay: webhook rejected with 401 (…)`. A refusal by the matrix (no `githubLogins` entry, no write access) is replied in the session and logged `authz: refused …`. |
-| `intake` | the session's live feed (« Reading the code »…); the ticket stays in Todo | An incomplete ticket goes to `clarify`. |
+| `intake` | the session's live feed (« Reading the code »…); the ticket stays in Todo, then moves to **Spec** when the spec starts | An incomplete ticket goes to `clarify`. |
 | `clarify` (if needed) | up to 3 questions in the session, one at a time | Answer in the **session**, not in a ticket comment. Unanswered after 72 h, the ticket is blocked. |
-| Spec | the spec in a comment of the ticket, « **Spec, version N** »; past 5 000 characters, in a Linear document linked to the ticket (« <ID>: spec, version N »), the comment giving its summary and the link. Then the session says « Spec published (risk: …). N acceptance criteria → tests. Version N, waiting for review. » and where to read it. The ticket stays in Todo, unless `factory.yml` gives the step a status: `statuses: { spec_draft: Spec }`, then restart the daemon and click **Connect Linear** again to create it ([`configuration.md`](configuration.md)) | A spec that fails `spec_check` twice blocks the ticket. |
+| Spec | the spec in a comment of the ticket, « **Spec, version N** »; past 5 000 characters, in a Linear document linked to the ticket (« <ID>: spec, version N »), the comment giving its summary and the link. Then the session says « Spec published (risk: …). N acceptance criteria → tests. Version N, waiting for review. » and where to read it. The ticket shows **Spec** until the build starts, after the spec is approved (ORC-457); `statuses: { spec_draft: off }` in `factory.yml` keeps it in Todo instead, the spec and its `/approve` unchanged ([`configuration.md`](configuration.md)) | A spec that fails `spec_check` twice blocks the ticket. |
 | `/approve` | a **validator who did not delegate** reads the spec in that comment or document, then replies `/approve` in the factory's **session** on the ticket, not under the comment (`/changes <comment>` asks for a new version, `/reject` stops) | A refusal is answered in the session: the delegator approved, or the validator is not in `authz.validators`. A plain comment, or a reply under the spec's comment, is not read as a command. |
 | `tests` → red check → freeze | the tests are committed on the ticket's branch; the factory runs them with `commands.test`: they must fail for the right reason. For the first 20 tickets the red check only measures (it never blocks, the trace says what it would have blocked); the freeze always applies | `infra`: the check could not run (no `commands.test`, the sandbox); the ticket is blocked. |
 | `build` | the ticket moves to **In Progress** | |

@@ -125,13 +125,13 @@ describe('clarify and the wait on a « blocked by » ticket (ORC-210, ORC-363)',
     await reconcile();
     expect(skills()).toEqual(['/factory:intake', '/factory:intake']);
 
-    // The blocker Done: the reconciliation resumes, the spec starts with the decisions; the ticket stays in Todo until the build (ORC-395).
+    // The blocker Done: the reconciliation resumes, the spec starts with the decisions, in Spec until the build (ORC-395, ORC-457).
     Object.assign(h.tracker.issues.get('REL-2')!, { stateName: 'Done', stateType: 'completed' });
     h.runner.enqueue(SPEC_DECIDED);
     await reconcile();
     expect(skills()).toEqual(['/factory:intake', '/factory:intake', '/factory:spec']);
     expect(h.runner.requests[2]!.prompt).toMatch(/## Decisions[\s\S]*Yes, to everyone/);
-    expect(moves()).toEqual([]);
+    expect(moves()).toEqual(['Spec']);
     expect((await h.ticket()).waitingOn ?? undefined).toBeUndefined();
 
     // The clarify timers of the answered round find nothing to do.

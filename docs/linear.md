@@ -33,7 +33,7 @@ Linear may refuse a callback URL on `http://localhost`: in that case, temporaril
 On connection, the factory:
 
 - saves the tokens, the agent's id (`appUserId`) and the organization's;
-- **creates the missing statuses in each configured team** (see § 5) and the `Bloqué` label (no `agent:*` label since ORC-201);
+- **creates the missing statuses in each configured team** (see § 5) and the `Bloqué` label (no `agent:*` label since ORC-201); the daemon's start, once Linear is connected, creates Spec in a team that lacks it (a team connected before it was a default, ORC-457), and only warns of another missing status;
 - runs a reconciliation right away; after that, it runs every 5 minutes (ORC-185).
 
 The token is refreshed automatically. On later startups, the factory reconnects on its own with the tokens in `secrets.json`. `factory status` and the UI show whether Linear is connected.
@@ -208,7 +208,7 @@ The factory reasons in **logical states** mapped by name to the team's statuses 
 | Logical state | Linear status (pack) | Linear type given if created |
 |---|---|---|
 | `todo` | Todo | `unstarted` |
-| `spec` | none, unless `statuses.spec_draft` names one (« Spec ») | `started` |
+| `spec` | Spec, none with `statuses.spec_draft: off` (ORC-457); a team's own « Spec » status is read as it | `started` |
 | `dev` | In Progress | `started` |
 | `human_review` | Human Review | `started` |
 | `ai_review` | AI Review | `started` |
@@ -220,7 +220,7 @@ Moves made by the factory itself are recognized, by the actor of their webhook, 
 
 A delegated ticket moved by a human to a status of type *Canceled* cancels its run (stop, queue and pending replies dropped); it is not blocked, and a block in progress is lifted along with its label (ORC-170). The ticket then goes to the logical state `cancelled`, read on the status's Linear type, never mapped by name: it is not declared in `states`, and nothing moves a ticket to it. A cancelled ticket is settled, as a delivered one: a failure that comes after (an effect replayed late) blocks it no more, nor does its PR closed afterwards (only recorded closed, no `pr.closed` rule applies), a delegation starts nothing, a question the answer agent relays is not asked (nobody implements it: the human is told so, and a message is acked as not picked up unless a human moves the ticket out of Canceled), its session folder is purged as a closed ticket's ([`operations.md`](operations.md)), and the dashboard no longer lists it among the unfinished tickets nor counts its duration on. A human move to a declared status takes it out of `cancelled`.
 
-**Who sets which status.** In a ticket taken to the merge, a human sets two statuses only: *Todo* (the ticket written, then delegated) and *Done* (the merge decision, ORC-148). The factory sets *In Progress*, *AI Review* and *Human Review* (and *Spec*, when `factory.yml` names it) from its steps (the preset's step → status table, ORC-391, ORC-382). After a *Done* set by a human, the merge moves nothing: the ticket is already in *Done*. After a PR merged directly on GitHub, the factory moves the ticket to *Done* (`pr.merged` rule). No work of the factory waits for a human move either: a commit published on a reply, a block lifted included, goes to *AI Review* and its review by itself (`dev-feedback`, as `fix-human`).
+**Who sets which status.** In a ticket taken to the merge, a human sets two statuses only: *Todo* (the ticket written, then delegated) and *Done* (the merge decision, ORC-148). The factory sets *Spec* (unless `factory.yml` turns it off, ORC-457), *In Progress*, *AI Review* and *Human Review* from its steps (the preset's step → status table, ORC-391, ORC-382). After a *Done* set by a human, the merge moves nothing: the ticket is already in *Done*. After a PR merged directly on GitHub, the factory moves the ticket to *Done* (`pr.merged` rule). No work of the factory waits for a human move either: a commit published on a reply, a block lifted included, goes to *AI Review* and its review by itself (`dev-feedback`, as `fix-human`).
 
 As long as a ticket is **blocked** (the factory is waiting for a reply), the `Bloqué` label is set next to its status; it is removed when the ticket restarts. The factory creates it on connection, and no `agent:*` label since ORC-201.
 

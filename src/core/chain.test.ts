@@ -23,8 +23,8 @@ function ends(wf: Workflow) {
 describe('the chain walks the preset (ORC-391)', () => {
   it("factory/default: each job's end, as the jobs' `on_success` of the former pack said it", () => {
     expect(ends(defaultWorkflow())).toEqual({
-      // The chain's entry (ORC-395): past clarify, which has no job, to the spec.
-      intake: { run: 'spec', at: 'spec_draft' },
+      // The chain's entry (ORC-395): past clarify, which has no job, to the spec, whose status the ticket takes (ORC-457).
+      intake: { run: 'spec', move: 'spec', at: 'spec_draft' },
       dev: { run: 'review', move: 'ai_review', post: 'summary', at: 'review' },
       // Its end waits at the spec gate; `/approve` passes it.
       spec: { at: 'spec_review' },
@@ -99,7 +99,8 @@ describe('the preset drives where the review ends (ORC-391, criterion 2)', () =>
 
 describe('a version frozen before ORC-382', () => {
   it('is read back with the former step → status and step → post tables, its preset having neither', () => {
-    const now = defaultWorkflow();
+    // No Spec status before ORC-382, nor by default until ORC-457.
+    const now = defaultWorkflow({ statuses: { spec_draft: 'off' } });
     const { statuses: _s, posts: _p, ...before } = now.preset;
     const frozen = frozenWorkflow({ hash: 'h', definition: { ...now, preset: before } });
     for (const job of ['intake', 'spec', 'tests', 'dev', 'review', 'review-security', 'fix-review']) {

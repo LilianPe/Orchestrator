@@ -17,7 +17,7 @@ const statusOf = (wf: Workflow, id: string): StepStatus | undefined => entry(wf.
 
 /**
  * The status the ticket moves to when the chain reaches step `id` (ORC-382): the preset's step → status table, frozen with it, to a
- * status the workflow names. Never Todo, a human's status, nor a status with no name (`spec`, unless `factory.yml` names one).
+ * status the workflow names. Never Todo, a human's status, nor a status with no name (`spec`, when `factory.yml` turns it off).
  */
 export function stepStatus(wf: Workflow, id: string): LogicalState | undefined {
   const status = statusOf(wf, id);
