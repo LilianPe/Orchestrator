@@ -20,7 +20,7 @@ export interface AgentRuntimeSubject {
 let n = 0;
 function request(patch: Partial<RunRequest>): RunRequest {
   return {
-    runId: `contract-${++n}`, cwd: process.cwd(), prompt: '/factory:dev', claudeSessionId: `session-${n}`, resume: false, model: 'sonnet',
+    runId: `contract-${++n}`, cwd: process.cwd(), prompt: '/factory:build', claudeSessionId: `session-${n}`, resume: false, model: 'sonnet',
     pluginDir: '/pack', settingsPath: '/pack/settings.json', readOnly: false, limits: { turns: 50, durationMs: 10_000 }, env: {},
     ...patch,
   };

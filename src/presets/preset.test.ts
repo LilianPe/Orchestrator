@@ -85,7 +85,7 @@ describe('factory/default', () => {
 
   it('carries what the chain needs (ORC-391): skills, lenses, the red mode, the attempt duration, the guard, the fix causes, after_merge with no agent', () => {
     expect(['intake', 'spec_draft', 'tests', 'build', 'rebase'].map((id) => (step(factoryDefault, id) as { skill?: string }).skill)).toEqual([
-      'factory:intake', 'factory:spec', 'factory:tests', 'factory:dev', 'factory:rebase',
+      'factory:intake', 'factory:spec_draft', 'factory:tests', 'factory:build', 'factory:rebase',
     ]);
     expect(step(factoryDefault, 'review')).toMatchObject({ lenses: ['correctness', 'security'] });
     expect(step(factoryDefault, 'red')).toMatchObject({ mode: 'red', red: 'measure' });
@@ -128,7 +128,7 @@ describe('factory/default', () => {
 
   it('only references skills the standard pack ships', () => {
     const skills = factoryDefault.steps.flatMap((s) => (s.type === 'fix' ? Object.values(s.skills) : 'skill' in s && s.skill ? [s.skill] : []));
-    expect(skills).toEqual(expect.arrayContaining(['factory:dev', 'factory:fix-ci', 'factory:feedback', 'factory:review', 'factory:rebase']));
+    expect(skills).toEqual(expect.arrayContaining(['factory:build', 'factory:feedback', 'factory:review', 'factory:rebase']));
     for (const skill of skills) {
       const [plugin, name] = skill.split(':');
       expect(plugin).toBe('factory');

@@ -4,7 +4,7 @@ The method skills of this pack (`tdd`, `debugging`, `verification`, `code-review
 
 The review levels of `code-review` (passes per angle, verification of each finding before reporting it) are also inspired by the `/code-review` command of the `anthropics/claude-plugins-official` repository, under the Apache 2.0 license.
 
-The rules of `tests` (a test calls the code as its user does; one that would pass on functions returning nothing is thrown away) and of `dev` (the shape of the data before the logic, less complexity before more, the cause rather than a guard) are inspired by Robert C. Martin's `ub-mode` rules. That repository has no license: the rules are written anew, none of its text is reproduced.
+The rules of `tests` (a test calls the code as its user does; one that would pass on functions returning nothing is thrown away) and of `build` (the shape of the data before the logic, less complexity before more, the cause rather than a guard) are inspired by Robert C. Martin's `ub-mode` rules. That repository has no license: the rules are written anew, none of its text is reproduced.
 
 ## superpowers license
 

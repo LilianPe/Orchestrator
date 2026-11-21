@@ -26,14 +26,14 @@ describe('standard workflow', () => {
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
     h.runner.enqueue(assessment(), drafted());
     await delegate(h);
-    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake', '/factory:spec']);
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake', '/factory:spec_draft']);
     expect(await h.ticket()).toMatchObject({ logical: 'spec', spec: { version: 1 } });
     await toBuild(h, { build: [BUILD] });
-    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake', '/factory:spec', '/factory:tests', '/factory:dev']);
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake', '/factory:spec_draft', '/factory:tests', '/factory:build']);
     const req = h.runner.requests[3]!;
     // The ticket session starts at the tests step (ORC-217): the build resumes it.
     expect(req).toMatchObject({ resume: true, model: 'sonnet', cwd: '/tmp/factory-fake/p/REL-1', readOnly: false });
-    expect(req.prompt.startsWith('/factory:dev\n')).toBe(true);
+    expect(req.prompt.startsWith('/factory:build\n')).toBe(true);
     expect(req.prompt).toContain('Branch: feat/rel-1-export-csv');
     const t = await h.ticket();
     expect(t).toMatchObject({ logical: 'human_review', blocked: false, branch: 'feat/rel-1-export-csv', linearSessionId: 'ls-1' });
@@ -167,7 +167,7 @@ describe('standard workflow', () => {
     await h.send('control.resume', {});
     await h.advance(180_000);
     await h.send('label.changed', { label: 'relance', change: 'added' });
-    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev']);
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:build']);
     expect(await h.ticket()).toMatchObject({ logical: 'done', prState: 'MERGED' });
     expect(h.workspaces.cleaned).toEqual(['REL-1']);
   });
@@ -180,7 +180,7 @@ describe('standard workflow', () => {
     await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'feat/rel-1-export-csv' });
     expect((await h.store.listQueue()).map((q) => q.job)).toEqual(['ask']);
     await h.send('control.resume', {});
-    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:ask']);
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:build', '/factory:ask']);
   });
 
   it('a merge keeps a question waiting for an answer slot: only the dev work stops (ORC-268)', async () => {
@@ -198,7 +198,7 @@ describe('standard workflow', () => {
     expect((await h.store.listQueue()).map((q) => q.job)).toEqual(['ask']);
     h.runner.release(h.runner.requests[1]!.runId);
     await h.orch.drained();
-    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:ask', '/factory:ask', '/factory:ask']);
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:build', '/factory:ask', '/factory:ask', '/factory:ask']);
     expect(h.runner.requests[3]!.prompt).toContain('pourquoi ce choix ?');
   });
 
@@ -228,7 +228,7 @@ describe('standard workflow', () => {
       base: { branch: 'main', sha: 'ba5e'.padEnd(40, '0'), checks: 'fail', failedChecks: ['e2e'] },
     });
     await h.send('pr.checks_failed', { number: prNumber, url: 'https://gh/pr/3', branch: 'feat/rel-1-export-csv', failures: ['test'] });
-    const fix = h.runner.requests.find((r) => r.prompt.startsWith('/factory:fix-ci\n'))!;
+    const fix = h.runner.requests.find((r) => r.prompt.startsWith('/factory:feedback\n'))!;
     expect(fix.prompt).toContain("## CI failures\nThe PR's CI fails on `deadbeef0000`: 1 failed check.");
     expect(fix.prompt).toContain('### `test` (`failure`)\n```text\nFAIL src/export.test.ts\nAssertionError: expected 2 rows\nleaked [masked]\n```');
     expect(fix.prompt).toContain('The CI of the base branch `main`, on `ba5e00000000` (the commit the PR is compared with), fails too: `e2e`.');
@@ -245,7 +245,7 @@ describe('standard workflow', () => {
     // PR #4 is unknown to the forge: its read rejects, and nothing transient.
     await h.send('pr.opened', { number: 4, url: 'https://gh/pr/4', branch: 'feat/rel-1-export-csv' });
     await h.send('pr.checks_failed', { number: 4, url: 'https://gh/pr/4', branch: 'feat/rel-1-export-csv', failures: ['test'] });
-    const fix = h.runner.requests.find((r) => r.prompt.startsWith('/factory:fix-ci\n'))!;
+    const fix = h.runner.requests.find((r) => r.prompt.startsWith('/factory:feedback\n'))!;
     expect(fix.prompt).toContain("## CI failures\nThe PR's CI is failing, but the factory could not read its checks on the forge.");
     expect(fix.sensitivePaths).toBeUndefined();
   });
@@ -255,22 +255,22 @@ describe('standard workflow', () => {
     await delegatedAndInReview(h);
     await h.send('pr.opened', { number: 7, url: 'https://forge/pr/7', branch: 'feat/rel-1-export-csv' });
     const red = { number: 7, url: 'https://forge/pr/7', branch: 'feat/rel-1-export-csv', failures: ['test'] };
-    const fixCi = () => h.runner.requests.filter((r) => r.prompt.startsWith('/factory:fix-ci\n')).length;
+    const fixCi = async () => (await Promise.all(h.runner.requests.map(async (r) => (await h.store.getRun(r.runId))?.job))).filter((j) => j === 'fix-ci').length;
     await h.send('pr.checks_failed', red);
     await h.send('pr.checks_failed', red);
-    expect(fixCi()).toBe(2);
+    expect(await fixCi()).toBe(2);
     expect(await h.ticket()).toMatchObject({ blocked: false, ciFixAttempts: 2 });
     await h.send('pr.checks_failed', red);
-    expect(fixCi()).toBe(2);
+    expect(await fixCi()).toBe(2);
     expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'CI still failing after 2 attempts of fix-ci.' });
     expect(h.tracker.comments('REL-1').at(-1)).toContain('- `test`');
     await h.send('pr.checks_failed', red);
-    expect(fixCi()).toBe(2);
+    expect(await fixCi()).toBe(2);
     // The human relaunches by a reply: a new budget; a green CI keeps it, one count per run (ORC-184).
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'relance', author: 'L' });
     expect(await h.ticket()).toMatchObject({ blocked: false, ciFixAttempts: 0 });
     await h.send('pr.checks_failed', red);
-    expect(fixCi()).toBe(3);
+    expect(await fixCi()).toBe(3);
     await h.send('pr.checks_passed', { number: 7, url: red.url, branch: red.branch });
     expect(await h.ticket()).toMatchObject({ blocked: false, ciFixAttempts: 1 });
   });
@@ -446,7 +446,7 @@ describe('standard workflow', () => {
       await h.send('session.mentioned', { linearSessionId: 'ls-9', body: 'question ?', author: 'L' });
       await h.send('session.prompted', { linearSessionId: 'ls-9', body: 'et pourquoi ?', author: 'L' });
       await h.advance(600_000);
-      expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:ask', '/factory:ask']);
+      expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:build', '/factory:ask', '/factory:ask']);
       expect((await h.ticket()).humanInbox).toEqual([]);
     });
   });
