@@ -72,12 +72,13 @@ describe('GithubReconciler', () => {
 
   it('reopens a PR it recorded closed and reads open again under the same number, a lost webhook (ORC-469)', async () => {
     const { store, forge, events, reconciler } = setup();
-    await store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b', prNumber: 7, prState: 'CLOSED' });
+    await store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b', prNumber: 7, prState: 'CLOSED', updatedAt: 42 });
     forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', headSha: 'h7', checks: 'pass', failedChecks: [] });
     await reconciler.once();
-    // Reopened first, so that the green CI after it is read on the open PR; with the head it was read on.
+    // Reopened first, so that the green CI after it is read on the open PR; with the head it was read on. Per state of the
+    // ticket, as the webhook names it: a pass before its decision repeats the same id.
     expect(events.map((e) => [e.id, e.type, e.payload])).toEqual([
-      ['pr:REL-1:7:reopened:100', 'pr.opened', { number: 7, url: 'u', branch: 'b' }],
+      ['pr:REL-1:7:reopened:42', 'pr.opened', { number: 7, url: 'u', branch: 'b' }],
       ['pr:REL-1:7:checks:pass:h7', 'pr.checks_passed', { number: 7, url: 'u', branch: 'b', headSha: 'h7' }],
     ]);
     // Open already: no reopen.
@@ -85,6 +86,21 @@ describe('GithubReconciler', () => {
     forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', headSha: 'h8', checks: 'pass', failedChecks: [] });
     await reconciler.once();
     expect(events.map((e) => e.type)).toEqual(['pr.opened', 'pr.checks_passed', 'pr.checks_passed']);
+  });
+
+  it('records each close of a PR it reopened, and none of a PR recorded closed already (ORC-469)', async () => {
+    const { store, forge, events, reconciler } = setup();
+    const at = async (patch: Partial<TicketState>) => store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b', prNumber: 7, ...patch });
+    forge.setPr('b', { number: 7, url: 'u', state: 'CLOSED', checks: 'none', failedChecks: [] });
+    await at({ prState: 'OPEN', updatedAt: 1 });
+    await reconciler.once();
+    // Recorded closed: nothing more to say.
+    await at({ prState: 'CLOSED', updatedAt: 2 });
+    await reconciler.once();
+    // Reopened, then closed again: a close of its own.
+    await at({ prState: 'OPEN', updatedAt: 3 });
+    await reconciler.once();
+    expect(events.map((e) => e.id)).toEqual(['pr:REL-1:7:closed:1', 'pr:REL-1:7:closed:3']);
   });
 
   it('isolates a failing ticket and logs', async () => {
