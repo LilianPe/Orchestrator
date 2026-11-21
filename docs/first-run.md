@@ -208,6 +208,7 @@ then each GitHub Actions workflow with its verdict (or `No GitHub Actions workfl
 | `` GitHub App not configured: `factory doctor` needs github.appId and github.privateKey (or GH_APP_ID and GH_APP_KEY) … `` | no `github` in `factory.yml` nor in `config.yaml`, and no `GH_APP_*` | item 4 |
 | `Cannot read the repository's branch naming: unreadable default branch (origin/main): origin/HEAD is not set …` | clone without `origin/HEAD` | `git remote set-head origin --auto` |
 | `Host: refused — no container engine (FACTORY_CONTAINER_CLI is not set): nothing limits the sandbox` | item 8 | export `FACTORY_CONTAINER_CLI=podman` |
+| `Host: refused — FACTORY_RUNNER_IMAGE is required with FACTORY_CONTAINER_CLI.` (or `FACTORY_CONTAINER_CLI=…: docker or podman expected.`) | item 9, or a typo in item 8: `factory up` refuses to start the same | export `FACTORY_RUNNER_IMAGE=localhost/factory-runner` (step 2) |
 | `Host: refused — cannot read the cgroups of the engine (podman info): spawn podman ENOENT` | Podman not installed, or not on the `PATH` | install it |
 | `Host: refused — no cgroup v2: …` | the host is on cgroups v1 or the hybrid layout | boot on the unified cgroup v2 hierarchy |
 | `Host: refused — rootless podman on the cgroupfs cgroup manager ignores the limits: …` or `podman cannot limit through the … controller(s), not delegated to its user …` | no systemd user session, controllers not delegated | `sudo loginctl enable-linger <user>`, then `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` as in step 2 ([`tests.md`](tests.md)) |

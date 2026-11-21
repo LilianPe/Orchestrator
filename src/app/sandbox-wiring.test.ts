@@ -4,7 +4,7 @@ import type { Exec, ExecResult } from '../adapters/exec.js';
 import { BROWSER_REQUIREMENTS } from '../adapters/browser/types.js';
 import { defaultLimits } from '../adapters/sandbox/docker-rootless.js';
 import type { Egress } from '../network/proxy-service.js';
-import { browserImage, checkHostRuns, instanceId, makeSandboxes, sandboxLimits } from './sandbox-wiring.js';
+import { browserImage, checkHostRuns, instanceId, makeSandboxes, sandboxLimits, sandboxRefusals } from './sandbox-wiring.js';
 
 describe('checkHostRuns (ORC-349)', () => {
   it('refuses agents on the host without a container engine, naming both ways out', () => {
@@ -14,8 +14,26 @@ describe('checkHostRuns (ORC-349)', () => {
   });
 
   it('lets a container engine, or the explicit choice of the host, through', () => {
-    expect(() => checkHostRuns({ FACTORY_CONTAINER_CLI: 'podman' })).not.toThrow();
+    expect(() => checkHostRuns({ FACTORY_CONTAINER_CLI: 'podman', FACTORY_RUNNER_IMAGE: 'r:1' })).not.toThrow();
     expect(() => checkHostRuns({ FACTORY_ALLOW_HOST_RUNS: '1' })).not.toThrow();
+  });
+});
+
+describe('sandboxRefusals (ORC-449)', () => {
+  it("refuses, before anything opens, every environment the sandboxes cannot run in: the start's and doctor's", () => {
+    expect(sandboxRefusals({})).toEqual([expect.stringMatching(/^FACTORY_CONTAINER_CLI is not set: .*FACTORY_ALLOW_HOST_RUNS=1/)]);
+    expect(sandboxRefusals({ FACTORY_CONTAINER_CLI: 'lxc', FACTORY_RUNNER_IMAGE: 'r:1' })).toEqual(['FACTORY_CONTAINER_CLI=lxc: docker or podman expected.']);
+    expect(sandboxRefusals({ FACTORY_CONTAINER_CLI: 'podman' })).toEqual(['FACTORY_RUNNER_IMAGE is required with FACTORY_CONTAINER_CLI.']);
+  });
+
+  it('lets an engine with its runner image, or the explicit choice of the host, through', () => {
+    expect(sandboxRefusals({ FACTORY_CONTAINER_CLI: 'docker', FACTORY_RUNNER_IMAGE: 'r:1' })).toEqual([]);
+    expect(sandboxRefusals({ FACTORY_ALLOW_HOST_RUNS: '1' })).toEqual([]);
+  });
+
+  it('is what checkHostRuns throws, at the start before anything opens', () => {
+    expect(() => checkHostRuns({ FACTORY_CONTAINER_CLI: 'podman' })).toThrow('FACTORY_RUNNER_IMAGE is required with FACTORY_CONTAINER_CLI.');
+    expect(() => checkHostRuns({ FACTORY_CONTAINER_CLI: 'lxc', FACTORY_RUNNER_IMAGE: 'r:1' })).toThrow('FACTORY_CONTAINER_CLI=lxc: docker or podman expected.');
   });
 });
 

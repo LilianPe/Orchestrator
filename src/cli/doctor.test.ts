@@ -71,6 +71,9 @@ const DOCKER_INFO = {
 /** `podman info --format json` of a rootless Podman in a systemd user session, the controllers delegated. */
 const PODMAN_INFO = { host: { cgroupVersion: 'v2', cgroupManager: 'systemd', cgroupControllers: ['cpu', 'memory', 'pids'], security: { rootless: true } } };
 
+/** The runner image the start requires with an engine (ORC-449): doctor's host check refuses without it. */
+const RUNNER = { FACTORY_RUNNER_IMAGE: 'factory-runner:test' };
+
 /** An engine whose `info` prints `info` as JSON, or fails as `failure` says; it records the calls. */
 function engine(info: object, failure?: { code: number; stderr: string }): { exec: Exec; calls: string[][] } {
   const calls: string[][] = [];
@@ -81,8 +84,8 @@ function engine(info: object, failure?: { code: number; stderr: string }): { exe
   return { exec, calls };
 }
 
-const docker = (info: object = DOCKER_INFO) => checkHost({ FACTORY_CONTAINER_CLI: 'docker' }, engine(info).exec);
-const podman = (info: object = PODMAN_INFO) => checkHost({ FACTORY_CONTAINER_CLI: 'podman' }, engine(info).exec);
+const docker = (info: object = DOCKER_INFO) => checkHost({ FACTORY_CONTAINER_CLI: 'docker', ...RUNNER }, engine(info).exec);
+const podman = (info: object = PODMAN_INFO) => checkHost({ FACTORY_CONTAINER_CLI: 'podman', ...RUNNER }, engine(info).exec);
 
 /** A host as the factory needs it: its engine on cgroup v2, able to limit processes, memory and CPUs. */
 const goodHost: HostReport = await docker();
@@ -499,7 +502,7 @@ jobs:
     const code = await runDoctorCommand({
       repoPath: '/repo',
       home,
-      env: { FACTORY_CONTAINER_CLI: 'docker' },
+      env: { FACTORY_CONTAINER_CLI: 'docker', ...RUNNER },
       out: (line) => lines.push(line),
       http,
       exec,
@@ -984,10 +987,66 @@ describe("the daemon's start refusals, each one doctor's", () => {
   });
 });
 
+// ORC-449: the daemon's environment the start refuses (sandboxRefusals), refused by doctor's host check with the start's message.
+describe("the daemon's environment the start refuses, doctor's host refuses", () => {
+  const started = async (env: NodeJS.ProcessEnv): Promise<string> => {
+    const home = tempHome();
+    saveInstance(home, { port: 4160, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    return startFactory({ home, log: () => {}, env }).then(
+      async (app) => {
+        await app.stop();
+        return 'started';
+      },
+      (error: Error) => error.message,
+    );
+  };
+
+  it('refuses an engine without FACTORY_RUNNER_IMAGE with the message of the start, the engine asked all the same', async () => {
+    const env = { FACTORY_CONTAINER_CLI: 'docker' };
+    const message = await started(env);
+    expect(message).toBe('FACTORY_RUNNER_IMAGE is required with FACTORY_CONTAINER_CLI.');
+    const asked = engine(DOCKER_INFO);
+    const host = await checkHost(env, asked.exec);
+    expect(host).toMatchObject({ engine: 'docker', cgroupV2: true, verdict: 'refused', reasons: [message] });
+    expect(asked.calls).toHaveLength(1);
+    const lines: string[] = [];
+    expect(await doctor([], [], { host }).then((r) => (lines.push(...r.lines), r.code))).toBe(1);
+    expect(lines).toContain(`Host: refused — ${message}`);
+  });
+
+  it('refuses an engine neither docker nor podman with the message of the start, without asking it', async () => {
+    const env = { FACTORY_CONTAINER_CLI: 'lxc', FACTORY_RUNNER_IMAGE: 'factory-runner:test' };
+    const message = await started(env);
+    expect(message).toBe('FACTORY_CONTAINER_CLI=lxc: docker or podman expected.');
+    const asked = engine(DOCKER_INFO);
+    expect(await checkHost(env, asked.exec)).toEqual({ verdict: 'refused', reasons: [message] });
+    expect(asked.calls).toEqual([]);
+  });
+});
+
+describe('doctor --json on a refusal of the instance configuration (ORC-449)', () => {
+  it('stays JSON, the refusal under error', async () => {
+    const home = tempHome();
+    writeFileSync(join(home, 'config.yaml'), 'port: nope\n');
+    const lines: string[] = [];
+    const code = await runDoctorCommand({ repoPath: '/repo', home, env: {}, json: true, out: (line) => lines.push(line) });
+    expect(code).toBe(1);
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!)).toMatchObject({ repoPath: '/repo', accepted: false, error: expect.stringMatching(/^invalid config\.yaml: port/), visualProof: { available: false } });
+  });
+
+  it('stays JSON without the GitHub App', async () => {
+    const lines: string[] = [];
+    expect(await runDoctorCommand({ repoPath: '/repo', home: tempHome(), env: {}, json: true, out: (line) => lines.push(line) })).toBe(1);
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!)).toMatchObject({ accepted: false, error: expect.stringContaining('GitHub App not configured') });
+  });
+});
+
 describe('the host: the engine on cgroup v2, able to set the limits (ORC-208, criterion 1)', () => {
   it("asks the engine of FACTORY_CONTAINER_CLI, not the cgroups of doctor's own process", async () => {
     const dockerEngine = engine(DOCKER_INFO);
-    expect(await checkHost({ FACTORY_CONTAINER_CLI: 'docker' }, dockerEngine.exec)).toMatchObject({
+    expect(await checkHost({ FACTORY_CONTAINER_CLI: 'docker', ...RUNNER }, dockerEngine.exec)).toMatchObject({
       engine: 'docker',
       cgroupV2: true,
       controllers: ['cpu', 'memory', 'pids'],
@@ -996,7 +1055,7 @@ describe('the host: the engine on cgroup v2, able to set the limits (ORC-208, cr
     });
     expect(dockerEngine.calls).toEqual([['docker', 'info', '--format', '{{json .}}']]);
     const podmanEngine = engine(PODMAN_INFO);
-    expect(await checkHost({ FACTORY_CONTAINER_CLI: 'podman' }, podmanEngine.exec)).toMatchObject({
+    expect(await checkHost({ FACTORY_CONTAINER_CLI: 'podman', ...RUNNER }, podmanEngine.exec)).toMatchObject({
       engine: 'podman',
       cgroupV2: true,
       controllers: ['cpu', 'memory', 'pids'],
@@ -1064,7 +1123,7 @@ describe('the host: the engine on cgroup v2, able to set the limits (ORC-208, cr
   });
 
   it("names an engine it cannot ask or read, and never tells what it did not read (no cgroupV2, no controllers)", async () => {
-    const unreachable = await checkHost({ FACTORY_CONTAINER_CLI: 'docker' }, engine({}, { code: 1, stderr: 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock' }).exec);
+    const unreachable = await checkHost({ FACTORY_CONTAINER_CLI: 'docker', ...RUNNER }, engine({}, { code: 1, stderr: 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock' }).exec);
     expect(unreachable.verdict).toBe('refused');
     expect(unreachable.reasons.join(' ')).toContain('Cannot connect to the Docker daemon');
     expect(unreachable).not.toHaveProperty('cgroupV2');
@@ -1077,7 +1136,7 @@ describe('the host: the engine on cgroup v2, able to set the limits (ORC-208, cr
     expect(unknown.verdict).toBe('refused');
     expect(unknown).not.toHaveProperty('cgroupV2');
     expect(unknown.reasons.join(' ')).not.toContain('cgroups v1');
-    const garbled = await checkHost({ FACTORY_CONTAINER_CLI: 'podman' }, async () => ({ stdout: 'not json', stderr: '', code: 0 }));
+    const garbled = await checkHost({ FACTORY_CONTAINER_CLI: 'podman', ...RUNNER }, async () => ({ stdout: 'not json', stderr: '', code: 0 }));
     expect(garbled.verdict).toBe('refused');
     expect(garbled).not.toHaveProperty('cgroupV2');
   });
