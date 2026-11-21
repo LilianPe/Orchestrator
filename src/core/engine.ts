@@ -749,7 +749,7 @@ function unblock(out: Decision, event: FactoryEvent, ticket: TicketState): void 
   if (relaunchedByHuman(event, ticket)) giveBoundsBack(out, ticket);
 }
 
-/** What a human relaunch of a blocked ticket gives back (`unblock`), even when the lift itself waits on blockers (ORC-432). */
+/** What a human relaunch of a blocked ticket gives back (`unblock`), even when the lift waits on blockers (ORC-432, `startReaction`). */
 function giveBoundsBack(out: Decision, ticket: TicketState): void {
   resetRedCi(out, ticket);
   // The human review rounds too (ORC-190): the reply to their own bound relaunches on the feedback it kept.
@@ -873,19 +873,20 @@ function usageLimitDecision(out: Decision, event: FactoryEvent<'run.finished'>, 
  */
 function blockersDone(out: Decision, event: FactoryEvent<'blockers.done'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
   const wait = ticket?.waitingOn;
+  // Blocked, a human relaunched it while it waited: the block is lifted here, the bounds given back by the relaunch itself.
+  const lifting = !!wait?.lift && !!ticket?.blocked;
   const start = wait && (wait.lift ?? wait.start);
   const job = start && workflow.jobs[start.job];
   if (wait) out.events.push({ type: 'ticket.patched', patch: { waitingOn: null } });
   const startable = ticket?.logical === 'todo' || ticket?.logical === 'dev';
-  if (!ticket || !start || !job || !startable || refusesDevWork(ticket, job) || (ticket.blocked && !wait.lift) || ticket.activeRunId || ticket.verifyingRunId) {
+  if (!ticket || !start || !job || !startable || refusesDevWork(ticket, job) || (ticket.blocked && !lifting) || ticket.activeRunId || ticket.verifyingRunId) {
     out.trace.push('blockers.done: the ticket no longer waits, nothing started');
     // The ack of the relaunch said it would resume: the human hears it will not.
-    if (wait?.lift && ticket?.blocked) out.effects.push({ kind: 'activity', type: 'thought', body: LIFT_DROPPED });
+    if (lifting) out.effects.push({ kind: 'activity', type: 'thought', body: LIFT_DROPPED });
     return out;
   }
   out.effects.push({ kind: 'activity', type: 'thought', body: `Nothing blocks this ticket any more (${event.payload.blockers.join(', ')} done or no longer linked): starting.` });
-  // The bounds were given back by the relaunch itself: this lift is the machine's.
-  if (ticket.blocked) unblock(out, event, ticket);
+  if (lifting) out.events.push({ type: 'ticket.unblocked' });
   startAs(out, event, ticket, job, start);
   return out;
 }
@@ -1551,10 +1552,14 @@ function startReaction(out: Decision, event: FactoryEvent, ticket: TicketState |
   // The step it resumes reads the reply: read again for the run's input.
   const input = resumed ? 'feedback' : (r.input ?? job.input);
   // Waiting on its blockers, the ticket starts no dev work for a message or a move: a reply stays in the inbox (ORC-363). A
-  // blocked one keeps its block, the lift and its step made once the blockers are done (ORC-432): never unblocked with nothing at work.
+  // blocked one keeps its block, never lifted with nothing at work (ORC-432): the step it resumes waits on the wait (`lift`), which
+  // `blockers.done` lifts and starts; a human gives the bounds back now.
   const waits = heldByWait(ticket, job);
   if (waits) {
-    if (lifts) liftAfterWait(out, event, ticket!, { job: job.name, ...(input ? { input } : {}) });
+    if (lifts) {
+      if (relaunchedByHuman(event, ticket!)) giveBoundsBack(out, ticket!);
+      out.events.push({ type: 'ticket.patched', patch: { waitingOn: { ...ticket!.waitingOn!, lift: { job: job.name, ...(input ? { input } : {}) } } } });
+    }
     out.trace.push(`${job.name} not started, ${waits}`);
     return out;
   }
@@ -1569,15 +1574,6 @@ function startReaction(out: Decision, event: FactoryEvent, ticket: TicketState |
     humanRound(out, ticket, workflow, job, () => startRun(out, event, ticket, job, run));
   }
   return out;
-}
-
-/**
- * A relaunch of a blocked ticket that waits on its blockers (ORC-432): the block stays, so the ticket shows what holds it, and
- * the step it resumes is recorded on the wait (`lift`), which `blockers.done` lifts and starts. A human gives the bounds back now.
- */
-function liftAfterWait(out: Decision, event: FactoryEvent, ticket: TicketState, lift: PendingJob): void {
-  if (relaunchedByHuman(event, ticket)) giveBoundsBack(out, ticket);
-  out.events.push({ type: 'ticket.patched', patch: { waitingOn: { ...ticket.waitingOn!, lift } } });
 }
 
 /**
@@ -1957,8 +1953,8 @@ function noticeMasked(out: Decision, event: FactoryEvent): void {
 /** The sign of life of a message (ORC-180): what will come of it, as this decision has it. */
 function messageAck(out: Decision, state: TicketState | undefined): string {
   if (out.events.some((e) => e.type === 'ticket.unblocked')) return 'Noted, resuming.';
-  const lifted = out.events.find((e): e is Extract<DecidedEvent, { type: 'ticket.patched' }> => e.type === 'ticket.patched' && !!e.patch.waitingOn?.lift);
-  if (lifted) return `Noted: I resume once ${lifted.patch.waitingOn!.blockers.join(', ')} ${lifted.patch.waitingOn!.blockers.length > 1 ? 'are' : 'is'} done.`;
+  const blockers = state?.waitingOn?.blockers;
+  if (blockers && out.events.some((e) => e.type === 'ticket.patched' && e.patch.waitingOn?.lift)) return `Noted: I resume once ${blockers.join(', ')} ${blockers.length > 1 ? 'are' : 'is'} done.`;
   if (out.effects.some((e) => e.kind === 'start_run' && e.input === 'thread')) return 'Noted, I am looking into it and will answer here.';
   const settled = state && settledTicket(state);
   if (settled === 'delivered') return 'Noted, but this ticket is delivered: no step will pick it up again.';
