@@ -146,6 +146,17 @@ describe('the maturity report: what it must not mistake (ORC-410)', () => {
       expect(valueOf(compose(image))['services'], image).toBe('postgres (compose.yaml)');
     for (const image of ['prometheuscommunity/postgres-exporter:v0.15', 'postgres-backup:1', 'redis:7']) expect(valueOf(compose(image))['services'], image).toBe('none');
   });
+
+  it('a Postgres image as the default of a variable, or the timescaledb-ha variant, is a Postgres; a variable alone is not (ORC-454)', () => {
+    const compose = (image: string) => repoOf({ 'compose.yaml': `services:\n  db:\n    image: ${image}\n` });
+    for (const image of ['${PG_IMAGE:-postgres:16}', '"${PG_IMAGE-postgis/postgis:16-3.4}"', 'timescale/timescaledb-ha:pg16'])
+      expect(valueOf(compose(image))['services'], image).toBe('postgres (compose.yaml)');
+    for (const image of ['${PG_IMAGE}', '${PG_IMAGE:?set it}', '${REDIS:-redis:7}']) expect(valueOf(compose(image))['services'], image).toBe('none');
+  });
+
+  it("Cypress's specs test their area (ORC-454)", () => {
+    expect(valueOf(repoOf({ 'src/login/form.ts': '', 'src/login/form.cy.ts': '', 'src/cart/cart.tsx': '', 'src/cart/cart.cy.jsx': '' }))['untested']).toBe('none: every source directory has a test file');
+  });
 });
 
 describe('the maturity report on what it reads only in part (ORC-454)', () => {

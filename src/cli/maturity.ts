@@ -30,17 +30,20 @@ const POSTGRES_PACKAGES = ['pg', 'postgres', 'psycopg', 'psycopg2', 'psycopg2-bi
 const COMPOSE_FILES = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'];
 
 /** The images of a Postgres, by their name without registry, owner, tag or digest: the official one and its common variants. */
-const POSTGRES_IMAGES = new Set(['postgres', 'postgresql', 'postgis', 'pgvector', 'timescaledb']);
+const POSTGRES_IMAGES = new Set(['postgres', 'postgresql', 'postgis', 'pgvector', 'timescaledb', 'timescaledb-ha']);
+
+/** The image an `image:` names: as written, or the default of a variable (`${VAR:-postgres:16}`); none for a variable without one. */
+const imageOf = (written: string): string | undefined => (written.startsWith('${') ? /^\$\{\w+:?-([^}]+)\}$/.exec(written)?.[1] : written);
 
 /** Whether a compose file runs a Postgres: an `image:` whose name, its registry and owner, tag and digest put aside, is one. */
 const runsPostgres = (compose: string): boolean =>
-  [...compose.matchAll(/^\s*image:\s*["']?([^\s"'#]+)/gm)].some((m) => POSTGRES_IMAGES.has(m[1]!.split('/').pop()!.split(/[:@]/)[0]!));
+  [...compose.matchAll(/^\s*image:\s*["']?([^\s"'#]+)/gm)].some((m) => POSTGRES_IMAGES.has((imageOf(m[1]!) ?? '').split('/').pop()!.split(/[:@]/)[0]!));
 
 /** What the walk never enters: dependencies, builds and dot directories are not the repository's code. */
 const SKIPPED = new Set(['node_modules', 'dist', 'build', 'coverage', '__pycache__', 'venv']);
 
 const SOURCE = /\.(?:[cm]?[jt]sx?|py)$/;
-const TEST_FILE = /(?:\.(?:test|spec)\.[cm]?[jt]sx?|^test_.*\.py|_test\.py|^tests\.py)$/;
+const TEST_FILE = /(?:\.(?:test|spec|cy)\.[cm]?[jt]sx?|^test_.*\.py|_test\.py|^tests\.py)$/;
 /** A walk stops past this many entries: init stays quick on a large repository, and says so. */
 const WALK_LIMIT = 20_000;
 
