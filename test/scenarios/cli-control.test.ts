@@ -331,7 +331,8 @@ describe('the CLI against a daemon that does not answer (ORC-434)', () => {
     try {
       const lines: string[] = [];
       expect(await runDryRunCommand({ api: daemon.api, out: (l) => void lines.push(l), timeoutMs: 200 }, 'p')).toBe(1);
-      expect(lines.at(-1)).toBe(`${PRODUCT_NAME} did not answer on ${daemon.api} within 0.2 s: it may be stuck, check its log or restart it; the command may have been taken, check with \`factory status\`.`);
+      // Never a restart, which would lose a dry run that only takes long.
+      expect(lines.at(-1)).toBe(`${PRODUCT_NAME} did not answer on ${daemon.api} within 0.2 s: the dry run may still be under way, and recorded once it ends.`);
     } finally {
       await daemon.close();
     }

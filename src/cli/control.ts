@@ -110,20 +110,24 @@ async function ask(d: ControlDeps, path: string, init: RequestInit = {}, o: { sl
   // One delay for the whole command, socket and HTTP together, the answer's body included (ORC-434).
   const timeoutMs = d.timeoutMs ?? (o.slow ? DRY_RUN_TIMEOUT_MS : ANSWER_TIMEOUT_MS);
   const signal = AbortSignal.timeout(timeoutMs);
+  // Only the timer's own abort: an error that merely comes at its end keeps its meaning (a fallback to HTTP, say).
+  const expired = (err: unknown) => signal.aborted && (err === signal.reason || (err as Error).cause === signal.reason);
+  const taken = init.method === 'POST' ? 'the command may have been taken, check with `factory status`' : undefined;
   const timedOut = (where: string) => {
-    const taken = init.method === 'POST' ? '; the command may have been taken, check with `factory status`' : '';
-    d.out(`${PRODUCT_NAME} did not answer ${where} within ${delay(timeoutMs)}: it may be stuck, check its log or restart it${taken}.`);
+    // A dry run has no cap of its own: a long one is no stuck daemon, and a restart would lose it.
+    const why = o.slow ? 'the dry run may still be under way, and recorded once it ends' : `it may be stuck, check its log or restart it${taken ? `; ${taken}` : ''}`;
+    d.out(`${PRODUCT_NAME} did not answer ${where} within ${delay(timeoutMs)}: ${why}.`);
     return undefined;
   };
   if (d.socket) {
     try {
       return await viaSocket(d.socket, path, { ...init, signal });
     } catch (err) {
-      if (signal.aborted) return timedOut(`through ${d.socket}`);
+      if (expired(err)) return timedOut(`through ${d.socket}`);
       // A socket a daemon killed left, or one this user may not open: HTTP, as without one. Any later error may come after
       // the daemon took the command: never sent twice.
       if (!nothingReached(err)) {
-        d.out(`${PRODUCT_NAME} did not answer through ${d.socket} (${(err as Error).message}): the command may have been taken, check with \`factory status\`.`);
+        d.out(`${PRODUCT_NAME} did not answer through ${d.socket} (${(err as Error).message})${taken ? `: ${taken}` : ''}.`);
         return undefined;
       }
     }
@@ -137,7 +141,7 @@ async function ask(d: ControlDeps, path: string, init: RequestInit = {}, o: { sl
     const body = await answer.arrayBuffer();
     res = new Response(body.byteLength ? body : null, { status: answer.status, headers: answer.headers });
   } catch (err) {
-    if (signal.aborted) return timedOut(`on ${d.api}`);
+    if (expired(err)) return timedOut(`on ${d.api}`);
     d.out(`${PRODUCT_NAME} does not answer on ${d.api} (${(err as Error).message}): run \`factory up\`, or check the port and FACTORY_HOME.`);
     return undefined;
   }
