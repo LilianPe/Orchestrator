@@ -4,7 +4,7 @@ import { FakeClock } from '../../../core/clock.js';
 import { decide } from '../../../core/engine.js';
 import { unroutedReason } from '../../../core/routing.js';
 import { newTicketState, type FactoryEvent } from '../../../core/types.js';
-import { SqliteStore } from '../../../store/sqlite-store.js';
+import { MemoryStore } from '../../../store/memory-store.js';
 import { FakeTracker, STANDARD_STATES } from '../fake.js';
 import { knownLabels, recordLabels, recordWrite } from './labels.js';
 import { Reconciler, reconcileOnce } from './reconcile.js';
@@ -14,7 +14,7 @@ const workflow = defaultWorkflow();
 describe('reconcileOnce', () => {
   it('emits delegation, moves and undelegation', async () => {
     const tracker = new FakeTracker();
-    const store = new SqliteStore(':memory:');
+    const store = new MemoryStore();
     tracker.addIssue({ identifier: 'REL-1', delegateId: 'app' });
     tracker.addIssue({ identifier: 'REL-2', delegateId: 'app', stateName: 'AI Review' });
     tracker.addIssue({ identifier: 'REL-3', stateName: 'In Progress' });
@@ -42,7 +42,7 @@ describe('reconcileOnce', () => {
 
   it('re-emits delegation for a known but non-delegated ticket, and clears delegation when it is withdrawn', async () => {
     const tracker = new FakeTracker();
-    const store = new SqliteStore(':memory:');
+    const store = new MemoryStore();
     tracker.addIssue({ identifier: 'REL-4', delegateId: 'app' });
     tracker.addIssue({ identifier: 'REL-5', stateName: 'Human Review' });
     await store.putTicket({ ...newTicketState('p', 'REL-4', 'T', 'todo', 4) });
@@ -62,7 +62,7 @@ describe('reconcileOnce', () => {
     const web = { id: 'web', repoPath: '/web', teamKey: 'REL', workflow };
     const zzz = { id: 'zzz', repoPath: '/zzz', teamKey: 'ZZZ', workflow };
     const noRepoRow = { ...newTicketState('web', 'ZZZ-1', 'T', 'todo', 3), delegated: true, blocked: true, awaitingRepo: [] };
-    const pass = async (tracker: FakeTracker, store: SqliteStore, projects: (typeof web)[], only?: string) => {
+    const pass = async (tracker: FakeTracker, store: MemoryStore, projects: (typeof web)[], only?: string) => {
       const events: FactoryEvent[] = [];
       await reconcileOnce({ tracker, store, projects, only, submit: (e) => events.push(e), clock: new FakeClock(100), log: () => {} });
       return events.filter((e) => e.projectId === 'web').map((e) => [e.id, e.payload]);
@@ -71,7 +71,7 @@ describe('reconcileOnce', () => {
     it('stays as it is while no project takes its team', async () => {
       const tracker = new FakeTracker();
       tracker.addIssue({ identifier: 'ZZZ-1', delegateId: 'app' });
-      const store = new SqliteStore(':memory:');
+      const store = new MemoryStore();
       await store.putTicket(noRepoRow);
       expect(await pass(tracker, store, [web])).toEqual([]);
     });
@@ -79,7 +79,7 @@ describe('reconcileOnce', () => {
     it('is lifted by the pass of the project it waits under once its team has a project, though Linear still delegates it', async () => {
       const tracker = new FakeTracker();
       tracker.addIssue({ identifier: 'ZZZ-1', delegateId: 'app' });
-      const store = new SqliteStore(':memory:');
+      const store = new MemoryStore();
       await store.putTicket(noRepoRow);
       const lift = [['reconcile:undelegated-flag:web:ZZZ-1:3', {}]];
       expect(await pass(tracker, store, [web, zzz], 'web')).toEqual(lift);
@@ -88,7 +88,7 @@ describe('reconcileOnce', () => {
 
     it('leaves the label to the issue\'s ticket in its new repo when that one is blocked', async () => {
       const tracker = new FakeTracker();
-      const store = new SqliteStore(':memory:');
+      const store = new MemoryStore();
       await store.putTicket(noRepoRow);
       await store.putTicket({ ...newTicketState('zzz', 'ZZZ-1', 'T', 'todo', 4), delegated: true, blocked: true, blockReason: 'Rouge' });
       expect(await pass(tracker, store, [web, zzz], 'web')).toEqual([['reconcile:undelegated-flag:web:ZZZ-1:3', { keepLabel: true }]]);
@@ -97,7 +97,7 @@ describe('reconcileOnce', () => {
     it('goes when the delegation is withdrawn, as a wait does, even once the ticket is done', async () => {
       const tracker = new FakeTracker();
       tracker.addIssue({ identifier: 'ZZZ-1', stateName: 'Done', stateType: 'completed' });
-      const store = new SqliteStore(':memory:');
+      const store = new MemoryStore();
       await store.putTicket({ ...noRepoRow, logical: 'done' });
       expect((await pass(tracker, store, [web])).map(([id]) => id)).toEqual(['reconcile:undelegated-flag:web:ZZZ-1:3']);
     });
@@ -105,7 +105,7 @@ describe('reconcileOnce', () => {
 
   describe('a team with several repos (ORC-291)', () => {
     const projects = ['web', 'api'].map((id) => ({ id, repoPath: `/${id}`, teamKey: 'REL', workflow }));
-    const pass = async (tracker: FakeTracker, store: SqliteStore, only?: string) => {
+    const pass = async (tracker: FakeTracker, store: MemoryStore, only?: string) => {
       const events: FactoryEvent[] = [];
       let reads = 0;
       const counted = { listDelegated: (k: string) => (reads++, tracker.listDelegated(k)), getIssue: (id: string) => tracker.getIssue(id) };
@@ -117,7 +117,7 @@ describe('reconcileOnce', () => {
       const tracker = new FakeTracker();
       tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', labels: ['repo:api'] });
       tracker.addIssue({ identifier: 'REL-2', delegateId: 'app' });
-      const { events, reads } = await pass(tracker, new SqliteStore(':memory:'));
+      const { events, reads } = await pass(tracker, new MemoryStore());
       expect(reads).toBe(1);
       expect(events).toEqual([
         ['web', 'reconcile:unrouted:web:REL-2', { issue: expect.any(Object), repos: ['web', 'api'] }],
@@ -128,7 +128,7 @@ describe('reconcileOnce', () => {
     it('is sticky: a ticket at work in a repo stays there whatever its label now says; one pass routes among all', async () => {
       const tracker = new FakeTracker();
       tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', labels: ['repo:api'], stateName: 'In Progress' });
-      const store = new SqliteStore(':memory:');
+      const store = new MemoryStore();
       await store.putTicket({ ...newTicketState('web', 'REL-1', 'T', 'dev', 3), delegated: true, activeRunId: 'r1' });
       expect((await pass(tracker, store)).events).toEqual([]);
       expect((await pass(tracker, store, 'api')).events).toEqual([]);
@@ -137,7 +137,7 @@ describe('reconcileOnce', () => {
     it('takes a ticket that waited for its repo out of the first once labelled, its Bloqué label kept while its repo blocks it', async () => {
       const tracker = new FakeTracker();
       tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', labels: ['repo:api'] });
-      const store = new SqliteStore(':memory:');
+      const store = new MemoryStore();
       await store.putTicket({ ...newTicketState('web', 'REL-1', 'T', 'todo', 3), delegated: true, blocked: true, blockReason: unroutedReason(['web', 'api']), awaitingRepo: ['web', 'api'] });
       expect((await pass(tracker, store)).events).toEqual([
         ['web', 'reconcile:undelegated-flag:web:REL-1:3', {}],
@@ -152,7 +152,7 @@ describe('reconcileOnce', () => {
       const tracker = new FakeTracker();
       tracker.setStates('REL', [...STANDARD_STATES, 'Canceled']);
       tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', labels: ['repo:api'], stateName: 'In Progress', ...issue });
-      const store = new SqliteStore(':memory:');
+      const store = new MemoryStore();
       await store.putTicket({ ...newTicketState('web', 'REL-1', 'T', 'todo', 3) });
       await store.putTicket({ ...newTicketState('api', 'REL-1', 'T', 'dev', 4), delegated: true });
       return { tracker, store };
@@ -183,7 +183,7 @@ describe('reconcileOnce', () => {
       ] as const) {
         const tracker = new FakeTracker();
         tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', stateName: 'Done', stateType: 'completed' });
-        const store = new SqliteStore(':memory:');
+        const store = new MemoryStore();
         await store.putTicket(t);
         expect((await pass(tracker, store)).events).toEqual(expected);
       }
@@ -223,7 +223,7 @@ describe('reconcileOnce', () => {
 
 describe('reconcileOnce — done and cancelled (ORC-185)', () => {
   const projects = [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }];
-  async function pass(tracker: FakeTracker, store: SqliteStore, log: (m: string) => void = () => {}) {
+  async function pass(tracker: FakeTracker, store: MemoryStore, log: (m: string) => void = () => {}) {
     const events: FactoryEvent[] = [];
     await reconcileOnce({ tracker, store, projects, submit: (e) => events.push(e), clock: new FakeClock(100), log });
     return events;
@@ -231,7 +231,7 @@ describe('reconcileOnce — done and cancelled (ORC-185)', () => {
 
   it('catches up a ticket moved to Done whose webhook was lost, unsigned, and never undelegates it', async () => {
     const tracker = new FakeTracker();
-    const store = new SqliteStore(':memory:');
+    const store = new MemoryStore();
     tracker.addIssue({ identifier: 'REL-6', delegateId: 'app', stateName: 'Done', stateType: 'completed' });
     await store.putTicket({ ...newTicketState('p', 'REL-6', 'T', 'human_review', 6), delegated: true });
     const events = await pass(tracker, store);
@@ -243,7 +243,7 @@ describe('reconcileOnce — done and cancelled (ORC-185)', () => {
   it('catches up a cancelled ticket: its work is stopped, then its delegation cleared', async () => {
     const tracker = new FakeTracker();
     tracker.setStates('REL', [...STANDARD_STATES, 'Canceled']);
-    const store = new SqliteStore(':memory:');
+    const store = new MemoryStore();
     tracker.addIssue({ identifier: 'REL-7', delegateId: 'app', stateName: 'Canceled', stateType: 'canceled' });
     await store.putTicket({ ...newTicketState('p', 'REL-7', 'T', 'dev', 7), delegated: true, activeRunId: 'r7' });
     const events = await pass(tracker, store);
@@ -255,7 +255,7 @@ describe('reconcileOnce — done and cancelled (ORC-185)', () => {
 
   it('a Done stops the run under way, and a delegation withdrawn with it is cleared', async () => {
     const tracker = new FakeTracker();
-    const store = new SqliteStore(':memory:');
+    const store = new MemoryStore();
     tracker.addIssue({ identifier: 'REL-6', stateName: 'Done', stateType: 'completed' });
     await store.putTicket({ ...newTicketState('p', 'REL-6', 'T', 'dev', 6), delegated: true, activeRunId: 'r6' });
     expect((await pass(tracker, store)).map((e) => [e.id, e.type])).toEqual([
@@ -268,7 +268,7 @@ describe('reconcileOnce — done and cancelled (ORC-185)', () => {
   it('a completed status the workflow does not map to done clears the delegation, as before, so the ticket is not read again each pass', async () => {
     const tracker = new FakeTracker();
     tracker.setStates('REL', [...STANDARD_STATES, 'Released']);
-    const store = new SqliteStore(':memory:');
+    const store = new MemoryStore();
     tracker.addIssue({ identifier: 'REL-6', delegateId: 'app', stateName: 'Released', stateType: 'completed' });
     await store.putTicket({ ...newTicketState('p', 'REL-6', 'T', 'human_review', 6), delegated: true });
     expect((await pass(tracker, store)).map((e) => [e.id, e.type])).toEqual([['reconcile:undelegated-flag:p:REL-6:6', 'ticket.undelegated']]);
@@ -276,7 +276,7 @@ describe('reconcileOnce — done and cancelled (ORC-185)', () => {
 
   it('a Done already received still stops a run left under way, as before', async () => {
     const tracker = new FakeTracker();
-    const store = new SqliteStore(':memory:');
+    const store = new MemoryStore();
     tracker.addIssue({ identifier: 'REL-6', delegateId: 'app', stateName: 'Done', stateType: 'completed' });
     await store.putTicket({ ...newTicketState('p', 'REL-6', 'T', 'done', 6), delegated: true, activeRunId: 'r6' });
     expect((await pass(tracker, store)).map((e) => [e.id, e.type])).toEqual([['reconcile:undelegated:p:REL-6:r6', 'session.stopped']]);
@@ -285,7 +285,7 @@ describe('reconcileOnce — done and cancelled (ORC-185)', () => {
   it('a cancel on a ticket the factory no longer counts as delegated only stops its run', async () => {
     const tracker = new FakeTracker();
     tracker.setStates('REL', [...STANDARD_STATES, 'Canceled']);
-    const store = new SqliteStore(':memory:');
+    const store = new MemoryStore();
     tracker.addIssue({ identifier: 'REL-7', delegateId: 'app', stateName: 'Canceled', stateType: 'canceled' });
     await store.putTicket({ ...newTicketState('p', 'REL-7', 'T', 'dev', 7), delegated: false, activeRunId: 'r7' });
     expect((await pass(tracker, store)).map((e) => [e.id, e.type])).toEqual([['reconcile:undelegated:p:REL-7:r7', 'session.stopped']]);
@@ -293,7 +293,7 @@ describe('reconcileOnce — done and cancelled (ORC-185)', () => {
 
   it('a Done already received (done in the store) is not caught up again, nor read from Linear', async () => {
     const tracker = new FakeTracker();
-    const store = new SqliteStore(':memory:');
+    const store = new MemoryStore();
     tracker.addIssue({ identifier: 'REL-8', delegateId: 'app', stateName: 'Done', stateType: 'completed' });
     await store.putTicket({ ...newTicketState('p', 'REL-8', 'T', 'done', 8), delegated: true });
     expect(await pass(tracker, store)).toEqual([]);
@@ -304,7 +304,7 @@ describe('reconcileOnce — done and cancelled (ORC-185)', () => {
     const tracker = new FakeTracker();
     // A read error (network, Linear down) says nothing of the ticket.
     tracker.getIssue = () => Promise.reject(new Error('fetch failed'));
-    const store = new SqliteStore(':memory:');
+    const store = new MemoryStore();
     await store.putTicket({ ...newTicketState('p', 'REL-9', 'T', 'dev', 9), delegated: true, activeRunId: 'r9' });
     const logs: string[] = [];
     expect(await pass(tracker, store, (m) => logs.push(m))).toEqual([]);
@@ -313,7 +313,7 @@ describe('reconcileOnce — done and cancelled (ORC-185)', () => {
 
   it('a ticket deleted in Linear is undelegated and its run stopped, as before', async () => {
     const tracker = new FakeTracker();
-    const store = new SqliteStore(':memory:');
+    const store = new MemoryStore();
     await store.putTicket({ ...newTicketState('p', 'REL-9', 'T', 'dev', 9), delegated: true, activeRunId: 'r9' });
     expect((await pass(tracker, store)).map((e) => [e.id, e.type])).toEqual([
       ['reconcile:undelegated:p:REL-9:r9', 'session.stopped'],
@@ -324,7 +324,7 @@ describe('reconcileOnce — done and cancelled (ORC-185)', () => {
   it('a Done or a cancel it catches up never asks for a merge nor any write on the forge', async () => {
     const tracker = new FakeTracker();
     tracker.setStates('REL', [...STANDARD_STATES, 'Canceled']);
-    const store = new SqliteStore(':memory:');
+    const store = new MemoryStore();
     tracker.addIssue({ identifier: 'REL-6', delegateId: 'app', stateName: 'Done', stateType: 'completed' });
     tracker.addIssue({ identifier: 'REL-7', delegateId: 'app', stateName: 'Canceled', stateType: 'canceled' });
     const reviewed = { ...newTicketState('p', 'REL-6', 'T', 'human_review', 6), delegated: true, branch: 'b6', prNumber: 6, prUrl: 'u', prState: 'OPEN' as const };
@@ -341,14 +341,14 @@ describe('reconcileOnce — done and cancelled (ORC-185)', () => {
 
 describe('reconcileOnce — labels (ORC-185)', () => {
   const projects = [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }];
-  async function pass(tracker: FakeTracker, store: SqliteStore) {
+  async function pass(tracker: FakeTracker, store: MemoryStore) {
     const events: FactoryEvent[] = [];
     await reconcileOnce({ tracker, store, projects, submit: (e) => events.push(e), clock: new FakeClock(100), log: () => {} });
     return events;
   }
   async function setup() {
     const tracker = new FakeTracker();
-    const store = new SqliteStore(':memory:');
+    const store = new MemoryStore();
     tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', stateName: 'In Progress', labels: ['bug'] });
     await store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'dev', 3), delegated: true });
     return { tracker, store };
@@ -412,14 +412,14 @@ describe('reconcileOnce — labels (ORC-185)', () => {
 });
 
 describe('reconcileOnce — the wait on « blocked by » tickets (ORC-363)', () => {
-  const pass = async (tracker: FakeTracker, store: SqliteStore) => {
+  const pass = async (tracker: FakeTracker, store: MemoryStore) => {
     const events: FactoryEvent[] = [];
     await reconcileOnce({ tracker, store, projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], submit: (e) => events.push(e), clock: new FakeClock(100), log: () => {} });
     return events;
   };
   const setup = async (blocker: { stateName: string; stateType: string }, waits = true) => {
     const tracker = new FakeTracker();
-    const store = new SqliteStore(':memory:');
+    const store = new MemoryStore();
     tracker.setStates('OPS', [...STANDARD_STATES, 'Canceled']);
     tracker.addIssue({ identifier: 'REL-1', delegateId: 'app' });
     tracker.addIssue({ identifier: 'OPS-2', ...blocker });
@@ -461,7 +461,7 @@ describe('Reconciler', () => {
     const events: FactoryEvent[] = [];
     const reconciler = new Reconciler({
       tracker: { listDelegated: async (k) => (passes++, await gate, tracker.listDelegated(k)), getIssue: (id) => tracker.getIssue(id) },
-      store: new SqliteStore(':memory:'), projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }],
+      store: new MemoryStore(), projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }],
       submit: (e) => events.push(e), clock: new FakeClock(100), log: () => {},
     });
     void reconciler.once();

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { SqliteStore } from '../store/sqlite-store.js';
+import { MemoryStore } from '../store/memory-store.js';
 import { FLAKY_USAGE, runFlaky, type FlakyOptions } from './flaky.js';
 
 function withStore() {
-  const store = new SqliteStore(':memory:');
+  const store = new MemoryStore();
   const lines: string[] = [];
   const flaky = (o: Partial<FlakyOptions>) => runFlaky({ store, project: 'p', by: 'armand', now: 20, print: (l) => void lines.push(l), ...o });
   return { store, lines, flaky };

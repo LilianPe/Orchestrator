@@ -18,7 +18,7 @@ import {
   type InternalEvent,
   type TicketState,
 } from '../../src/core/types.js';
-import { SqliteStore } from '../../src/store/sqlite-store.js';
+import { MemoryStore } from '../../src/store/memory-store.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../../src/store/types.js';
 import { BLOCKING, DEBOUNCE, DEV_SESSION, handedBack, PROJECT, sequences, TICKET, VERIFY_FAILURES, type Entry, type Sequences } from './events.js';
 import { decided, effects, fold, isDevStart, launches, params, readsFeedback, stepEffects, TIMEOUT, workflow, type Run, type Step } from './fold.js';
@@ -800,10 +800,10 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     it(
       'duplicating events (same id) anywhere after their original changes neither the final state nor the effects, through the store’s inbox',
       async () => {
-        // Duplicates are dropped by what drops them in the inbox: `Store.recordEvent`, here on SQLite.
+        // Duplicates are dropped by what drops them in the inbox: `Store.recordEvent`, here on a MemoryStore.
         // One store for every sequence, each recording its ids under its own prefix. The store answers
         // asynchronously: its answers are taken first, in order, then the fold reads them.
-        const store = new SqliteStore(':memory:');
+        const store = new MemoryStore();
         let sequence = 0;
         try {
           await holdsAsync(async (s) => {

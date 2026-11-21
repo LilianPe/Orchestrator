@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CompletedIssue, MergedPr } from '../core/baseline.js';
-import { SqliteStore } from '../store/sqlite-store.js';
+import { MemoryStore } from '../store/memory-store.js';
 import { BASELINE_USAGE, parseStartDate, runBaseline, type BaselineOptions } from './baseline.js';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -9,7 +9,7 @@ const NOW = START + DAY;
 
 /** Linear and GitHub as fakes: the period each was asked, kept; no network. */
 function withStore(issues: CompletedIssue[] = [], prs: MergedPr[] = []) {
-  const store = new SqliteStore(':memory:');
+  const store = new MemoryStore();
   const lines: string[] = [];
   const asked: unknown[] = [];
   const sources: BaselineOptions['sources'] = {

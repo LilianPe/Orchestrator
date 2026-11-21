@@ -2,13 +2,13 @@ import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from '
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { repoRoot } from '../app/root.js';
-import { homePaths, loadInstance, factoryHome } from '../config/instance.js';
+import { loadInstance, factoryHome } from '../config/instance.js';
 import type { Workflow } from '../core/workflow.js';
 import { factoryDefault } from '../presets/factory-default.js';
 import { fantome } from '../presets/fantome.js';
 import { defaultWorkflow, presetWorkflow } from '../presets/workflow.js';
 import { exportJournal, formatReplay, readJournal, replayJournal, type ReplayOptions } from '../runtime/replay.js';
-import { DATABASE_URL_ENV, openStore } from '../store/open.js';
+import { openStore } from '../store/open.js';
 
 /** The presets compiled in the binary (ORC-389): their workflow as the daemon builds it, without `factory.yml`'s step settings. */
 const PRESET_WORKFLOWS: Readonly<Record<string, () => Workflow>> = {
@@ -41,17 +41,14 @@ function journalFiles(paths: string[]): string[] {
 }
 
 /**
- * The journal of a ticket of the instance. Postgres is opened without migration (the daemon's to
- * run); SQLite only when its file exists, as its store creates any table it lacks on opening.
+ * The journal of a ticket of the instance, from its Postgres store opened without migration (the daemon's to run).
  */
 async function exportFromInstance(env: NodeJS.ProcessEnv, ticketId: string, projectId: string | undefined): Promise<unknown> {
   const home = factoryHome(env);
   const projects = loadInstance(home).projects;
   const project = projectId ?? (projects.length === 1 ? projects[0]!.id : undefined);
   if (!project) throw new Error(`give --project (${projects.map((p) => p.id).join(', ') || 'no project configured'})`);
-  const sqlitePath = homePaths(home).db;
-  if (!env[DATABASE_URL_ENV]?.trim() && !existsSync(sqlitePath)) throw new Error(`no instance database: neither ${DATABASE_URL_ENV} nor ${sqlitePath}`);
-  const { store } = await openStore({ env, sqlitePath, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
+  const store = await openStore({ env, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
   try {
     const journal = await exportJournal(store, project, ticketId);
     if (journal.entries.length === 0) throw new Error(`no event journaled for ${ticketId} in the project ${project}`);

@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { EventBus } from './live-feed.js';
 import { FakeClock } from '../core/clock.js';
 import { newTicketState, TRUSTED, type FactoryEvent, type TicketState } from '../core/types.js';
-import { SqliteStore } from '../store/sqlite-store.js';
+import { MemoryStore } from '../store/memory-store.js';
 import type { ChangelogEntry, SecurityLog } from '../store/types.js';
 import { MAIN_UNCHECKED } from '../core/maturity.js';
 import { LABELS } from '../../test/helpers/store-suite.js';
@@ -42,7 +42,7 @@ const mcpRequest = (body: unknown = { jsonrpc: '2.0', id: 1, method: 'ping' }, t
 const FACTORY_AGENT_PATHS = ['/agent', '/agent/issue/REL-1', '/agent/search?q=export', '/agent/kb/search?q=export', '/agent/ask', '/agent/mcp/extra'];
 
 async function setup(extra: Partial<Pick<ServerDeps, 'githubLogin' | 'usageLimitedUntil' | 'perTicketTokens' | 'takeOver' | 'configProblems' | 'heldRows' | 'secrets' | 'seriousDefect' | 'replays' | 'knowledgeSearch' | 'disabledControls'>> & { clock?: FakeClock } = {}) {
-  const store = new SqliteStore(':memory:');
+  const store = new MemoryStore();
   const bus = new EventBus();
   const submitted: FactoryEvent[] = [];
   const transcriptsDir = mkdtempSync(join(tmpdir(), 'factory-tr-'));
@@ -301,7 +301,7 @@ describe('server', () => {
   describe('the audit sheets of the reviewed PRs and the miss rate of the AI reviewers (ORC-229)', () => {
     const pr = { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1' };
     const event = (id: string, type: FactoryEvent['type'], at: number, payload: object): FactoryEvent => ({ ...TRUSTED, id, type, at, projectId: 'p', ticketId: 'REL-1', payload }) as FactoryEvent;
-    const reviewedPr = async (store: SqliteStore) => {
+    const reviewedPr = async (store: MemoryStore) => {
       await store.putTicket({ ...newTicketState('p', 'REL-1', 'Export', 'human_review', 20), prNumber: 3, prUrl: pr.url });
       await store.recordEvent(event('o', 'pr.opened', 2, pr));
       await store.recordEvent(event('rh', 'pr.reviewed', 5, { ...pr, kind: 'review', author: 'lilian-gh', body: 'no header', state: 'CHANGES_REQUESTED' }));
@@ -574,7 +574,7 @@ describe('server', () => {
 
   describe('the run detail (ORC-298)', () => {
     const DAY = 24 * 60 * 60 * 1000;
-    const ended = async (store: SqliteStore, endedAt: number) => {
+    const ended = async (store: MemoryStore, endedAt: number) => {
       const run = (await store.getRun('r1'))!;
       await store.putRun({ ...run, status: 'success', endedAt, lastText: 'AGENT-CLAIM: merged at the first try', tokens: { input: 1, output: 2, cacheRead: 3, cacheCreation: 4 } });
     };
@@ -655,7 +655,7 @@ describe('server', () => {
   });
 
   describe("a run's inspection (ORC-301)", () => {
-    const atWork = async (store: SqliteStore) => store.putTicket({ ...newTicketState('p', 'REL-1', 'Export', 'dev', 1), activeRunId: 'r1' });
+    const atWork = async (store: MemoryStore) => store.putTicket({ ...newTicketState('p', 'REL-1', 'Export', 'dev', 1), activeRunId: 'r1' });
 
     it('pauses or stops that run alone: the stop names it, its author and the role the guard gives are journaled with it', async () => {
       const { app, store, submitted } = await setup();
@@ -721,8 +721,8 @@ describe('server', () => {
   });
 
   describe('a human takes over a run (ORC-234)', () => {
-    const atWork = async (store: SqliteStore) => store.putTicket({ ...newTicketState('p', 'REL-1', 'Export', 'dev', 1), activeRunId: 'r1' });
-    const takenOver = async (store: SqliteStore) => store.putTicket({ ...newTicketState('p', 'REL-1', 'Export', 'dev', 1), blocked: true, blockKind: 'taken_over', blockReason: TAKEN_OVER });
+    const atWork = async (store: MemoryStore) => store.putTicket({ ...newTicketState('p', 'REL-1', 'Export', 'dev', 1), activeRunId: 'r1' });
+    const takenOver = async (store: MemoryStore) => store.putTicket({ ...newTicketState('p', 'REL-1', 'Export', 'dev', 1), blocked: true, blockKind: 'taken_over', blockReason: TAKEN_OVER });
     const desk = (): TakeOverDesk & { kept: { projectId: string; ticketId: string; bytes: number }[] } => {
       const kept: { projectId: string; ticketId: string; bytes: number }[] = [];
       return {

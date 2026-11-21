@@ -1,15 +1,11 @@
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ROLES_TTL_MS } from '../../src/adapters/roles/cached.js';
 import { runRepair } from '../../src/cli/repair.js';
 import { TRUSTED, type FactoryEvent } from '../../src/core/types.js';
-import { SqliteStore } from '../../src/store/sqlite-store.js';
 import type { DecisionRequest, Store } from '../../src/store/types.js';
 import type { WorkspaceRequest } from '../../src/adapters/workspace/types.js';
-import { CRASH_WORKFLOW, crashAfterDecision } from '../helpers/crash-workflow.js';
-import { createHarness, harnessStoreKind, loadTestWorkflow } from '../helpers/harness.js';
+import { CRASH_WORKFLOW } from '../helpers/crash-workflow.js';
+import { createHarness, loadTestWorkflow } from '../helpers/harness.js';
 import type { WorkflowOverrides } from '../helpers/workflow-with.js';
 
 const waitFor = async (cond: () => boolean | Promise<boolean>): Promise<void> => {
@@ -26,64 +22,10 @@ const gate = () => {
 
 /**
  * ORC-149: the worker decides each inbox row in one transaction (journal, projection, outbox,
- * timers, inbox mark), one task per ticket, and executes the outbox rows after the commit.
+ * timers, inbox mark), one task per ticket, and executes the outbox rows after the commit. Its kills
+ * with SIGKILL, after or before the commit, are in test/integration/worker-pg.test.ts.
  */
-/** On a SQLite file: test/integration/worker-pg.test.ts kills the daemon on Postgres. */
-const onSqliteFile = harnessStoreKind() === 'postgres' ? it.skip : it;
-
 describe('worker: per-ticket lock and decision transaction', () => {
-  onSqliteFile.each([
-    { killAt: 1, done: [] as string[], label: 'before any effect' },
-    { killAt: 2, done: ['REL-1:1:1'], label: 'after its first effect' },
-  ])('loses no event and doubles no effect when killed with SIGKILL after the commit, $label', async ({ killAt, done }) => {
-    const file = join(mkdtempSync(join(tmpdir(), 'factory-worker-')), 'factory.db');
-    const { completed } = crashAfterDecision(file, killAt);
-    expect(completed).toEqual(done);
-
-    const h = createHarness({ store: new SqliteStore(file), workflow: CRASH_WORKFLOW });
-    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
-    // Committed before the kill: journal, projection and the three outbox rows, the inbox row processed.
-    expect((await h.store.recentEvents(10, 'REL-1')).map((e) => e.type)).toEqual(['ticket.delegated']);
-    expect(await h.ticket()).toMatchObject({ delegated: true });
-    // The result of each effect done before the kill, written with its row (ORC-150).
-    expect((await h.store.pendingInbox(10)).map((e) => e.id)).toEqual(done.map((id) => `effect:${id}`));
-    expect((await h.store.listEffects('p', 'REL-1')).map((r) => [r.id, r.effect.kind])).toEqual([
-      ['REL-1:1:1', 'labels'],
-      ['REL-1:1:2', 'comment'],
-      ['REL-1:1:3', 'start_run'],
-    ]);
-
-    await h.restart();
-    // The rows left are executed once each, and only those (the run's end decides more afterwards).
-    expect((await h.store.listEffects('p', 'REL-1')).slice(0, 3).map((r) => r.status)).toEqual(['done', 'done', 'done']);
-    const labels = h.tracker.calls.filter((c) => c.method === 'setLabels');
-    expect(labels).toHaveLength(killAt === 1 ? 1 : 0);
-    expect(h.tracker.calls.filter((c) => c.method === 'comment').map((c) => c.args[1])).toEqual(['Pris en charge.']);
-    expect(h.runner.requests).toHaveLength(1);
-    expect((await h.store.recentEvents(50, 'REL-1')).filter((e) => e.type === 'ticket.delegated')).toHaveLength(1);
-
-    // Another start finds nothing left to do.
-    await h.restart();
-    expect(h.runner.requests).toHaveLength(1);
-  });
-
-  onSqliteFile('writes nothing of a decision cut by SIGKILL before its commit, and decides it once at the next start', async () => {
-    const file = join(mkdtempSync(join(tmpdir(), 'factory-worker-')), 'factory.db');
-    expect(crashAfterDecision(file, 0).completed).toEqual([]);
-
-    const h = createHarness({ store: new SqliteStore(file), workflow: CRASH_WORKFLOW });
-    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
-    expect(await h.store.recentEvents(10)).toEqual([]);
-    expect(await h.store.getTicket('p', 'REL-1')).toBeUndefined();
-    expect(await h.store.listEffects('p', 'REL-1')).toEqual([]);
-    expect((await h.store.pendingInbox(10)).map((e) => e.type)).toEqual(['ticket.delegated']);
-
-    await h.restart();
-    expect((await h.store.recentEvents(50, 'REL-1')).filter((e) => e.type === 'ticket.delegated')).toHaveLength(1);
-    expect(h.tracker.calls.filter((c) => c.method === 'comment')).toHaveLength(1);
-    expect(h.runner.requests).toHaveLength(1);
-  });
-
   it('decides a ticket while another one is held in a long workspace setup (criterion 5)', async () => {
     const h = createHarness();
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
@@ -1215,37 +1157,6 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
     expect((await journal(h)).filter((e) => e.type === 'effect.failed')).toHaveLength(2);
     expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Error: Linear down' });
     expect(await h.store.pendingInbox(10)).toEqual([]);
-  });
-
-  onSqliteFile('takes up an effect cut by SIGKILL after it acted once its lease expires, and runs it again (criterion 2, at least once)', async () => {
-    const file = join(mkdtempSync(join(tmpdir(), 'factory-worker-')), 'factory.db');
-    const { completed } = crashAfterDecision(file, 'acted:1', 300);
-    expect(completed).toEqual([]);
-
-    const h = createHarness({ store: new SqliteStore(file), workflow: CRASH_WORKFLOW, effectLeaseMs: 300 });
-    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
-    // The labels were set, but the row is still running under the dead process's claim, with no result.
-    expect((await h.store.listEffects('p', 'REL-1'))[0]).toMatchObject({ id: 'REL-1:1:1', status: 'running', attempts: 1 });
-    expect(await h.store.pendingInbox(10)).toEqual([]);
-
-    await h.restart();
-    const settled = async () => (await h.store.listEffects('p', 'REL-1')).slice(0, 3).every((r) => r.status === 'done');
-    for (let i = 0; i < 100 && !(await settled()); i++) {
-      await new Promise((r) => setTimeout(r, 20));
-      await h.orch.drained();
-    }
-    const rows = await h.store.listEffects('p', 'REL-1');
-    expect(rows.slice(0, 3).map((r) => [r.id, r.status, r.attempts])).toEqual([
-      ['REL-1:1:1', 'done', 2],
-      ['REL-1:1:2', 'done', 1],
-      ['REL-1:1:3', 'done', 1],
-    ]);
-    // Run again under its new claim: the labels are set a second time here (idempotency per effect: ORC-162).
-    expect(h.tracker.calls.filter((c) => c.method === 'setLabels')).toHaveLength(1);
-    expect(h.tracker.calls.filter((c) => c.method === 'comment')).toHaveLength(1);
-    expect(h.runner.requests).toHaveLength(1);
-    // One result per row, whatever its number of attempts.
-    expect((await journal(h)).filter((e) => e.id === 'effect:REL-1:1:1')).toHaveLength(1);
   });
 
   it('hands a queued start lost in a crash out again once its lease expires', async () => {

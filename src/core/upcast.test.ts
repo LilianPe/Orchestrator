@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { defaultWorkflow } from '../presets/workflow.js';
-import { SqliteStore } from '../store/sqlite-store.js';
+import { MemoryStore } from '../store/memory-store.js';
 import { causeOf } from './block-cause.js';
 import { deadLetterReason, liftDeadLetterBlock } from './dead-letter.js';
 import { decide, settledTicket } from './engine.js';
@@ -44,7 +44,7 @@ describe('upcast', () => {
   });
 
   it('makes a version 1 journal readable by decide, with the same decisions as the current events', async () => {
-    const store = new SqliteStore(':memory:');
+    const store = new MemoryStore();
     for (const e of Object.values(v1)) await store.recordEvent(e as unknown as FactoryEvent);
     const replayed = (await store.recentEvents(10)).reverse().map((e) => upcast(e as StoredEvent));
     expect(replayed.map((e) => e.type)).toEqual(['status.changed', 'label.changed', 'session.prompted']);

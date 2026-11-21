@@ -4,7 +4,7 @@ import { stringify } from 'yaml';
 import type { Exec } from '../adapters/exec.js';
 import { isRecord } from '../adapters/graphql-pages.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
-import { homePaths, loadInstance, loadSecrets, samePath, saveInstance, saveSecrets } from '../config/instance.js';
+import { loadInstance, loadSecrets, samePath, saveInstance, saveSecrets } from '../config/instance.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning, REPO_CONFIG_PATH, testCommandWarnings } from '../config/repo-config.js';
 import { repoRoot } from '../app/root.js';
@@ -149,12 +149,10 @@ async function printMaturity(d: InitDeps, projectId: string, report: MaturityRep
  * migration first, as init may run before the daemon ever did.
  */
 export const instanceCards =
-  (home: string) =>
+  () =>
   async (projectId: string, report: MaturityReport): Promise<StoredCards> => {
-    const sqlitePath = homePaths(home).db;
-    const { store, kind } = await openStore({ env: process.env, sqlitePath, migrationsFolder: join(repoRoot(), 'drizzle') });
-    // SQLite said as such: a daemon started with FACTORY_DATABASE_URL reads Postgres, and its Maturity page stays empty.
-    const where = kind === 'postgres' ? `Postgres (${DATABASE_URL_ENV})` : `SQLite (${sqlitePath}): a daemon started with ${DATABASE_URL_ENV} reads Postgres and does not see them`;
+    const store = await openStore({ env: process.env, migrationsFolder: join(repoRoot(), 'drizzle') });
+    const where = `Postgres (${DATABASE_URL_ENV})`;
     try {
       return { cards: await storeReport(store, projectId, report, Date.now()), where };
     } finally {
@@ -315,7 +313,7 @@ export async function runInit(d: InitDeps): Promise<void> {
 
   saveInstance(d.home, cfg);
   // The maturity report (ORC-410): each point the same detection read, as a card to approve, over a repository `init` proposes.
-  // After config.yaml: the home where SQLite keeps its file is made, and a database that fails loses none of the answers.
+  // After config.yaml: a database that fails loses none of the answers.
   if (detected) await printMaturity(d, id, (run) => maturityReport(repoPath, detected, run), cfg.publicUrl ?? `http://localhost:${cfg.port}`);
   if (existsSync(ymlPath)) {
     io.print(`${ymlPath} kept as it is.`);

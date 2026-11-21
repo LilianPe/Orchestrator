@@ -532,7 +532,7 @@ export const blockEntry = (t: TicketState, at: number): BlockEntry => ({ project
 
 /**
  * The moves into Blocked (`BlockEntry`) the decisions and the projections hold: `decisions` in each ticket's order, those
- * without a projection left out. What SQLite computes in memory; Postgres the same in SQL.
+ * without a projection left out. What MemoryStore computes in memory; Postgres the same in SQL.
  */
 export function blockMoves(decisions: DecisionRecord[], tickets: TicketState[]): BlockEntry[] {
   const key = (projectId: string, ticketId: string) => `${projectId}/${ticketId}`;
@@ -590,8 +590,8 @@ export interface QueueClaim {
 }
 
 /**
- * The state port. Asynchronous because Postgres is (ORC-132): `SqliteStore` implements it by
- * wrapping its synchronous calls, `PgStore` natively.
+ * The state port. Asynchronous because Postgres is (ORC-132): `PgStore` implements it, the only store of a daemon
+ * (ORC-178); `MemoryStore` in the tests, in memory.
  */
 export interface Store {
   getTicket(projectId: string, ticketId: string): Promise<TicketState | undefined>;
@@ -849,7 +849,7 @@ export interface Store {
   /**
    * A webhook delivery answered before it is written to the inbox (ORC-336), kept until it is: undefined when this call
    * kept it; when one with this key is kept already, its value, and nothing written (ORC-355). A few short-lived rows:
-   * the `deliveries` table on Postgres, the meta rows under `delivery:` on SQLite.
+   * the `deliveries` table on Postgres, the meta rows under `delivery:` in MemoryStore.
    */
   receiveDelivery(key: string, value: string): Promise<string | undefined>;
   /** The deliveries kept, in the order received: what a restart writes to the inbox. */

@@ -5,7 +5,7 @@ import { createHarness } from '../helpers/harness.js';
 
 /**
  * ORC-195: the factory composes the PR's description in the reviewer's fixed order from the structured output, and posts the
- * recap as the ticket goes to Human Review, both through the `OutputPolicy`. On the whole chain, SQLite and Postgres.
+ * recap as the ticket goes to Human Review, both through the `OutputPolicy`. On the whole chain, MemoryStore and Postgres.
  */
 const WORKTREE = '/tmp/factory-fake/p/REL-1';
 const result: AgentOutput = {

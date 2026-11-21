@@ -99,6 +99,6 @@ list) needs `factory dry-run <project>` once fixed; the refused tickets then sta
 
 ## Where it is kept
 
-The `dry_runs` table (SQLite, and Postgres from migration `0016_dry_runs`), one row per dry run, the record whole in `data`.
+The `dry_runs` table (Postgres, from migration `0016_dry_runs`), one row per dry run, the record whole in `data`.
 `Store.lastDryRun(projectId)` reads the last one on the default branch; `Store.lastDryRun(projectId, sha)` reads the last one on
 that commit. A dry run on a given commit is never taken for the default branch's.

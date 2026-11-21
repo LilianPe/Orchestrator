@@ -2,7 +2,6 @@ import { userInfo } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { repoRoot } from '../app/root.js';
-import { homePaths } from '../config/instance.js';
 import { openStore } from '../store/open.js';
 import type { Store } from '../store/types.js';
 
@@ -60,7 +59,7 @@ export async function runFlakyCommand(home: string, args: readonly string[]): Pr
     return 1;
   }
   // The daemon migrates the schema; this only reads and writes rows.
-  const { store } = await openStore({ env: process.env, sqlitePath: homePaths(home).db, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
+  const store = await openStore({ env: process.env, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
   try {
     let by = 'cli';
     try {

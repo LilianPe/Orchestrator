@@ -137,7 +137,7 @@ export function githubIngest(store: Store, accept: (e: FactoryEvent) => Promise<
 
 /**
  * Runs `crash-after-github-ack.ts` in a child process: the signed delivery of `body` is written to the
- * inbox of `target` (a SQLite file or a Postgres URL) through the GitHub ingestion, then the process is
+ * inbox of `target` (a Postgres URL) through the GitHub ingestion, then the process is
  * killed with SIGKILL. Returns the status it answered and how it ended.
  */
 export function crashAfterGithubAck(

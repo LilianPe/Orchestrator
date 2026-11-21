@@ -8,7 +8,7 @@ To take a first real ticket from delegation to its PR on your machine, follow [`
 
 | Tool | Version | Why |
 |---|---|---|
-| Node.js | **24.22.1 or later** (`engines.node: ">=24.22.1"`) | The daemon uses `node:sqlite`, built into Node 24; 24.22.1 is the patched minimum from the October 2026 security release. |
+| Node.js | **24.22.1 or later** (`engines.node: ">=24.22.1"`) | 24.22.1 is the patched minimum from the October 2026 security release. |
 | npm | the one shipped with Node 24 | Install and build. |
 | git | recent (worktrees) | One git worktree per ticket. |
 | A GitHub App | installed on the repository ([`github.md`](github.md#creating-the-app)) | The daemon reads and publishes on GitHub by its App alone: the `gh` CLI is no longer used (ORC-181). |
@@ -63,13 +63,12 @@ All of the instance's state lives in **`FACTORY_HOME`**, by default `~/.factory`
 | `secrets.json` | Linear credentials and tokens. Written with mode `0600`. On Windows, which has no POSIX mode, the file inherits the permissions (ACL) of its directory: put `FACTORY_HOME` in a directory that only the factory's user can read (the user profile is, by default). | **yes** |
 | `factory.yml` | GitHub App, Claude token, budgets, every secret as an `env:` reference, never a value ([`configuration.md`](configuration.md)). Written by the first `factory init`. | no (references only) |
 | `run-settings.json` | Claude Code permissions passed to each run (`--settings`), regenerated on each `factory up`. | no |
-| `factory.db` | SQLite database: tracked tickets, events, runs, costs, queue, timers. Absent when `FACTORY_DATABASE_URL` points to a Postgres database ([`configuration.md`](configuration.md#environment-variables)). | yes (contains the history) |
 | `transcripts/<runId>.jsonl` | `stream-json` output of each run, secrets masked, deleted 30 days after its last write ([`operations.md`](operations.md#logs-transcripts-and-data)). | yes (code, ticket contents) |
 | `workspaces/<project>/<ticket>/` | Git worktree of each ticket in progress. | — |
 | `workspaces/<project>/_trunk/<runId>/` | Detached copy of the main branch, one per read-only question, deleted when it ends. | — |
 | `logs/` | Created at startup but not used yet: the daemon's logs go to standard output. | — |
 
-Backing up an instance = backing up `config.yaml`, `secrets.json`, `factory.yml` and `factory.db` (or the Postgres database, with `pg_dump`, when `FACTORY_DATABASE_URL` is set). Worktrees are recreated from the pushed branches.
+Backing up an instance = backing up `config.yaml`, `secrets.json`, `factory.yml` and the Postgres database of `FACTORY_DATABASE_URL` (`pg_dump`): the factory keeps its state nowhere else (ORC-178). A `relais.db` or `factory.db` left from the SQLite store is archived then deleted ([`operations.md`](operations.md#archiving-the-sqlite-data-orc-178)). Worktrees are recreated from the pushed branches.
 
 ## Uninstalling
 

@@ -353,7 +353,7 @@ export function runDetail(run: RunRecord, facts: MeasureFacts): RunDetail {
     findings.push({ source: 'ai', runId: r.id, at: r.endedAt ?? r.startedAt, job: r.job, status: r.status, outcome: end?.attempt ?? null, findings: end?.output?.findings ?? [] });
   }
   // Ties on the instant (two lenses of one round) follow the journal, which both stores read in the same order: the attempts
-  // are ordered by start, then by insertion on SQLite but by id on Postgres. A round without an event comes after.
+  // are ordered by start, then by insertion in MemoryStore but by id on Postgres. A round without an event comes after.
   const position = new Map<string, number>();
   events.forEach((e, i) => {
     const key = e.type === 'pr.reviewed' ? e.id : runIdOf(e);

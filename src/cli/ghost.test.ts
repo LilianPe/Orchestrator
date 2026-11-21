@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { KEPT_PR } from '../store/types.js';
 import { newTicketState } from '../core/types.js';
-import { SqliteStore } from '../store/sqlite-store.js';
+import { MemoryStore } from '../store/memory-store.js';
 import type { RunRecord } from '../store/types.js';
 import { GHOST_USAGE, runGhost, type GhostOptions, type HumanPr } from './ghost.js';
 
@@ -24,7 +24,7 @@ const THRESHOLDS = ['--threshold', '0.6', '--as-is', '0.3'];
 const NOW = 1_710_000_000_000;
 
 function withGhost(o: { sandboxes?: boolean } = {}) {
-  const store = new SqliteStore(':memory:');
+  const store = new MemoryStore();
   const lines: string[] = [];
   const answers: string[] = [];
   const dir = mkdtempSync(join(tmpdir(), 'ghost-cli-'));

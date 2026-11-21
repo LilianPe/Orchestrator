@@ -7,7 +7,7 @@
  * acted, before its row is settled, under a lease of `<leaseMs>`. The id of each row it completed
  * is appended to `<logFile>`.
  *
- *   node --import tsx test/helpers/crash-after-decision.ts <sqlite file | postgres://…> <killAt> <logFile> [leaseMs]
+ *   node --import tsx test/helpers/crash-after-decision.ts <postgres://…> <killAt> <logFile> [leaseMs]
  */
 import { appendFileSync } from 'node:fs';
 import type { DecisionRequest, Store } from '../../src/store/types.js';

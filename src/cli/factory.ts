@@ -97,7 +97,7 @@ async function main(): Promise<number> {
       const workflow = defaultWorkflow();
       const projects = cfg.projects.map((p) => ({ id: p.id, repoPath: p.repoPath, teamKey: p.linearTeamKey, workflow }));
       // Read-only: the schema is the daemon's to migrate.
-      const { store } = await openStore({ env: process.env, sqlitePath: homePaths(home).db, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
+      const store = await openStore({ env: process.env, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
       // The branch naming as the daemon reads it on the default branch (ORC-283), without a fetch: a preview.
       const repoConfig = makeRepoConfig();
       const naming = async (p: { repoPath: string }) => (await repoConfig(p, { fetch: false })).branches;
@@ -136,7 +136,7 @@ async function runInitCommand(args: string[]): Promise<number> {
     dev: values.dev,
     exec: execCmd,
     createSmee: () => createSmeeChannel(),
-    storeCards: instanceCards(home),
+    storeCards: instanceCards(),
     io: {
       ask: async (q, def) => (await rl.question(`${q}${def ? ` [${def}]` : ''}: `)).trim() || def || '',
       print: (s) => console.log(s),
