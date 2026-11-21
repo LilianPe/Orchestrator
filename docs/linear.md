@@ -33,7 +33,7 @@ Linear may refuse a callback URL on `http://localhost`: in that case, temporaril
 On connection, the factory:
 
 - saves the tokens, the agent's id (`appUserId`) and the organization's;
-- **creates the missing statuses in each configured team** (see § 5) and the `Bloqué` label (no `agent:*` label since ORC-201);
+- **creates the missing statuses in each configured team** (see § 5) and the `Bloqué` label (no `agent:*` label since ORC-201); the daemon's start does it too, once Linear is connected, for a team that lacks a status (Spec, on a team connected before it was a default, ORC-457);
 - runs a reconciliation right away; after that, it runs every 5 minutes (ORC-185).
 
 The token is refreshed automatically. On later startups, the factory reconnects on its own with the tokens in `secrets.json`. `factory status` and the UI show whether Linear is connected.
@@ -208,7 +208,7 @@ The factory reasons in **logical states** mapped by name to the team's statuses 
 | Logical state | Linear status (pack) | Linear type given if created |
 |---|---|---|
 | `todo` | Todo | `unstarted` |
-| `spec` | Spec, none with `statuses.spec_draft: off` (ORC-457) | `started` |
+| `spec` | Spec, none with `statuses.spec_draft: off` (ORC-457); a team's own « Spec » status is read as it | `started` |
 | `dev` | In Progress | `started` |
 | `human_review` | Human Review | `started` |
 | `ai_review` | AI Review | `started` |

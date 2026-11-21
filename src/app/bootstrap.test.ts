@@ -13,7 +13,7 @@ import type { RunRecord } from '../store/types.js';
 import { TimerService } from '../runtime/timers.js';
 import { saveInstance, saveSecrets, validatorWarnings } from '../config/instance.js';
 import { defaultWorkflow } from '../presets/workflow.js';
-import { startFactory, type BootOptions } from './bootstrap.js';
+import { createMissingStatuses, startFactory, type BootOptions } from './bootstrap.js';
 import { runQueueCommand, runStatusCommand } from '../cli/control.js';
 import { MemoryStore } from '../store/memory-store.js';
 import { oldDatabaseWarnings } from '../store/open.js';
@@ -391,6 +391,46 @@ describe('bootstrap', () => {
 
     it('starts a config written before the marker, warning of the refusal to come', async () => {
       expect((await startWith(undefined)).filter((m) => m.includes('smee'))).toEqual([expect.stringMatching(/^Warning: relay: \{ kind: smee \}.*dev: true.*factory init --dev/)]);
+    });
+  });
+
+  describe('the statuses a connected team lacks, at start (ORC-457)', () => {
+    const tracker = (team: string[], fail?: Error) => {
+      const created: string[][] = [];
+      return {
+        created,
+        teamStatuses: async () => team,
+        ensureSetup: async (_key: string, states: Record<string, string | undefined>) => {
+          if (fail) throw fail;
+          const made = Object.values(states).filter((n): n is string => !!n && !team.includes(n));
+          created.push(made);
+          return made;
+        },
+      };
+    };
+    const project = { id: 'p', teamKey: 'REL', workflow: defaultWorkflow() };
+    const ORC_170 = ['Todo', 'In Progress', 'AI Review', 'Human Review', 'Done'];
+
+    it('creates « Spec » on a team connected before it was a default, as « Connect Linear » would, and says so', async () => {
+      const t = tracker(ORC_170);
+      const logs: string[] = [];
+      await createMissingStatuses(t, [project], (l) => logs.push(l));
+      expect(t.created).toEqual([['Spec']]);
+      expect(logs).toEqual(['Linear REL: created Spec']);
+    });
+
+    it('writes nothing to a team that has them all, nor to one whose spec status is off', async () => {
+      const t = tracker([...ORC_170, 'Spec']);
+      await createMissingStatuses(t, [project], () => {});
+      const off = tracker(ORC_170);
+      await createMissingStatuses(off, [{ ...project, workflow: defaultWorkflow({ statuses: { spec_draft: 'off' } }) }], () => {});
+      expect([...t.created, ...off.created]).toEqual([]);
+    });
+
+    it('a creation Linear refuses keeps the warning: a move to that status will fail', async () => {
+      const logs: string[] = [];
+      await createMissingStatuses(tracker(ORC_170, new Error('Linear answered 403')), [project], (l) => logs.push(l));
+      expect(logs).toEqual([expect.stringMatching(/^Warning: p: the Linear team REL has no status « Spec »/), 'Linear REL: statuses not created: Linear answered 403']);
     });
   });
 

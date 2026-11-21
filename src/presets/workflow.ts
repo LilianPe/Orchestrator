@@ -96,7 +96,11 @@ function statesOf(statuses: Readonly<Record<string, string>> = {}): Workflow['st
   const seen = new Map<string, string>();
   for (const [status, name] of Object.entries(states)) {
     const other = seen.get(name);
-    if (other) throw new WorkflowError(`factory.yml: statuses: « ${name} » would name both ${other} and ${status}: a Linear status names one`);
+    if (other) {
+      // A name factory.yml gave before Spec was a default (ORC-457).
+      const spec = other === 'spec' || status === 'spec' ? ` (Spec is the spec's by default: rename it, or \`statuses: { spec_draft: ${STATUS_OFF} }\`)` : '';
+      throw new WorkflowError(`factory.yml: statuses: « ${name} » would name both ${other} and ${status}: a Linear status names one${spec}`);
+    }
     seen.set(name, status);
   }
   return states;

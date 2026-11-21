@@ -42,6 +42,7 @@ import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveL
 import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { fantome, isFantome, projectEffects } from '../presets/fantome.js';
 import { defaultWorkflow, missingStatusWarning, presetWorkflow } from '../presets/workflow.js';
+import type { Workflow } from '../core/workflow.js';
 import { Replays, SANDBOXES_META } from '../ghost/delegate.js';
 import { startTime } from '../ghost/history.js';
 import { FACTORY_LABELS } from '../core/engine.js';
@@ -62,6 +63,30 @@ import { RUN_BEAT_MS } from '../store/types.js';
 import { repoRoot } from './root.js';
 import { TrackerSwitch } from './tracker-switch.js';
 import { PRODUCT_NAME } from '../product.js';
+
+/**
+ * The statuses a connected team lacks, created at start as « Connect Linear » creates them (ORC-457): a team connected before
+ * Spec was a default gets it, or every delegation's move to it would fail. One Linear refuses is said, as `doctor` says it (ORC-382).
+ */
+export async function createMissingStatuses(
+  tracker: Pick<LinearTracker, 'teamStatuses' | 'ensureSetup'>,
+  projects: readonly { id: string; teamKey: string; workflow: Pick<Workflow, 'states'> }[],
+  log: (line: string) => void,
+): Promise<void> {
+  for (const p of projects) {
+    // As `warm` just read them.
+    const team = await tracker.teamStatuses(p.teamKey, false).catch(() => undefined);
+    const warning = team && missingStatusWarning(p, p.workflow.states, team);
+    if (!warning) continue;
+    try {
+      const created = await tracker.ensureSetup(p.teamKey, p.workflow.states, FACTORY_LABELS);
+      if (created.length) log(`Linear ${p.teamKey}: created ${created.join(', ')}`);
+    } catch (error) {
+      log(warning);
+      log(`Linear ${p.teamKey}: statuses not created: ${(error as Error).message}`);
+    }
+  }
+}
 
 export interface BootOptions {
   home: string;
@@ -179,13 +204,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       const api = new LinearApi(() => tm.get());
       linearTracker = new LinearTracker(api, appUserId);
       for (const p of projects) await linearTracker.warm(p.teamKey).catch((e: Error) => log(`warm ${p.teamKey}: ${e.message}`));
-      // The team's statuses are known from here on (ORC-382): one factory.yml names that the team lacks is said, as `doctor` says it.
-      for (const p of fromLinear) {
-        // As `warm` just read them.
-        const team = await linearTracker.teamStatuses(p.teamKey, false).catch(() => undefined);
-        const warning = team && missingStatusWarning(p, p.workflow.states, team);
-        if (warning) log(warning);
-      }
+      await createMissingStatuses(linearTracker, fromLinear, log);
       trackerSwitch.set(linearTracker);
       return true;
     };

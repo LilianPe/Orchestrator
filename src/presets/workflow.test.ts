@@ -116,6 +116,11 @@ describe("factory.yml's statuses (ORC-382)", () => {
     expect(wf.preset.steps.map((s) => s.id)).toContain('spec_review');
   });
 
+  it('ORC-457: a build named Spec, valid before Spec was a default, is refused with the way out', () => {
+    expect(() => defaultWorkflow({ statuses: { build: 'Spec' } })).toThrow(/« Spec » would name both spec and dev: a Linear status names one \(Spec is the spec's by default: rename it, or `statuses: \{ spec_draft: off \}`\)/);
+    expect(defaultWorkflow({ statuses: { build: 'Spec', spec_draft: 'off' } }).states).toMatchObject({ dev: 'Spec' });
+  });
+
   it('ORC-457: refuses `off` for a step whose status the factory needs', () => {
     expect(() => defaultWorkflow({ statuses: { build: 'off' } })).toThrow(/statuses\.build: `off` turns off only the status of spec_draft/);
     expect(() => defaultWorkflow({ statuses: { intake: 'off' } })).toThrow(/statuses\.intake: `off` turns off only the status of spec_draft/);
