@@ -5367,7 +5367,8 @@
           {
             "kind": "start_run",
             "job": "dev-feedback",
-            "input": "feedback"
+            "input": "feedback",
+            "relaunches": true
           },
           {
             "kind": "labels",

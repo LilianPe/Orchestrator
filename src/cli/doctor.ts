@@ -8,7 +8,7 @@ import {
 } from '../adapters/forge/github-app-api.js';
 import { UnreadableAnswerError, type HttpClient } from '../adapters/forge/github-app.js';
 import { resolveGithubApp } from '../config/github-app.js';
-import { GITHUB_APP_PERMISSIONS } from './init.js';
+import { GITHUB_APP_OPTIONAL_PERMISSIONS, GITHUB_APP_PERMISSIONS } from './init.js';
 import { GITHUB_APP_SECRETS, LINEAR_SECRETS, loadSealedFactoryYml, serverSecretLines, serverSecretReport, type SecretReport } from '../config/server-secrets.js';
 import { effectiveInstance, samePath, validatorWarnings, type ProjectConfig } from '../config/instance.js';
 import type { Workflow } from '../core/workflow.js';
@@ -647,11 +647,15 @@ export interface InstallationReport {
   warnings?: string[];
 }
 
-/** A permission the App must hold at no level: where each of its kinds is removed, and what it would let the daemon do. */
+/**
+ * A permission the App must not hold: where each of its kinds is set, and what it would let the daemon do. Forbidden at
+ * any level, or, with `allowed`, above that level.
+ */
 interface Forbidden {
   name: string;
   settings: Record<string, string>;
   risk: string;
+  allowed?: string;
 }
 
 const FORBIDDEN: Forbidden[] = [
@@ -661,49 +665,78 @@ const FORBIDDEN: Forbidden[] = [
     risk: 'the daemon could edit or delete the rules that keep it from merging alone (ORC-439)',
   },
   { name: 'Workflows', settings: { workflows: 'Repository permissions → Workflows' }, risk: "the daemon could push a workflow that exposes the repository's secrets, after doctor read the workflows (ORC-441)" },
+  {
+    // `workflow_dispatch` is not among the triggers `exposureReasons` counts as reaching a factory branch.
+    name: 'Actions (write)',
+    settings: { actions: 'Repository permissions → Actions' },
+    risk: "the daemon could dispatch a workflow on a factory branch, running that branch's code with the workflow's secrets, and re-run, cancel or delete runs and their logs (ORC-443)",
+    allowed: GITHUB_APP_PERMISSIONS.actions,
+  },
 ];
 
-/** "Administration or Workflows". */
-const FORBIDDEN_NAMES = FORBIDDEN.map(({ name }) => name).join(' or ');
+const forbiddenNames = FORBIDDEN.map(({ name }) => name);
+/** "Administration, Workflows or Actions (write)". */
+const FORBIDDEN_NAMES = `${forbiddenNames.slice(0, -1).join(', ')} or ${forbiddenNames.at(-1)}`;
+/** Every kind of every forbidden permission: refused apart, never also warned about. */
+const FORBIDDEN_KINDS = new Set(FORBIDDEN.flatMap(({ settings }) => Object.keys(settings)));
+
+const LEVELS = ['read', 'write', 'admin'];
+const LEVEL_LABELS: Record<string, string> = { read: 'Read-only', write: 'Read and write' };
+/** GitHub's label for a level, as the App's settings show it. */
+const levelLabel = (level: string) => LEVEL_LABELS[level] ?? level;
+
+/** Whether `level` is above `asked`; any level is above none, and an unknown level above every one. */
+function above(level: string, asked: string | undefined): boolean {
+  if (asked === undefined) return true;
+  const rank = LEVELS.indexOf(level);
+  return rank === -1 || rank > LEVELS.indexOf(asked);
+}
 
 /** The forbidden permissions the installation holds, each with the kinds it holds. */
 const heldForbidden = (permissions: Record<string, string>) =>
-  FORBIDDEN.map((forbidden) => ({ ...forbidden, held: Object.keys(forbidden.settings).filter((permission) => permissions[permission] !== undefined) })).filter(
-    (forbidden) => forbidden.held.length > 0,
-  );
+  FORBIDDEN.map((forbidden) => ({
+    ...forbidden,
+    held: Object.keys(forbidden.settings).filter((permission) => permissions[permission] !== undefined && above(permissions[permission], forbidden.allowed)),
+  })).filter((forbidden) => forbidden.held.length > 0);
 
-/**
- * Actions above the manifest's level lets the daemon dispatch a workflow on a factory branch, which `exposureReasons` does
- * not count as reaching one, and re-run, cancel or delete runs: warned, not refused, as ORC-441 asks.
- */
-function actionsWarning(permissions: Record<string, string>): string | undefined {
-  const level = permissions['actions'];
-  if (level === undefined || level === GITHUB_APP_PERMISSIONS.actions) return undefined;
+/** What an installation may hold without a warning: the manifest's permissions, and those added by hand for the dashboard. */
+const ACCEPTED_PERMISSIONS: Record<string, string> = { ...GITHUB_APP_PERMISSIONS, ...GITHUB_APP_OPTIONAL_PERMISSIONS };
+
+/** The permissions above `ACCEPTED_PERMISSIONS`, but not forbidden, named in one warning with the level each goes back to (ORC-443). */
+function excessWarning(permissions: Record<string, string>): string | undefined {
+  const named = Object.entries(permissions)
+    .map(([permission, level]) => ({ permission, level, asked: ACCEPTED_PERMISSIONS[permission] }))
+    .filter(({ permission, level, asked }) => !FORBIDDEN_KINDS.has(permission) && above(level, asked))
+    .map(({ permission, level, asked }) => `${permission} (${level}, ${asked === undefined ? 'not in the manifest: No access' : `the manifest asks ${levelLabel(asked)}`})`);
+  if (named.length === 0) return undefined;
   return (
-    `Warning: the App is installed with actions (${level}): the daemon could dispatch a workflow on a factory branch, running that branch's code with the workflow's secrets, ` +
-    `and re-run, cancel or delete runs and their logs; the manifest asks ${GITHUB_APP_PERMISSIONS.actions}. ` +
-    "In the App's settings (Permissions & events), set Repository permissions → Actions to Read-only and save, then accept the change in the installation " +
-    '(Settings → Applications → Installed GitHub Apps → Configure).'
+    `Warning: the App is installed with permissions the manifest does not ask for: ${named.join(', ')}. ` +
+    "Each widens what the daemon can do with the App's token. In the App's settings (Permissions & events), set each to the level named " +
+    '(docs/github-app-manifest.json) and save, then accept the change in the installation (Settings → Applications → Installed GitHub Apps → Configure).'
   );
 }
 
-/** Whether the App's installation holds none of `FORBIDDEN`, at any level, as GitHub granted it; Actions above read only warns. */
+/** Whether the App's installation holds none of `FORBIDDEN`, as GitHub granted it; a permission above the manifest warns. */
 function judgeInstallation(permissions: Record<string, string>): InstallationReport {
-  const warning = actionsWarning(permissions);
+  const warning = excessWarning(permissions);
   const warnings = warning === undefined ? {} : { warnings: [warning] };
   const held = heldForbidden(permissions);
   if (held.length === 0) return { permissions, verdict: 'accepted', reasons: [`installed without the ${FORBIDDEN_NAMES} permission`], ...warnings };
   return {
     permissions,
     verdict: 'refused',
-    reasons: held.map(
-      ({ name, settings, risk, held: kinds }, i) =>
+    reasons: held.map(({ name, settings, risk, allowed, held: kinds }, i) => {
+      // Forbidden at any level: removed; above a level: lowered to it.
+      const [verb, target, check] =
+        allowed === undefined ? ['Remove', 'No access', `${name} is no longer listed`] : ['Lower', levelLabel(allowed), `${kinds.join(' and ')} is ${levelLabel(allowed)}`];
+      return (
         // Joined after one another: each after the first opens a sentence.
         `${i === 0 ? 'installed' : 'Installed'} with ${kinds.map((permission) => `${permission} (${permissions[permission]})`).join(' and ')}: ${risk}. ` +
-        "Remove it: in the App's settings (Settings → Developer settings → GitHub Apps → the App → Permissions & events), " +
-        `set ${kinds.map((permission) => settings[permission]).join(' and ')} to No access and save, then check in the installation (Settings → Applications → ` +
-        `Installed GitHub Apps → Configure) that ${name} is no longer listed (docs/github-app-manifest.json).`,
-    ),
+        `${verb} it: in the App's settings (Settings → Developer settings → GitHub Apps → the App → Permissions & events), ` +
+        `set ${kinds.map((permission) => settings[permission]).join(' and ')} to ${target} and save, then check in the installation ` +
+        `(Settings → Applications → Installed GitHub Apps → Configure) that ${check} (docs/github-app-manifest.json).`
+      );
+    }),
     ...warnings,
   };
 }
@@ -719,7 +752,8 @@ function unreadInstallation(error: unknown): InstallationReport {
     reasons: ['not checked, see the warning'],
     warnings: [
       `Warning: the App's installation permissions not read: ${errorMessage(error)}. ` +
-        `Check by hand that the installation holds no ${FORBIDDEN_NAMES}, and Actions at read only (Settings → Applications → Installed GitHub Apps → Configure).`,
+        `Check by hand that the installation holds no ${FORBIDDEN_NAMES}, nor any permission above the manifest (docs/github-app-manifest.json) ` +
+        '(Settings → Applications → Installed GitHub Apps → Configure).',
     ],
   };
 }

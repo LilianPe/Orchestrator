@@ -169,7 +169,8 @@ describe('a reply resumes the blocked step (ORC-196)', () => {
     ['as a comment, a question', comment(signed, 'question')],
   ])('a member\'s reply %s starts the job that blocked, with the reply to read, and lifts the label', (_where, event) => {
     const out = decide(blockedOn('dev'), event, workflow);
-    expect(starts(out)).toEqual([{ kind: 'start_run', job: 'dev', input: 'feedback' }]);
+    // The start says it relaunches the ticket's work: the rework measure reads it (ORC-440).
+    expect(starts(out)).toEqual([{ kind: 'start_run', job: 'dev', input: 'feedback', relaunches: true }]);
     expect(out.events.map((e) => e.type)).toEqual(expect.arrayContaining(['feedback.appended', 'ticket.unblocked']));
     expect(out.effects).toContainEqual({ kind: 'labels', add: [], remove: [BLOCKED_LABEL] });
   });
@@ -295,7 +296,7 @@ describe('a reply resumes the blocked step (ORC-196)', () => {
       ['an instruction (ORC-426)', mention('instruction')],
     ])('%s starts the job that blocked, the mention kept for its agent, in its session, and says it resumes', (_what, event) => {
       const out = decide(blockedOn('dev'), event, workflow);
-      expect(starts(out)).toEqual([{ kind: 'start_run', job: 'dev', input: 'feedback' }]);
+      expect(starts(out)).toEqual([{ kind: 'start_run', job: 'dev', input: 'feedback', relaunches: true }]);
       expect(out.events.map((e) => e.type)).toContain('ticket.unblocked');
       expect(appended(out)).toEqual([expect.objectContaining({ body: 'Pourquoi le tri ?', source: 'session' })]);
       expect(out.effects).toContainEqual({ kind: 'labels', add: [], remove: [BLOCKED_LABEL] });
@@ -313,7 +314,7 @@ describe('a reply resumes the blocked step (ORC-196)', () => {
 
     it('a block with no step it resumes relaunches the reply\'s job, in the ticket\'s session, the mention read from the inbox', () => {
       for (const state of [blockedOn('dev', { blockedJob: undefined }), blockedOn('fix-ci')]) {
-        expect(starts(decide(state, mention('question'), workflow))).toEqual([{ kind: 'start_run', job: 'dev-feedback', input: 'feedback' }]);
+        expect(starts(decide(state, mention('question'), workflow))).toEqual([{ kind: 'start_run', job: 'dev-feedback', input: 'feedback', relaunches: true }]);
       }
     });
 

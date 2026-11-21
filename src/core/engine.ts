@@ -7,7 +7,7 @@ import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDe
 import type { AgentOutput, ConflictCase } from './agent-output.js';
 import { blockFacts } from './block-comment.js';
 import { AGENT_QUESTION, causeOf, CLARIFY_EXPIRED, isTakenOver, NO_ASSESSMENT, PAUSED, STOPPED, TAKEN_OVER, type BlockKind } from './block-cause.js';
-import type { Decision, Effect } from './decision.js';
+import { LIFT_ON_WAIT, type Decision, type Effect } from './decision.js';
 import { CLASS_PATHS, needsRefreeze, type ClassifiedDiff } from './diff-class.js';
 import { asksForChange, awaitsAgent, commandOf, forAgent, STOP_COMMAND } from './human-message.js';
 import { factoryDefault } from '../presets/factory-default.js';
@@ -901,7 +901,8 @@ function blockersDone(out: Decision, event: FactoryEvent<'blockers.done'>, ticke
   // The status of the step it starts, which the end of intake left to this start (ORC-382).
   const to = job.step !== undefined ? statusReached(workflow, job.step) : undefined;
   if (movesTo(ticket, to)) out.effects.push({ kind: 'move', to });
-  startAs(out, event, ticket, job, start);
+  // The relaunch the wait kept (`liftOnWait`) is made: the rework measure counts it here, not where it was kept (ORC-440).
+  startAs(out, event, ticket, job, start, !!wait.lift);
   return out;
 }
 
@@ -983,9 +984,14 @@ function startRun(out: Decision, event: FactoryEvent, ticket: TicketState | unde
     return;
   }
   const taint = runTaint(event, ticket, run.input ?? job.input);
-  const effect: StartRun = { kind: 'start_run', job: job.name, ...run };
+  // A human message's start says whether it relaunches the ticket's work, read by the rework measure (ORC-440): not the answer agent's.
+  const relaunch = MESSAGES.has(event.type) ? { relaunches: job.queue !== 'questions' } : {};
+  const effect: StartRun = { kind: 'start_run', job: job.name, ...run, ...relaunch };
   out.effects.push(taint === 'untrusted' ? { ...effect, sensitivePaths: SENSITIVE_PATHS } : effect);
 }
+
+/** The human messages whose start of a run says whether it relaunches the ticket's work (ORC-440): not a command, which relaunches nothing. */
+const MESSAGES = new Set<EventType>(['session.prompted', 'session.mentioned', 'ticket.commented']);
 
 /**
  * Starts the step a step's end hands over to. On a blocked ticket the launch refuses a dev job (ORC-403 publishes a run's done
@@ -1556,12 +1562,13 @@ function startPending(out: Decision, event: FactoryEvent, ticket: TicketState, w
 function liftOnWait(out: Decision, event: FactoryEvent, ticket: TicketState, lift: PendingJob): void {
   if (relaunchedByHuman(event, ticket)) giveBoundsBack(out, ticket);
   out.events.push({ type: 'ticket.patched', patch: { waitingOn: { ...ticket.waitingOn!, lift } } });
+  out.trace.push(`${LIFT_ON_WAIT}: ${lift.job}`);
 }
 
 /** Starts `job` as `pending` was set aside: its input and its restrictions. */
-function startAs(out: Decision, event: FactoryEvent, ticket: TicketState, job: JobSpec, pending: PendingJob): void {
+function startAs(out: Decision, event: FactoryEvent, ticket: TicketState, job: JobSpec, pending: PendingJob, relaunches = false): void {
   const { job: _, ...run } = pendingOf(pending);
-  startRun(out, event, ticket, job, run);
+  startRun(out, event, ticket, job, relaunches ? { ...run, relaunches } : run);
 }
 
 /**

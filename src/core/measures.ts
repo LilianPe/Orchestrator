@@ -2,7 +2,7 @@ import type { RedCause } from '../checks/red.js';
 import type { MeasureFacts, OutboxRow, RunRecord, SessionRole, Store } from '../store/types.js';
 import { allowed, DEFAULT_MATRIX } from './authz.js';
 import { isQuestionSession } from './engine.js';
-import { reduce } from './reduce.js';
+import { endsWait, reduce } from './reduce.js';
 import { addTokens, newTicketState, NO_TOKENS, spentTokens, type FactoryEvent, type LogicalState, type MessageKind, type TicketState, type TokenUsage } from './types.js';
 import { upcast, type StoredEvent } from './upcast.js';
 
@@ -35,7 +35,7 @@ export interface MessageMeasure {
  * Why a merged ticket was not ready at the first try: an event of the journal before the merge,
  * never the agent's text. `feedback` is a human reply in the dev session (a requested change, or an
  * answer to the agent's own question: either way the first try needed a human), or a comment or a mention that
- * relaunched the blocked step (ORC-196, ORC-433); `sent_back` a human moving the ticket back to dev once handed over; `changes_requested` a GitHub review asking for changes
+ * relaunched the blocked step, at once or at the end of a wait (ORC-196, ORC-433, ORC-440); `sent_back` a human moving the ticket back to dev once handed over; `changes_requested` a GitHub review asking for changes
  * (ORC-134). A review comment alone, or a conflict with the base branch (`pr.conflicted`), is not one.
  */
 export interface Rework {
@@ -307,6 +307,26 @@ function rework(e: FactoryEvent, ticket: TicketState, relaunched: ReadonlySet<st
   }
 }
 
+/**
+ * The events whose decision relaunched the ticket's work, as the engine marks it (ORC-440): a start flagged `relaunches`, or a
+ * relaunch the wait kept (`liftedOnWait`) once the end of the wait starts it, flagged. A start without the flag, decided before
+ * it: one of the ticket's work, not the answer agent's, which reads the thread (ORC-433).
+ */
+function relaunches(events: readonly FactoryEvent[], facts: MeasureFacts): Set<string> {
+  const starts = facts.effects.flatMap((r) => (r.effect.kind === 'start_run' ? [{ eventId: r.eventId, effect: r.effect }] : []));
+  const relaunched = new Set(starts.filter((r) => r.effect.relaunches ?? r.effect.input !== 'thread').map((r) => r.eventId));
+  const lifted = new Set(starts.filter((r) => r.effect.relaunches === true).map((r) => r.eventId));
+  // A relaunch the wait kept counts at the end of the wait that starts it: one dropped there, or with the wait, never ran.
+  const keeps = new Set(facts.liftedOnWait);
+  let kept: string[] = [];
+  for (const e of events) {
+    if (keeps.has(e.id)) kept.push(e.id);
+    if (e.type === 'blockers.done' && lifted.has(e.id)) for (const id of kept) relaunched.add(id);
+    if (e.type === 'blockers.done' || endsWait(e)) kept = [];
+  }
+  return relaunched;
+}
+
 /** Tokens the ticket's code runs spent (`dev` queue, cache reads left out); undefined when none reported any. The budget's figure and the block comment's (ORC-340). */
 export function codeRunTokens(runs: readonly RunRecord[]): number | undefined {
   const reported = runs.filter((r) => r.queue === 'dev' && r.tokens !== undefined);
@@ -327,8 +347,7 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
   let mergedAt: number | null = null;
   let firstMerge: FactoryEvent<'pr.merged'> | undefined;
   const reworks: Rework[] = [];
-  // Events whose decision started a run of the ticket's work: not the answer agent's, which reads the thread (as `messageAck` tells it).
-  const relaunched = new Set(facts.effects.filter((r) => r.effect.kind === 'start_run' && r.effect.input !== 'thread').map((r) => r.eventId));
+  const relaunched = relaunches(events, facts);
   const answered = new Set(facts.effects.map((r) => r.eventId));
   const messages: { m: Message; kind: MeasuredKind }[] = [];
   for (const e of events) {
