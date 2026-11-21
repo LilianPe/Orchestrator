@@ -446,6 +446,39 @@ export interface KnownFlakyTest {
   addedAt: number;
 }
 
+/** A point of a project's maturity report, as `factory init` detected it (ORC-410): `key` names it, `value` is what was found. */
+export interface MaturityPoint {
+  key: string;
+  title: string;
+  value: string;
+}
+
+/**
+ * A maturity card (ORC-410): a point of the report, stored to be approved by a person on the dashboard. `detectedAt`, when
+ * init last detected it; `approvedBy` and `approvedAt`, who approved this value, and when, absent until then.
+ */
+export interface MaturityCard extends MaturityPoint {
+  projectId: string;
+  detectedAt: number;
+  approvedBy?: string;
+  approvedAt?: number;
+}
+
+/** A point detected `at`, as a card: with the approval of the card it replaces when that one had the same value (ORC-410). */
+export function maturityCard(projectId: string, p: MaturityPoint, at: number, before: MaturityCard | undefined): MaturityCard {
+  const kept = before?.value === p.value && before.approvedBy !== undefined && before.approvedAt !== undefined ? { approvedBy: before.approvedBy, approvedAt: before.approvedAt } : {};
+  return { projectId, key: p.key, title: p.title, value: p.value, detectedAt: at, ...kept };
+}
+
+/**
+ * The approval of a card of the `value` a person saw (ORC-410): `'changed'` when the card holds another; a card already
+ * approved stands as it is.
+ */
+export function approvedCard(stored: MaturityCard, value: string, by: string, at: number): MaturityCard | 'changed' {
+  if (stored.value !== value) return 'changed';
+  return stored.approvedBy === undefined ? { ...stored, approvedBy: by, approvedAt: at } : stored;
+}
+
 /** The findings one AI review lens made on a ticket's published commit (ORC-183): `runId`, the lens's run; `at`, when they were kept. */
 export interface FindingsRecord {
   projectId: string;
@@ -741,6 +774,18 @@ export interface Store {
   putKnownFlakyTest(t: KnownFlakyTest): Promise<void>;
   /** Takes a test off the list (ORC-164): false when it was not on it. */
   deleteKnownFlakyTest(projectId: string, test: string): Promise<boolean>;
+  /** The maturity cards of a project, or of every project by project (ORC-410), in the order init reported them. */
+  maturityCards(projectId?: string): Promise<MaturityCard[]>;
+  /**
+   * The project's cards from a detection (ORC-410), all or none, in place of the previous ones: a card keeps its approval only
+   * when its value is unchanged, and a point no longer reported goes.
+   */
+  putMaturityCards(projectId: string, points: readonly MaturityPoint[], at: number): Promise<void>;
+  /**
+   * Approves a card of the `value` the person saw (ORC-410): `'changed'`, nothing approved, when the card now holds another;
+   * a card already approved keeps its first approval; undefined when the project has no such card.
+   */
+  approveMaturityCard(projectId: string, key: string, value: string, by: string, at: number): Promise<MaturityCard | 'changed' | undefined>;
   /**
    * Freezes a baseline (ORC-230), one row per measure, all or none: false, nothing written, when that period of the project
    * already has one and `replace` is not set; with it, the new one takes the place of the stored one.

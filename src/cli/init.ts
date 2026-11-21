@@ -4,12 +4,16 @@ import { stringify } from 'yaml';
 import type { Exec } from '../adapters/exec.js';
 import { isRecord } from '../adapters/graphql-pages.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
-import { loadInstance, loadSecrets, samePath, saveInstance, saveSecrets } from '../config/instance.js';
+import { homePaths, loadInstance, loadSecrets, samePath, saveInstance, saveSecrets } from '../config/instance.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning, REPO_CONFIG_PATH, testCommandWarnings } from '../config/repo-config.js';
+import { repoRoot } from '../app/root.js';
 import { slugify } from '../core/naming.js';
 import { SONNET } from '../presets/factory-default.js';
 import { PRODUCT_NAME } from '../product.js';
+import { openStore } from '../store/open.js';
+import type { MaturityCard, MaturityPoint, Store } from '../store/types.js';
+import { maturityReport, type DetectedChecks, type MaturityReport } from './maturity.js';
 
 export interface InitIO {
   ask(q: string, def?: string): Promise<string>;
@@ -24,13 +28,11 @@ export interface InitDeps {
   dev?: boolean;
   createSmee: () => Promise<string>;
   exec: Exec;
-}
-
-/** What `init` proposes for a repository's `.factory/config.yml`: its install, its checks by name, and what starts the application. */
-interface Detected {
-  setup: string[];
-  commands: Record<string, string>;
-  preview?: string;
+  /**
+   * Stores the maturity cards of a detection (ORC-410), `main` from the project's last dry run, and gives them back as stored,
+   * approvals kept: absent, none is stored.
+   */
+  storeCards?: (projectId: string, report: MaturityReport) => Promise<MaturityCard[]>;
 }
 
 /**
@@ -55,7 +57,7 @@ function nodeScripts(repo: string): Record<string, string> | undefined {
  * npm, or pnpm when its lockfile is the only one: the scripts `lint`, `typecheck` and `test` the repository has, and as its
  * `preview` (ORC-397) the first of `dev`, `start` and `preview`.
  */
-function detectNode(repo: string): Detected {
+function detectNode(repo: string): DetectedChecks {
   const scripts = nodeScripts(repo);
   if (!scripts) return { setup: [], commands: {} };
   const npmLock = existsSync(join(repo, 'package-lock.json'));
@@ -73,7 +75,7 @@ function detectNode(repo: string): Detected {
  * longer matches; without the network, it fails (measured on uv 0.13.7). A plain `uv sync` rewrites it too
  * (docs/repository-configuration.md). Named after their tool, beside Node's.
  */
-function detectPython(repo: string): Detected {
+function detectPython(repo: string): DetectedChecks {
   if (!existsSync(join(repo, 'pyproject.toml')) || !existsSync(join(repo, 'uv.lock'))) return { setup: [], commands: {} };
   return { setup: ['uv sync --frozen'], commands: { ruff: 'uv run --frozen ruff check', mypy: 'uv run --frozen mypy .', pytest: 'uv run --frozen pytest' } };
 }
@@ -86,7 +88,7 @@ export const PYTEST_BESIDE_TEST = `Warning: the red check of the tests step runs
  * name. A `preview` from Node's scripts only: no convention names a start script for Python (a `[project.scripts]` entry is a
  * console command, not a server).
  */
-function detect(repo: string): Detected {
+function detect(repo: string): DetectedChecks {
   const node = detectNode(repo);
   const python = detectPython(repo);
   const { pytest, ...checks } = python.commands;
@@ -98,12 +100,62 @@ function detect(repo: string): Detected {
 export const PROPOSAL_HEADER = `Proposed ${REPO_CONFIG_PATH}, to commit on the default branch (init writes nothing in the repository):\n`;
 
 /** The repository's `.factory/config.yml`, as `init` detects it: none when it detects nothing. */
-function proposal({ setup, commands, preview }: Detected): string | undefined {
+function proposal({ setup, commands, preview }: DetectedChecks): string | undefined {
   const checks = { ...(setup.length ? { setup: setup.join(' && ') } : {}), ...(Object.keys(commands).length ? { commands } : {}) };
   const text =
     (Object.keys(checks).length ? stringify(checks) : '') +
     (preview ? `# What starts the application for the visual proof: it must listen on PORT.\n${stringify({ preview })}` : '');
   return text ? PROPOSAL_HEADER + text : undefined;
+}
+
+/** What `init` prints before the maturity cards (ORC-410), followed by the dashboard page where a person approves them. */
+export const MATURITY_HEADER = 'Maturity report, one card per point to approve on the dashboard: ';
+
+type PrintedCard = MaturityPoint & Pick<MaturityCard, 'approvedBy'>;
+
+/** A card as init prints it: approved or not, its value under its title, a value of several lines indented. */
+function cardLine(c: PrintedCard): string {
+  const status = c.approvedBy === undefined ? '[to approve]' : `[approved by ${c.approvedBy}]`;
+  const lines = c.value.split('\n');
+  return lines.length === 1 ? `  ${status} ${c.title}: ${c.value}` : [`  ${status} ${c.title}:`, ...lines.map((l) => `    ${l}`)].join('\n');
+}
+
+/** The maturity report of the repository, stored as cards when it can be: a store that fails leaves init to finish, and says so. */
+async function printMaturity(d: InitDeps, projectId: string, report: MaturityReport, dashboard: string): Promise<void> {
+  let cards: PrintedCard[] | undefined;
+  let failure: string | undefined;
+  if (d.storeCards) {
+    try {
+      cards = await d.storeCards(projectId, report);
+    } catch (err) {
+      failure = err instanceof Error ? err.message : String(err);
+    }
+  }
+  // Read once: the report walks the repository.
+  cards ??= report();
+  d.io.print(['', `${MATURITY_HEADER}${dashboard}/#maturity`, ...cards.map(cardLine)].join('\n'));
+  if (failure !== undefined) d.io.print(`Cards not stored (${failure}): run factory init again once the database is reachable.`);
+}
+
+/**
+ * The maturity cards in the instance's store (ORC-410), opened for the write and closed: Postgres brought to the latest
+ * migration first, as init may run before the daemon ever did.
+ */
+export const instanceCards =
+  (home: string) =>
+  async (projectId: string, report: MaturityReport): Promise<MaturityCard[]> => {
+    const { store } = await openStore({ env: process.env, sqlitePath: homePaths(home).db, migrationsFolder: join(repoRoot(), 'drizzle') });
+    try {
+      return await storeReport(store, projectId, report, Date.now());
+    } finally {
+      await store.close();
+    }
+  };
+
+/** Stores a project's maturity report, its `main` from the last dry run on its default branch (ORC-408), and reads it back. */
+export async function storeReport(store: Pick<Store, 'lastDryRun' | 'putMaturityCards' | 'maturityCards'>, projectId: string, report: MaturityReport, now: number): Promise<MaturityCard[]> {
+  await store.putMaturityCards(projectId, report(await store.lastDryRun(projectId)), now);
+  return store.maturityCards(projectId);
 }
 
 /** What `init` says, and asks nothing of Linear, without a public URL nor `--dev` (ORC-411): Smee is for a workstation only. */
@@ -221,10 +273,8 @@ export async function runInit(d: InitDeps): Promise<void> {
   const teamKey = (await io.ask('Linear team key (e.g. REL)', previous?.linearTeamKey)).toUpperCase();
 
   // The project's other fields (its roles, written by hand) stay.
-  cfg.projects = [
-    ...cfg.projects.filter((p) => !samePath(p.repoPath, repoPath)),
-    { ...previous, id: previous?.id ?? slugify(basename(repoPath), 30), repoPath, linearTeamKey: teamKey },
-  ];
+  const id = previous?.id ?? slugify(basename(repoPath), 30);
+  cfg.projects = [...cfg.projects.filter((p) => !samePath(p.repoPath, repoPath)), { ...previous, id, repoPath, linearTeamKey: teamKey }];
   // Smee only on demand (ORC-411): a public channel, for a workstation; a server has its public URL.
   if (!cfg.publicUrl && cfg.relay.kind === 'none' && d.dev) cfg.relay = { kind: 'smee', url: await d.createSmee() };
   const webhook = cfg.publicUrl ? `${cfg.publicUrl}/webhooks/linear` : cfg.relay.kind === 'smee' ? cfg.relay.url : undefined;
@@ -247,6 +297,9 @@ export async function runInit(d: InitDeps): Promise<void> {
   if (detected?.commands['pytest']) io.print(PYTEST_BESIDE_TEST);
 
   saveInstance(d.home, cfg);
+  // The maturity report (ORC-410): each point the same detection read, as a card to approve, over a repository `init` proposes.
+  // After config.yaml: the home where SQLite keeps its file is made, and a database that fails loses none of the answers.
+  if (detected) await printMaturity(d, id, (run) => maturityReport(repoPath, detected, run), cfg.publicUrl ?? `http://localhost:${cfg.port}`);
   if (existsSync(ymlPath)) {
     io.print(`${ymlPath} kept as it is.`);
   } else if (firstSetup) {
