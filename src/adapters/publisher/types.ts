@@ -44,6 +44,8 @@ export interface Publication {
   prNumber: number;
   url: string;
   sha: string;
+  /** The head the push went over (ORC-438), as the bundle's: none when nothing was pushed (the commit already there) or the push made the branch. */
+  before?: string;
 }
 
 /**

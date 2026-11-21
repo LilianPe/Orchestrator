@@ -57,13 +57,14 @@ export class GitPublisher implements Publisher {
 
   async publish(req: PublishRequest): Promise<Publication> {
     return this.onForge(req, 'publish', async ({ url, env, workDir, onForge }) => {
-      if (onForge.head === req.sha) this.d.log(`publish of ${req.ticketId}: ${req.sha} is already on the forge, not pushed again`);
+      const pushed = onForge.head !== req.sha;
+      if (!pushed) this.d.log(`publish of ${req.ticketId}: ${req.sha} is already on the forge, not pushed again`);
       else await this.pushChecked(req, url, env, workDir, onForge.head);
       const pr = await this.d.forge.ensurePr(req.repoPath, { branch: req.branch, base: onForge.base, title: req.title, body: req.body, draft: true }).catch((err: Error) => {
         // Only here can the forge's branch hold nothing the base lacks: a head on the commit skips the check of step 3.
         throw err instanceof NoCommitsBetween ? nothingToPublish(req.branch) : err;
       });
-      return { prNumber: pr.number, url: pr.url, sha: req.sha };
+      return { prNumber: pr.number, url: pr.url, sha: req.sha, ...(pushed && onForge.head ? { before: onForge.head } : {}) };
     });
   }
 

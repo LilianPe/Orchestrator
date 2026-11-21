@@ -241,6 +241,26 @@ describe('the factory publishes (ORC-125)', () => {
       expect(await h.ticket()).toMatchObject({ logical: 'human_review', prNumber: 1 });
     });
 
+    it('a replay that finds its commit pushed still names the head the push went over (ORC-438)', async () => {
+      let failures = 1;
+      const h = verified({
+        effectRetry: { attempts: 3, baseMs: 1, capMs: 1 },
+        wrapStore: (store) =>
+          overriding(store, {
+            appendInbox: async (e) => {
+              if (e.id.startsWith('publish-done:') && failures-- > 0) throw new Error('inbox down');
+              return store.appendInbox(e);
+            },
+          }),
+      });
+      // An open PR on the branch already, at a head the work holds.
+      h.forge.setPr(BRANCH, { number: 1, url: 'https://github.test/pr/1', state: 'OPEN', headSha: 'old1', checks: 'none', failedChecks: [] });
+      await delegate(h);
+      await h.advance(10);
+      const done = (await h.store.recentEvents(200, 'REL-1')).filter((e) => e.type === 'publish.done');
+      expect(done.map((e) => e.payload)).toEqual([expect.objectContaining({ sha: SHA, before: 'old1' })]);
+    });
+
     it('a process killed during the publication: the next one finishes it, once', async () => {
       const h = verified({ effectRetry: { attempts: 3, baseMs: 1, capMs: 1 }, effectLeaseMs: 1000 });
       let die: () => void = () => {};

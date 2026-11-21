@@ -49,6 +49,9 @@ describe('a conflict with the default branch: the rebase step (ORC-146)', () => 
     expect(verified).toBeGreaterThan(-1);
     expect(published).toBeGreaterThan(verified);
     expect(h.publisher.published.at(-1)).toMatchObject({ sha: 'rebased1', rewrites: 'built1' });
+    // Each push names the head it replaced; the first one made the branch (ORC-438).
+    const pushed = (await h.store.recentEvents(200, 'REL-1')).flatMap((e) => (e.type === 'publish.done' ? [e.payload] : [])).reverse();
+    expect(pushed.map((p) => [p.sha, p.before])).toEqual([['built1', undefined], ['rebased1', 'built1']]);
     const t = await h.ticket();
     expect(t).toMatchObject({ logical: 'human_review', blocked: false, verifiedSha: 'rebased1', ciFixAttempts: 1 });
   });

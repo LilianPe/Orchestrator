@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { changelogEntry, deliveredBody, mergedWork, pushedHeads, type MergedPr } from './changelog.js';
+import { changelogEntry, deliveredBody, lastPush, mergedWork, pushedHeads, type MergedPr } from './changelog.js';
 import { TRUSTED, type EventPayloads, type EventType, type FactoryEvent } from './types.js';
 
 const ev = <T extends EventType>(type: T, payload: EventPayloads[T]) => ({ ...TRUSTED, id: `${type}:${JSON.stringify(payload).length}`, type, at: 1, projectId: 'p', ticketId: 'REL-1', payload }) as FactoryEvent;
@@ -52,5 +52,14 @@ describe('the commits the factory pushed (ORC-281)', () => {
     const done = (runId: string, sha: string, empty?: true) => ev('publish.done', { runId, job: 'dev', sha, ...(empty ? { empty } : {}) });
     expect(pushedHeads([done('r1', 'a'), passed('r2', 'x'), done('r2', 'a'), done('r3', 'e', true), done('r4', 'b'), done('r5', 'a')])).toEqual(['a', 'b', 'a']);
     expect(pushedHeads([])).toEqual([]);
+  });
+});
+
+describe('the last push and the head it went over (ORC-438)', () => {
+  const done = (runId: string, sha: string, extra: Partial<EventPayloads['publish.done']> = {}) => ev('publish.done', { runId, job: 'dev', sha, ...extra });
+  it('reads it through a publication of the same commit since, and none of an earlier commit', () => {
+    expect(lastPush([done('r1', 'a', { before: 'h' }), done('r2', 'a'), done('r3', 'e', { empty: true })])).toEqual({ sha: 'a', before: 'h' });
+    expect(lastPush([done('r1', 'a', { before: 'h' }), done('r2', 'b')])).toEqual({ sha: 'b' });
+    expect(lastPush([])).toBeUndefined();
   });
 });
