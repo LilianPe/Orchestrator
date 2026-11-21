@@ -15,7 +15,7 @@ Node.js 24+, git, GitHub CLI `gh` logged in, Claude Code CLI `claude` logged in,
 
 ## Quick start
 
-From zero to a first processed ticket:
+For a first real ticket, follow [`docs/first-run.md`](docs/first-run.md): it lists what to create before starting and checks each step against the current CLI. The outline:
 
 ```bash
 # 1. Install
@@ -38,6 +38,7 @@ Without tokens, to try the interface: `relais up --fake-runner`.
 ## Documentation
 
 ### Install
+- [First run](docs/first-run.md): **start here** for a first real ticket on your machine: what to create (GitHub App, Linear application, Claude token, Podman, validators), `factory init`, `factory doctor`, `factory up`, then each step from delegation to the PR and its AI review.
 - [Installation](docs/installation.md): prerequisites, installation, the daemon's home directory.
 - [Linear](docs/linear.md): OAuth application, agent connection, webhooks, delegation, statuses and labels.
 - [GitHub](docs/github.md): account and permissions, PR polling, branches, branch protection, CI.
