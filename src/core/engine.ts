@@ -1160,13 +1160,11 @@ function prFailed(event: FactoryEvent<'pr.checks_failed' | 'pr.conflicted'>, tic
   return r && { ...r, input: 'ci_failures' };
 }
 
-/** The label `agent:stop` stops the ticket's work, as the stop of its session does (until ORC-201 removes the `agent:*` labels). */
-export const STOP_LABEL = 'agent:stop';
-
-/** The stop of the ticket's session in Linear, or the label `agent:stop` added: the work stops, the ticket blocked until a reply. */
-function stopped(out: Decision, event: FactoryEvent<'label.changed' | 'session.stopped'>): Decision {
-  const label = event.type !== 'label.changed' || (event.payload.change === 'added' && event.payload.label === STOP_LABEL);
-  if (!label) return noReaction(out, event.type);
+/**
+ * The stop of the ticket's session in Linear: the work stops, the ticket blocked until a reply. The `agent:stop` label stops
+ * nothing since ORC-201: `/stop` and the undelegation stop from Linear too.
+ */
+function stopped(out: Decision, event: FactoryEvent<'session.stopped'>): Decision {
   reacted(out, event.type);
   return stop(out);
 }
@@ -1220,7 +1218,6 @@ function react(out: Decision, event: FactoryEvent, ticket: TicketState | undefin
       return start(ticket?.blocked ? resumeBlocked(event, ticket, workflow) : undefined);
     case 'session.mentioned':
       return start(mentionAnswersBlock(event, ticket) ? resumeBlocked(event, ticket!, workflow) : askQuestion(event, ticket, workflow));
-    case 'label.changed':
     case 'session.stopped':
       return stopped(out, event);
     case 'pr.checks_failed':
@@ -1469,7 +1466,7 @@ export function mayCheck(event: FactoryEvent, workflow: Workflow): boolean {
   if (!HUMAN_EVENTS.has(event.type) || (event.type === 'ticket.delegated' && (event.payload.noRepo || event.payload.replay))) return false;
   // A review that asks nothing (an approval, no words) is decided without the matrix: no read of Linear or GitHub for it (ORC-190).
   if (event.type === 'pr.reviewed') return asksForFix(event.payload);
-  // No label starts a run: `agent:stop` stops, outside the matrix.
+  // No label starts nor stops a run (ORC-201).
   if (event.type === 'label.changed') return false;
   if (event.type !== 'status.changed') return true;
   // A move to Done may merge (ORC-148): its actor is always checked. A move to AI Review reviews again (`reviewAgain`).
@@ -2072,6 +2069,9 @@ function newRun(out: Decision, state: TicketState | undefined, workflow: Workflo
 
 /** Label put next to the status while the factory waits for a human (ORC-170). */
 export const BLOCKED_LABEL = 'Bloqué';
+
+/** The labels the connection to Linear creates in a team: `Bloqué` alone, no `agent:*` label any longer (ORC-201). */
+export const FACTORY_LABELS: readonly string[] = [BLOCKED_LABEL];
 
 /**
  * The label follows the ticket's blocked flag from before the event to after the decision, however it

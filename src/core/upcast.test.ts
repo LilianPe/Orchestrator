@@ -49,7 +49,7 @@ describe('upcast', () => {
     const replayed = (await store.recentEvents(10)).reverse().map((e) => upcast(e as StoredEvent));
     expect(replayed.map((e) => e.type)).toEqual(['status.changed', 'label.changed', 'session.prompted']);
     const effects = replayed.map((e) => decide(ticket, e, workflow).effects.map((c) => c.kind));
-    expect(effects).toEqual([['start_run'], ['stop_run', 'activity', 'labels'], []]);
+    expect(effects).toEqual([['start_run'], [], []]);
   });
 
   it('reads the debounce of a job (versions 1 and 2) as a timer.fired of kind debounce, with the same decision (ORC-161)', () => {

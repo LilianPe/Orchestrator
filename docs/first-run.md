@@ -245,7 +245,7 @@ The GitHub webhooks line is expected locally: a merge or a CI verdict then reach
 | `Warning: <project>: no spec validator …` | item 11 |
 | `error: sandboxes not listed, … spawn podman ENOENT` | Podman is not on the daemon's `PATH` |
 
-Then open `http://localhost:4100`, click **Connect Linear** and authorize the application: « Linear is connected. You can close this tab. ». The factory creates the missing statuses of the team (Todo, In Progress, Human Review, AI Review, Done) and the `agent:stop` and `Bloqué` labels.
+Then open `http://localhost:4100`, click **Connect Linear** and authorize the application: « Linear is connected. You can close this tab. ». The factory creates the missing statuses of the team (Todo, In Progress, Human Review, AI Review, Done) and the `Bloqué` label.
 
 In another terminal, with the same `FACTORY_HOME`: `factory status` (`Linear: connected · queue: active …`) and `factory plan`, which lists the tickets delegated to the agent and whether each would be picked up, without starting anything (`` Linear not connected: run `factory up`, then connect Linear. `` before the connection).
 
@@ -277,7 +277,7 @@ What you should see, step by step ([`preset.md`](preset.md#sequence)):
 | AI review | the ticket moves to **AI Review**; the review's findings on the PR; a fix round if it finds something (at most 2) | |
 | *Human Review* | the PR leaves draft, labelled `revue: …`; the recap in the session | Your turn: review on GitHub or reply in the session (a fix after 3 minutes), then move the ticket to *Done* to merge, with GitHub merge rights. |
 
-A blocked ticket waits for a human: reply on the ticket (comment or session) and the blocked step starts again ([`linear.md`](linear.md#the-blocking-comment-orc-196)). To stop: `factory stop <ID>`, the `agent:stop` label, or the dashboard.
+A blocked ticket waits for a human: reply on the ticket (comment or session) and the blocked step starts again ([`linear.md`](linear.md#the-blocking-comment-orc-196)). To stop: `factory stop <ID>`, the stop of the Linear session, `/stop`, or the dashboard.
 
 ## Troubleshooting
 

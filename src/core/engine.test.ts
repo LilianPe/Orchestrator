@@ -186,13 +186,12 @@ describe('decide — default reactions (ORC-392)', () => {
     expect(out).toEqual(decision({ events: [{ type: 'feedback.appended', item: { author: 'L', body: 'retiens agrégats côté serveur', at: 1000, source: 'session', taint: 'trusted', kind: 'command' } }] }));
   });
 
-  it('the agent:stop label stops', () => {
-    const out = decide(ticket({ logical: 'dev' }), ev('label.changed', { label: 'agent:stop', change: 'added' }), workflow);
+  it('the agent:stop label stops nothing any longer (ORC-201): the stop of the session, `/stop` or the undelegation do', () => {
+    for (const change of ['added', 'removed'] as const) {
+      expect(decide(ticket({ logical: 'dev', activeRunId: 'r1', activeJob: 'dev' }), ev('label.changed', { label: 'agent:stop', change }), workflow)).toEqual(decision());
+    }
+    const out = decide(ticket({ logical: 'dev' }), ev('session.stopped', { linearSessionId: 'ls-1' }), workflow);
     expect(kinds(out)).toEqual({ events: ['work.cancelled', 'ticket.blocked'], effects: ['stop_run', 'activity', 'labels'], timers: [] });
-  });
-
-  it('the agent:stop label stops on its addition only', () => {
-    expect(decide(ticket({ logical: 'dev' }), ev('label.changed', { label: 'agent:stop', change: 'removed' }), workflow)).toEqual(decision());
   });
 
 

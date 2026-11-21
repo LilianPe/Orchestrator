@@ -184,7 +184,7 @@ describe.skipIf(!PG_URL)('daemon on PgStore', () => {
     h.checks.failNext('1 failed');
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
-    await h.send('label.changed', { label: 'agent:stop', change: 'added' });
+    await h.send('session.stopped', { linearSessionId: 'ls-1' });
     const journal = await exportJournal(h.store, 'p', 'REL-1');
     const traced = await pool.query<{ n: string }>(`select count(*) as n from decision_trace where ticket_id = 'REL-1'`);
     expect(journal.entries.length).toBe(Number(traced.rows[0]!.n));

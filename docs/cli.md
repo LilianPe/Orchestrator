@@ -113,7 +113,7 @@ For each ticket: its state, a check in progress, the reason for a block, and its
 
 ### `factory stop <ID>`
 
-Stops the run of ticket `<ID>` (e.g. `REL-12`): SIGINT to the Claude Code process, then SIGKILL after 10 s, and the container is destroyed; a run the daemon reattached to after a restart stops the same way. The ticket is blocked until a reply in the Linear ticket (comment or session). Equivalent to the UI's « Stop » button, to the Linear session's "stop" and to the `agent:stop` label. Without options: an unknown ticket is refused, exit code 1.
+Stops the run of ticket `<ID>` (e.g. `REL-12`): SIGINT to the Claude Code process, then SIGKILL after 10 s, and the container is destroyed; a run the daemon reattached to after a restart stops the same way. The ticket is blocked until a reply in the Linear ticket (comment or session). Equivalent to the UI's « Stop » button, to the Linear session's "stop" and to `/stop`. Without options: an unknown ticket is refused, exit code 1.
 
 ### `factory dry-run <project>` (ORC-409)
 
