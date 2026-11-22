@@ -1,7 +1,7 @@
 import { generateKeyPair, randomBytes, X509Certificate } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { isIP } from 'node:net';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createSecureContext, type SecureContext } from 'node:tls';
 import forge from 'node-forge';
 
@@ -23,11 +23,11 @@ const DAY = 24 * 60 * 60 * 1000;
 export async function loadOrCreateCa(dir: string, log?: (message: string) => void): Promise<FactoryCa> {
   const certPath = join(dir, 'ca.crt');
   const keyPath = join(dir, 'ca.key');
+  let unread: string | undefined;
   if (existsSync(certPath) && existsSync(keyPath)) {
     const certPem = readFileSync(certPath, 'utf8');
-    const unread = opensslError(certPem);
+    unread = opensslError(certPem);
     if (!unread) return { certPem, keyPem: readFileSync(keyPath, 'utf8'), certPath };
-    log?.(`egress: the CA in ${dir} is unreadable to OpenSSL (${unread}), so no sandbox trusted it: a new one replaces it`);
   }
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const { publicKey, privateKey } = await rsa();
@@ -49,6 +49,7 @@ export async function loadOrCreateCa(dir: string, log?: (message: string) => voi
   // The key first, the certificate last: cut in between, the old certificate stays, still unreadable, and the next start makes another.
   replace(keyPath, privateKey, 0o600);
   replace(certPath, certPem, 0o644);
+  if (unread) log?.(`egress: the CA in ${dir} was unreadable to OpenSSL (${unread}), so no sandbox trusted it: a new one replaced it`);
   return { certPem, keyPem: privateKey, certPath };
 }
 
@@ -62,12 +63,23 @@ function opensslError(pem: string): string | undefined {
   }
 }
 
-/** Written beside `path` at `mode`, then renamed over it: a reader sees the old file or the new one, never half of it. */
+/**
+ * Written beside `path` at `mode`, then renamed over it: a reader sees the old file or the new one, never half of it. Both
+ * on disk before it returns, so the renames land in their order even across a power cut.
+ */
 function replace(path: string, content: string, mode: number): void {
-  const next = `${path}.${process.pid}.tmp`;
-  rmSync(next, { force: true }); // left by a crash: a file made anew gets `mode`
-  writeFileSync(next, content, { mode });
+  const next = `${path}.tmp`;
+  rmSync(next, { force: true }); // left by a crash
+  writeFileSync(next, content, { mode, flush: true });
+  chmodSync(next, mode); // whatever the umask
   renameSync(next, path);
+  if (process.platform === 'win32') return; // a folder cannot be opened there
+  const folder = openSync(dirname(path), 'r');
+  try {
+    fsyncSync(folder);
+  } finally {
+    closeSync(folder);
+  }
 }
 
 /**
