@@ -17,8 +17,8 @@ const TERMS: { name: string; pattern: RegExp; allowedOn?: RegExp }[] = [
   { name: 'ANTHROPIC_API_KEY', pattern: /ANTHROPIC_API_KEY/ },
   { name: 'Ready to Merge', pattern: /ready to merge/i },
   // smee is the workstation's relay (`factory init --dev`): a line that says so may name it, and so may a channel's URL
-  // alone on its line, as `init` prints it.
-  { name: 'smee', pattern: /smee/i, allowedOn: /--dev\b|workstation|development|^\s*https:\/\/smee\.io\/\S*$/i },
+  // alone on its line, as `init` prints it, and the relay's two lines as `init --dev` writes them in factory.yml (ORC-474).
+  { name: 'smee', pattern: /smee/i, allowedOn: /--dev\b|workstation|development|^\s*(?:kind: smee|(?:url: )?https:\/\/smee\.io\/\S*)$/i },
 ];
 
 const MARKER = /^>\s*\*\*(?:Historical|Transition) note\*\*/;

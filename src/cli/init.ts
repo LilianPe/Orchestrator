@@ -13,6 +13,7 @@ import { readSecretsKey } from '../config/server-secrets.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning, REPO_CONFIG_PATH, testCommandWarnings } from '../config/repo-config.js';
 import { repoRoot } from '../app/root.js';
+import { RECONCILE_MS } from '../core/engine.js';
 import { slugify } from '../core/naming.js';
 import { SONNET } from '../presets/factory-default.js';
 import { PRODUCT_NAME } from '../product.js';
@@ -197,19 +198,21 @@ const PERMISSION_LABELS: Record<keyof typeof GITHUB_APP_PERMISSIONS, string> = {
 
 /**
  * How to create and install the factory's GitHub App (ORC-124), by hand on GitHub's form: a server has no browser for the
- * manifest flow's callback. Its webhook only with a public URL; without one, the factory polls the PRs. `addToYml`: the file is there without the App, where to write it.
+ * manifest flow's callback. Its webhook only with a public URL; without one, the reconciliation reads the PRs every 5 minutes (ORC-185). `addToYml`: the file is there without the App, where to write it.
  */
-function githubAppSteps(publicUrl: string | undefined, home: string, addToYml: boolean): string {
+export function githubAppSteps(publicUrl: string | undefined, home: string, addToYml: boolean): string {
   const permissions = Object.entries(GITHUB_APP_PERMISSIONS)
     .map(([k, v]) => `${PERMISSION_LABELS[k as keyof typeof GITHUB_APP_PERMISSIONS]}: ${v === 'write' ? 'read and write' : 'read'}`)
     .join(', ');
+  // Without the App's webhook, the reconciliation follows the PRs (ORC-185).
+  const reconciled = `the factory reads the PRs every ${RECONCILE_MS / 60_000} minutes, at its reconciliation`;
   const webhook = publicUrl
     ? [
-        `   - Webhook (optional, else the factory polls the PRs every 30 s): active, URL ${publicUrl}/webhooks/github, secret: a random value;`,
+        `   - Webhook (optional, else ${reconciled}): active, URL ${publicUrl}/webhooks/github, secret: a random value;`,
         '     then add `webhook_secret: env:GH_WEBHOOK_SECRET` under github in factory.yml, and export GH_WEBHOOK_SECRET with that value',
         '   - Events: Pull request, Pull request review, Pull request review comment, Check run, Check suite, Push, Workflow run',
       ]
-    : ['   - Webhook: uncheck "Active" (no public URL): the factory polls the PRs every 30 s'];
+    : [`   - Webhook: uncheck "Active" (no public URL): ${reconciled}`];
   return [
     '',
     `GitHub App of ${PRODUCT_NAME} (it opens and updates the PRs):`,
