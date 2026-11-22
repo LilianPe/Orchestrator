@@ -17,8 +17,8 @@ export function ownWork(identifier: string, branches: readonly ForgeBranch[], pr
 }
 
 /** The ticket's own branches on the forge (ORC-207, ORC-283): asked by each of their prefixes, kept when `ownBranchMatcher` takes them. */
-export async function ticketBranches(forge: Pick<Forge, 'branches'>, repoPath: string, identifier: string, naming: BranchNaming = DEFAULT_BRANCH_NAMING): Promise<ForgeBranch[]> {
-  const found = (await Promise.all(ownBranchPrefixes(identifier, naming).map((prefix) => forge.branches(repoPath, prefix)))).flat();
+export async function ticketBranches(forge: Pick<Forge, 'branches'>, github: string, identifier: string, naming: BranchNaming = DEFAULT_BRANCH_NAMING): Promise<ForgeBranch[]> {
+  const found = (await Promise.all(ownBranchPrefixes(identifier, naming).map((prefix) => forge.branches(github, prefix)))).flat();
   const isOwn = ownBranchMatcher(identifier, naming);
   return [...new Map(found.filter((b) => isOwn(b.name)).map((b) => [b.name, b])).values()];
 }

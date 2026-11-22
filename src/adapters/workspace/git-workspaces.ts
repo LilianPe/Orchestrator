@@ -8,7 +8,7 @@ import { forkPoint, gitAt, gitReader, isYes, parseRawDiff, within, zFields, type
 import { STALLED } from '../../publish/publish.js';
 import { execCmd, execFailure, HARDENING, mustExec, TIMED_OUT, type Exec } from '../exec.js';
 import { readCapped } from '../read-capped.js';
-import type { GitAuth } from '../forge/types.js';
+import type { CloneAuth } from '../forge/types.js';
 import type { StepDiff, Workspace, WorkspaceManager, WorkspaceRequest } from './types.js';
 
 function assertSafe(id: string): void {
@@ -127,7 +127,7 @@ const FETCH_GRACE_MS = 5_000;
  * path nor the command, which go to `log`. `refspecs`: what to fetch, instead of what the remote's config says. `auth`: the
  * App's token for a private repository (ORC-442), in git's environment.
  */
-export async function fetchOrigin(exec: Exec, repo: string, o: { deadlineMs?: number; log?: (message: string) => void; refspecs?: readonly string[]; auth?: GitAuth } = {}): Promise<void> {
+export async function fetchOrigin(exec: Exec, repo: string, o: { deadlineMs?: number; log?: (message: string) => void; refspecs?: readonly string[]; auth?: CloneAuth } = {}): Promise<void> {
   const deadlineMs = o.deadlineMs ?? FETCH_DEADLINE_MS;
   const silent = `the forge no longer responds after ${deadlineMs / 1000} s`;
   const args = ['-C', repo, 'fetch', '--quiet', 'origin', ...(o.refspecs ?? [])];
@@ -151,7 +151,7 @@ export async function fetchOrigin(exec: Exec, repo: string, o: { deadlineMs?: nu
  * asked of GitHub's API within `deadlineMs`, which can stall as the forge can: past it, a timeout (`isTransient`); any other
  * failure as `auth` rejected, its cause kept for `isTransient`.
  */
-export async function remoteGitEnv(auth: GitAuth | undefined, repo: string, deadlineMs: number): Promise<Record<string, string>> {
+export async function remoteGitEnv(auth: CloneAuth | undefined, repo: string, deadlineMs: number): Promise<Record<string, string>> {
   const silent = `GitHub gave no installation token after ${deadlineMs / 1000} s`;
   const token = auth
     ? await within(auth(repo), deadlineMs, silent).catch((err: Error) => {
@@ -175,7 +175,7 @@ export class GitWorkspaces implements WorkspaceManager {
   private exec: Exec;
 
   /** `log`: the detail of a failed fetch (the server's path, git's own words), which the ticket never gets. `auth`: what reads a private forge (ORC-442). */
-  constructor(private o: { root: string; exec?: Exec; fetchDeadlineMs?: number; log?: (message: string) => void; auth?: GitAuth }) {
+  constructor(private o: { root: string; exec?: Exec; fetchDeadlineMs?: number; log?: (message: string) => void; auth?: CloneAuth }) {
     this.exec = o.exec ?? execCmd;
   }
 

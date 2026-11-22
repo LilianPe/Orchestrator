@@ -26,7 +26,7 @@ export class FakeForge implements Forge, ForgeWriter, ArtifactHost, RepoPermissi
     this.permissions.set(login, permission);
   }
 
-  async repoPermission(_repoPath: string, login: string): Promise<RepoPermission> {
+  async repoPermission(_github: string, login: string): Promise<RepoPermission> {
     this.answer();
     return this.permissions.get(login) ?? 'none';
   }
@@ -39,7 +39,7 @@ export class FakeForge implements Forge, ForgeWriter, ArtifactHost, RepoPermissi
     if (this.offline) throw new Error('forge unreachable');
   }
 
-  async findPr(_repoPath: string, branch: string): Promise<PrInfo | undefined> {
+  async findPr(_github: string, branch: string): Promise<PrInfo | undefined> {
     this.answer();
     const pr = this.prs.get(branch);
     return pr && structuredClone(pr);
@@ -52,7 +52,7 @@ export class FakeForge implements Forge, ForgeWriter, ArtifactHost, RepoPermissi
     this.ciReports.set(prNumber, report);
   }
 
-  async ciFailures(_repoPath: string, prNumber: number): Promise<CiFailureReport> {
+  async ciFailures(_github: string, prNumber: number): Promise<CiFailureReport> {
     this.answer();
     const set = this.ciReports.get(prNumber);
     if (set) return structuredClone(set);
@@ -62,7 +62,7 @@ export class FakeForge implements Forge, ForgeWriter, ArtifactHost, RepoPermissi
     return { head: pr.headSha ?? '', failed, base: { branch: this.defaultBranch, sha: '', checks: 'pass', failedChecks: [] } };
   }
 
-  async unresolvedReviewComments(_repoPath: string, prNumber: number): Promise<FeedbackItem[]> {
+  async unresolvedReviewComments(_github: string, prNumber: number): Promise<FeedbackItem[]> {
     this.answer();
     return (this.comments.get(prNumber) ?? []).map((c) => ({ ...c }));
   }
@@ -79,7 +79,7 @@ export class FakeForge implements Forge, ForgeWriter, ArtifactHost, RepoPermissi
     return this.openPullRequests.map((pr) => ({ ...pr, files: pr.files && [...pr.files] }));
   }
 
-  async branches(_repoPath: string, prefix: string): Promise<ForgeBranch[]> {
+  async branches(_github: string, prefix: string): Promise<ForgeBranch[]> {
     this.answer();
     return this.branchNames.filter((b) => b.startsWith(prefix)).map((name) => branchOf(this.repoUrl, name));
   }
@@ -93,7 +93,7 @@ export class FakeForge implements Forge, ForgeWriter, ArtifactHost, RepoPermissi
     return this.branchNames.filter((b) => b !== this.defaultBranch).map((name) => branchOf(this.repoUrl, name));
   }
 
-  async ensurePr(_repoPath: string, req: PrRequest): Promise<{ number: number; url: string; deduplicated: boolean }> {
+  async ensurePr(_github: string, req: PrRequest): Promise<{ number: number; url: string; deduplicated: boolean }> {
     this.answer();
     const pr = this.prs.get(req.branch);
     if (pr?.state === 'OPEN') return { number: pr.number, url: pr.url, deduplicated: true };
@@ -107,7 +107,7 @@ export class FakeForge implements Forge, ForgeWriter, ArtifactHost, RepoPermissi
   /** The PRs taken out of draft, in order. */
   readied: number[] = [];
 
-  async markPrReady(_repoPath: string, number: number): Promise<void> {
+  async markPrReady(_github: string, number: number): Promise<void> {
     this.answer();
     this.readied.push(number);
   }
@@ -125,7 +125,7 @@ export class FakeForge implements Forge, ForgeWriter, ArtifactHost, RepoPermissi
     return [...(this.prLabels.get(number) ?? [])];
   }
 
-  async setExclusiveLabel(_repoPath: string, number: number, label: string, group: readonly string[]): Promise<void> {
+  async setExclusiveLabel(_github: string, number: number, label: string, group: readonly string[]): Promise<void> {
     this.answer();
     const now = this.labelsOf(number);
     const others = now.filter((l) => !group.includes(l));
@@ -150,7 +150,7 @@ export class FakeForge implements Forge, ForgeWriter, ArtifactHost, RepoPermissi
   ciWorkflows = 0;
 
   /** As GitHub: merged only if the PR's head is still `sha`; a PR already merged on it is found again. */
-  async mergePr(_repoPath: string, number: number, sha: string, opts: { unchecked?: boolean } = {}): Promise<MergeResult> {
+  async mergePr(_github: string, number: number, sha: string, opts: { unchecked?: boolean } = {}): Promise<MergeResult> {
     this.answer();
     const pr = [...this.prs.values()].find((p) => p.number === number);
     if (!pr) throw new Error(`no PR #${number}`);
@@ -163,7 +163,7 @@ export class FakeForge implements Forge, ForgeWriter, ArtifactHost, RepoPermissi
     return { merged: true, deduplicated: false };
   }
 
-  async upsertCheckRun(_repoPath: string, req: CheckRunRequest): Promise<{ id: number; deduplicated: boolean }> {
+  async upsertCheckRun(_github: string, req: CheckRunRequest): Promise<{ id: number; deduplicated: boolean }> {
     this.answer();
     // As GitHub's adapter: among the sha's runs of that name.
     const existing = this.checkRuns.find((c) => c.sha === req.sha && c.name === req.name && c.externalId === req.externalId);
@@ -181,7 +181,7 @@ export class FakeForge implements Forge, ForgeWriter, ArtifactHost, RepoPermissi
   /** Lines (`path:line`) GitHub cannot place a comment on, as a test sets them: a review commenting one is refused. */
   unplaceable = new Set<string>();
 
-  async postReview(_repoPath: string, number: number, req: ReviewRequest): Promise<{ id: number; deduplicated: boolean }> {
+  async postReview(_github: string, number: number, req: ReviewRequest): Promise<{ id: number; deduplicated: boolean }> {
     this.answer();
     const existing = this.reviews.find((r) => r.number === number && r.externalId === req.externalId);
     if (existing) return { id: existing.id, deduplicated: true };
@@ -197,7 +197,7 @@ export class FakeForge implements Forge, ForgeWriter, ArtifactHost, RepoPermissi
   /** A refusal of the forge, as a protection rule gives one: every write of the branch rejects `ArtifactsRefused` with it. */
   artifactsRefusal: string | undefined;
 
-  async hostArtifacts(_repoPath: string, files: readonly HostedFile[]): Promise<string[]> {
+  async hostArtifacts(_github: string, files: readonly HostedFile[]): Promise<string[]> {
     this.answer();
     if (this.artifactsRefusal) throw new ArtifactsRefused(this.artifactsRefusal);
     if (files.some((f) => !this.artifacts.has(f.path))) this.artifactCommits++;
@@ -205,7 +205,7 @@ export class FakeForge implements Forge, ForgeWriter, ArtifactHost, RepoPermissi
     return files.map((f) => `${this.repoUrl}/blob/c${this.artifactCommits}/${f.path}?raw=true`);
   }
 
-  async pruneArtifacts(_repoPath: string, expired: (folder: string) => Promise<boolean>): Promise<string[]> {
+  async pruneArtifacts(_github: string, expired: (folder: string) => Promise<boolean>): Promise<string[]> {
     this.answer();
     if (this.artifactsRefusal) throw new ArtifactsRefused(this.artifactsRefusal);
     const removed: string[] = [];

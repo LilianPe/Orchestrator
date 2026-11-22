@@ -10,7 +10,7 @@ describeForgeContract('FakeForge', () => {
   forge.setReviewComments(7, unresolved);
   const unreachable = new FakeForge();
   unreachable.offline = true;
-  return { forge, repoPath: '/repo', missingBranch: 'factory/rel-404', pr: { branch: 'factory/rel-1-x', number: 7 }, unresolved, unreachable, noChecks: 'factory/rel-3-z' };
+  return { forge, github: 'acme/app', missingBranch: 'factory/rel-404', pr: { branch: 'factory/rel-1-x', number: 7 }, unresolved, unreachable, noChecks: 'factory/rel-3-z' };
 });
 
 describe('FakeForge.setExclusiveLabel (ORC-198)', () => {

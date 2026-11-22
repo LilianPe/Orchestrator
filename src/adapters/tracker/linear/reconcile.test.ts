@@ -22,7 +22,7 @@ describe('reconcileOnce', () => {
     await store.putTicket({ ...newTicketState('p', 'REL-3', 'T', 'dev', 8), delegated: true, activeRunId: 'r3' });
     const events: FactoryEvent[] = [];
     await reconcileOnce({
-      tracker, store, projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }],
+      tracker, store, projects: [{ id: 'p', repoPath: '/r', github: 'acme/r', teamKey: 'REL', workflow }],
       submit: (e) => events.push(e), clock: new FakeClock(100), log: () => {},
     });
     expect(events.map((e) => [e.id, e.type, e.payload])).toEqual([
@@ -49,7 +49,7 @@ describe('reconcileOnce', () => {
     await store.putTicket({ ...newTicketState('p', 'REL-5', 'T', 'human_review', 5), delegated: true });
     const events: FactoryEvent[] = [];
     await reconcileOnce({
-      tracker, store, projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }],
+      tracker, store, projects: [{ id: 'p', repoPath: '/r', github: 'acme/r', teamKey: 'REL', workflow }],
       submit: (e) => events.push(e), clock: new FakeClock(100), log: () => {},
     });
     expect(events.map((e) => [e.id, e.type])).toEqual([
@@ -59,8 +59,8 @@ describe('reconcileOnce', () => {
   });
 
   describe('a ticket of a team with no repo, filed under the first project (ORC-171)', () => {
-    const web = { id: 'web', repoPath: '/web', teamKey: 'REL', workflow };
-    const zzz = { id: 'zzz', repoPath: '/zzz', teamKey: 'ZZZ', workflow };
+    const web = { id: 'web', repoPath: '/web', github: 'acme/web', teamKey: 'REL', workflow };
+    const zzz = { id: 'zzz', repoPath: '/zzz', github: 'acme/zzz', teamKey: 'ZZZ', workflow };
     const noRepoRow = { ...newTicketState('web', 'ZZZ-1', 'T', 'todo', 3), delegated: true, blocked: true, awaitingRepo: [] };
     const pass = async (tracker: FakeTracker, store: MemoryStore, projects: (typeof web)[], only?: string) => {
       const events: FactoryEvent[] = [];
@@ -104,7 +104,7 @@ describe('reconcileOnce', () => {
   });
 
   describe('a team with several repos (ORC-291)', () => {
-    const projects = ['web', 'api'].map((id) => ({ id, repoPath: `/${id}`, teamKey: 'REL', workflow }));
+    const projects = ['web', 'api'].map((id) => ({ id, repoPath: `/${id}`, github: `acme/${id}`, teamKey: 'REL', workflow }));
     const pass = async (tracker: FakeTracker, store: MemoryStore, only?: string) => {
       const events: FactoryEvent[] = [];
       let reads = 0;
@@ -222,7 +222,7 @@ describe('reconcileOnce', () => {
 });
 
 describe('reconcileOnce — done and cancelled (ORC-185)', () => {
-  const projects = [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }];
+  const projects = [{ id: 'p', repoPath: '/r', github: 'acme/r', teamKey: 'REL', workflow }];
   async function pass(tracker: FakeTracker, store: MemoryStore, log: (m: string) => void = () => {}) {
     const events: FactoryEvent[] = [];
     await reconcileOnce({ tracker, store, projects, submit: (e) => events.push(e), clock: new FakeClock(100), log });
@@ -340,7 +340,7 @@ describe('reconcileOnce — done and cancelled (ORC-185)', () => {
 });
 
 describe('reconcileOnce — labels (ORC-185)', () => {
-  const projects = [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }];
+  const projects = [{ id: 'p', repoPath: '/r', github: 'acme/r', teamKey: 'REL', workflow }];
   async function pass(tracker: FakeTracker, store: MemoryStore) {
     const events: FactoryEvent[] = [];
     await reconcileOnce({ tracker, store, projects, submit: (e) => events.push(e), clock: new FakeClock(100), log: () => {} });
@@ -414,7 +414,7 @@ describe('reconcileOnce — labels (ORC-185)', () => {
 describe('reconcileOnce — the wait on « blocked by » tickets (ORC-363)', () => {
   const pass = async (tracker: FakeTracker, store: MemoryStore) => {
     const events: FactoryEvent[] = [];
-    await reconcileOnce({ tracker, store, projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], submit: (e) => events.push(e), clock: new FakeClock(100), log: () => {} });
+    await reconcileOnce({ tracker, store, projects: [{ id: 'p', repoPath: '/r', github: 'acme/r', teamKey: 'REL', workflow }], submit: (e) => events.push(e), clock: new FakeClock(100), log: () => {} });
     return events;
   };
   const setup = async (blocker: { stateName: string; stateType: string }, waits = true) => {
@@ -461,7 +461,7 @@ describe('Reconciler', () => {
     const events: FactoryEvent[] = [];
     const reconciler = new Reconciler({
       tracker: { listDelegated: async (k) => (passes++, await gate, tracker.listDelegated(k)), getIssue: (id) => tracker.getIssue(id) },
-      store: new MemoryStore(), projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }],
+      store: new MemoryStore(), projects: [{ id: 'p', repoPath: '/r', github: 'acme/r', teamKey: 'REL', workflow }],
       submit: (e) => events.push(e), clock: new FakeClock(100), log: () => {},
     });
     void reconciler.once();

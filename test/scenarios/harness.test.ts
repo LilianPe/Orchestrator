@@ -85,7 +85,7 @@ describe('harness: new port fakes and the test preset', () => {
     expect(h.sandboxes.active()).toEqual([sandbox]);
     await h.sandboxes.destroy(sandbox.id);
     const pub = await h.publisher.publish({
-      projectId: 'p', repoPath: '/repo', ticketId: 'REL-1', runId: 'r1', worktree: '/w', branch: branch!, sha: 'abc123', title: 'feat: export CSV (REL-1)', body: '',
+      projectId: 'p', github: 'acme/app', ticketId: 'REL-1', runId: 'r1', worktree: '/w', branch: branch!, sha: 'abc123', title: 'feat: export CSV (REL-1)', body: '',
     });
     expect((await h.forge.findPr('/repo', branch!))?.checks).toBe('pending');
     await h.send('pr.opened', { number: pub.prNumber, url: pub.url, branch: branch! });

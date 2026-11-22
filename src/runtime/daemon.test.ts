@@ -57,7 +57,7 @@ function setup(
   const orch = new Daemon({
     store, clock, bus, scheduler,
     tracker, forge: new FakeForge(), runner, workspaces: o.workspaces ?? new FakeWorkspaces(), verify: o.verify ?? (async () => ({ ok: true, failures: [] })),
-    projects: [{ id: 'p', repoPath: '/repo', teamKey: 'REL', workflow }], packDir,
+    projects: [{ id: 'p', repoPath: '/repo', github: 'acme/repo', teamKey: 'REL', workflow }], packDir,
     agentEnv: (r) => ({ FACTORY_RUN_TOKEN: r.token }), newId: () => `id-${++n}`, activityIntervalMs: 0, holdInboxUntilReplay: o.hold, factoryCommit: 'cafe42',
     // One attempt: a failed effect dies at once (the retries have their own tests).
     effectRetry: o.effectRetry ?? { attempts: 1, baseMs: 1, capMs: 1 },

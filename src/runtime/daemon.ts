@@ -40,7 +40,13 @@ import { DaemonLaunch } from './launch.js';
 
 export interface ProjectRuntime {
   id: string;
+  /** The factory's clone of the repository: its workspaces, diffs and config are read there (ORC-471 part 2 replaces it). */
   repoPath: string;
+  /**
+   * The repository on GitHub, `owner/name` (ORC-478), resolved once at the start (`projectGithub`): what the forge, its writer,
+   * the captures, the App's git token and the roles name it by. A replayed ticket's is its project's.
+   */
+  github: string;
   teamKey: string;
   workflow: Workflow;
   /**

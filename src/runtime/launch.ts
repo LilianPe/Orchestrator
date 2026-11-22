@@ -784,8 +784,8 @@ export abstract class DaemonLaunch extends DaemonEffects {
       // replayed ticket (ORC-376): the forge and the tracker hold now the human's PR and branch, the very work it is compared with.
       const [search, ownBranches] = guarded && !project.replayed
         ? await Promise.all([
-            intake ? searchDuplicates(issue, project.repoPath, { forge, tracker }, naming) : undefined,
-            checks.includes('not_started') ? ticketBranches(forge, project.repoPath, issue.identifier, naming) : undefined,
+            intake ? searchDuplicates(issue, project.github, { forge, tracker }, naming) : undefined,
+            checks.includes('not_started') ? ticketBranches(forge, project.github, issue.identifier, naming) : undefined,
           ])
         : [];
       const failures = guarded ? pickupFailures(checks, issue, ownBranches && ownWork(issue.identifier, ownBranches, search?.prs ?? [], naming)) : [];
@@ -904,14 +904,14 @@ export abstract class DaemonLaunch extends DaemonEffects {
       const carried = threadsOf ? stepInbox.filter((i) => !i.thread) : stepInbox;
       const read: FeedbackItem[] = [...carried];
       if (kind === 'feedback') read.push(...forAgent(t.humanInbox).filter((i) => !threadsOf || !i.thread));
-      const threads: FeedbackItem[] = threadsOf ? (await forge.unresolvedReviewComments(project.repoPath, threadsOf)).map((c) => ({ ...c, taint: 'untrusted' as const })) : [];
+      const threads: FeedbackItem[] = threadsOf ? (await forge.unresolvedReviewComments(project.github, threadsOf)).map((c) => ({ ...c, taint: 'untrusted' as const })) : [];
       read.push(...threads);
       // The fix of a red CI reads its failures on the forge, its run having no token to (ORC-459). Their logs are written by the
       // code the CI ran and the tools it called: untrusted, as review comments are. A transient failure retries the start; any
       // other one runs the fix without them, rather than blocking it on what it can do without.
       const ciRead =
         kind === 'ci_failures' && opts.inputText === undefined && t.prNumber
-          ? await forge.ciFailures(project.repoPath, t.prNumber).catch((err: unknown) => {
+          ? await forge.ciFailures(project.github, t.prNumber).catch((err: unknown) => {
             if (isTransient(err)) throw err;
             this.log('warn', `CI failures of ${ticketId} unread, its fix runs without them: ${err instanceof Error ? err.message : String(err)}`);
             return undefined;

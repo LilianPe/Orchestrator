@@ -314,8 +314,8 @@ export function createHarness(
   const logs: { level: string; message: string }[] = [];
   if (opts.fantome) opts.noEffect ??= true;
   const keptEffectsDir = opts.noEffect === true ? mkdtempSync(join(tmpdir(), 'factory-kept-')) : undefined;
-  const project = { id: 'p', repoPath: '/repo', teamKey: 'REL', workflow, ...(opts.noEffect ? { effects: 'none' as const } : {}) };
-  const authz = opts.authz && { teamKey: 'REL', repoPath: '/repo', maintainers: [], validators: [], githubLogins: {}, ...opts.authz };
+  const project = { id: 'p', repoPath: '/repo', github: 'acme/app', teamKey: 'REL', workflow, ...(opts.noEffect ? { effects: 'none' as const } : {}) };
+  const authz = opts.authz && { teamKey: 'REL', github: 'acme/app', maintainers: [], validators: [], githubLogins: {}, ...opts.authz };
   /** One life of the process: its store and its adapters, all of them silent once it is killed. */
   const connect = () => {
     // The effects a test's workflow adds to its decisions (ORC-392): none without them.
@@ -373,7 +373,7 @@ export function createHarness(
     })(),
     scheduler: new Scheduler(store, queueCapacity(opts.concurrency)),
     ...outside,
-    projects: [project, ...(opts.extraProjects ?? []).map((id) => ({ ...project, id, repoPath: `/${id}` }))],
+    projects: [project, ...(opts.extraProjects ?? []).map((id) => ({ ...project, id, repoPath: `/${id}`, github: `acme/${id}` }))],
     packDir: pack,
     agentEnv: (r) => ({ FACTORY_RUN_TOKEN: r.token }),
     newId: () => `id-${++n}`,
