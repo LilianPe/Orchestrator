@@ -6,6 +6,9 @@ on:
   # catches it, a manual one follows a bump of anything the sandbox stands on (docs/tests.md).
   schedule: [{ cron: '0 5 * * 1' }]
   workflow_dispatch:
+# Read rights alone, and no secret in this file (ORC-475): every PR runs it, the factory's included, and `factory doctor`
+# refuses a workflow that hands those a secret or a writable token. What needs a secret is in main-secrets.yml, on main only.
+permissions: { contents: read }
 jobs:
   test:
     if: github.event_name != 'schedule'
@@ -103,8 +106,6 @@ jobs:
     timeout-minutes: 25
     env:
       FACTORY_ISOLATION: "1"
-      # Whether the secret is set, not the secret: only the step that runs the tests gets it.
-      HAS_CLAUDE_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
       # The gitleaks of docker/runner.Dockerfile, which takes the archive from its build context when it is there (ORC-369).
       GITLEAKS_VERSION: "8.30.1"
       GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
@@ -148,9 +149,6 @@ jobs:
           podman system migrate
           podman info --format '{{.Host.Security.Rootless}} {{.Host.CgroupManager}} {{.Host.CgroupControllers}}'
       - run: npm ci
-      # Pinned, as docker/runner.Dockerfile: a claude bump is a change of its own.
-      - if: env.HAS_CLAUDE_TOKEN == 'true'
-        run: npm install -g @anthropic-ai/claude-code@2.1.316
       # The image itself (ORC-203): built under the rootless engine, its tools checked and its layers scanned.
       # The other isolation tests stay on the public node image.
       - name: Check the runner image
@@ -168,10 +166,8 @@ jobs:
         env:
           FACTORY_RUNNER_IMAGE: localhost/factory-runner:ci
           FACTORY_BROWSER_IMAGE: localhost/factory-browser:ci
-      # Isolation n° 11 runs a real claude -p when this secret is set, and is skipped without it (forks too).
+      # Without a Claude login, isolation n° 11 skips itself here: the isolation-claude job of main-secrets.yml runs it (ORC-475).
       - run: npm run test:isolation
-        env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       # The engine's state when the job fails or times out, so a wedge comes with its evidence (ORC-377). A wedged
       # engine does not answer either: each command is bounded, and the processes are listed without asking it. A
       # cancel has killed the tests' own podman clients by then: what is left is the engine's side.
@@ -182,23 +178,3 @@ jobs:
           ps -o pid,ppid,etime,stat,args -p "$(pgrep -d, -f 'podman|conmon|crun|runc|catatonit|fuse-overlayfs|slirp4netns|pasta|rootlessport|netavark|aardvark')" || true
           timeout -k 10 60 podman ps -a || echo "::warning::podman ps -a failed or did not answer within 60 s"
           timeout -k 10 60 podman info || echo "::warning::podman info failed or did not answer within 60 s"
-
-  # Isolation n° 12 and 13 (ORC-219) on the real GitHub, with a test App and its test repositories: no engine, so a job of
-  # its own, skipped by `isolation`, and not started while the App's id is unset. The App's key is a secret of the environment
-  # `isolation-github`, whose deployment branches are main alone: a branch that edits this file cannot read it (ORC-135).
-  isolation-github:
-    if: github.ref == 'refs/heads/main' && vars.FACTORY_ISO_GH_APP_ID != ''
-    runs-on: ubuntu-latest
-    environment: isolation-github
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 24, cache: npm }
-      - run: npm ci
-      - run: npx vitest run --project isolation test/isolation/isolation-12-ci-secrets.test.ts test/isolation/isolation-13-run-token.test.ts
-        env:
-          FACTORY_ISO_GH_APP_ID: ${{ vars.FACTORY_ISO_GH_APP_ID }}
-          FACTORY_ISO_GH_APP_KEY: ${{ secrets.FACTORY_ISO_GH_APP_KEY }}
-          FACTORY_ISO_GH_REPO: ${{ vars.FACTORY_ISO_GH_REPO }}
-          FACTORY_ISO_GH_OTHER_REPO: ${{ vars.FACTORY_ISO_GH_OTHER_REPO }}

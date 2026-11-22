@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { runDoctor } from '../../src/cli/doctor.js';
+import { GITHUB_APP_PERMISSIONS } from '../../src/cli/init.js';
 
 /**
  * The deployment as written (ORC-203). A green file here proves the text, not the stack:
@@ -210,10 +212,12 @@ describe('the gitleaks archive of the isolation job (ORC-369)', () => {
 /** ORC-377: with no timeout-minutes, a wedged engine or a hung test holds the runner for GitHub's 6 h. */
 describe('the time limits of the CI jobs (ORC-377)', () => {
   type Step = { if?: string; run?: string };
-  const jobs = (parse(read('.github/workflows/ci.yml')) as { jobs: Record<string, { 'timeout-minutes'?: number; steps: Step[] }> }).jobs;
+  type Jobs = Record<string, { 'timeout-minutes'?: number; steps: Step[] }>;
+  const jobs = (parse(read('.github/workflows/ci.yml')) as { jobs: Jobs }).jobs;
 
   it("bounds every job, well below GitHub's default of 360 min", () => {
-    for (const [name, job] of Object.entries(jobs)) {
+    const secretJobs = (parse(read('.github/workflows/main-secrets.yml')) as { jobs: Jobs }).jobs;
+    for (const [name, job] of [...Object.entries(jobs), ...Object.entries(secretJobs)]) {
       expect(job['timeout-minutes'], name).toBeGreaterThan(0);
       expect(job['timeout-minutes'], name).toBeLessThanOrEqual(60);
     }
@@ -230,5 +234,106 @@ describe('the time limits of the CI jobs (ORC-377)', () => {
     expect(state).toBeGreaterThan(steps.findIndex((s) => s.run === 'npm run test:isolation'));
     expect(steps[state]!.run).toMatch(/^timeout -k \d+ \d+ podman ps -a /m);
     expect(steps[state]!.run).toMatch(/^timeout -k \d+ \d+ podman info /m);
+  });
+});
+
+/**
+ * ORC-475: this repository is the first run's pilot, so its own CI must pass `factory doctor`. What reads a secret runs
+ * in `main-secrets.yml`, on main alone; `ci.yml`, which every PR runs, reads none and has a read-only token.
+ */
+describe('the workflows doctor reads on the pilot repository (ORC-475)', () => {
+  type Step = { name?: string; run?: string; if?: string; env?: Record<string, string> };
+  interface Job {
+    name?: string;
+    if?: string;
+    environment?: string;
+    permissions?: unknown;
+    env?: Record<string, string>;
+    steps: Step[];
+  }
+  type Workflow = { on: Record<string, unknown>; permissions?: unknown; jobs: Record<string, Job> };
+  const ciText = read('.github/workflows/ci.yml');
+  const secretsText = read('.github/workflows/main-secrets.yml');
+  const ci = parse(ciText) as Workflow;
+  const secrets = parse(secretsText) as Workflow;
+
+  it("produces the 4 checks the ruleset main requires on every pull request, under their names (gh api …/rulesets)", () => {
+    expect(Object.keys(ci.on)).toContain('pull_request');
+    for (const check of ['test', 'properties', 'integration', 'chaos']) {
+      const job = ci.jobs[check];
+      expect(job, check).toBeDefined();
+      // A check is named after its job's `name`, else its id.
+      expect(job!.name, check).toBeUndefined();
+      expect([undefined, "github.event_name != 'schedule'"], check).toContain(job!.if);
+    }
+  });
+
+  it('reads no secret in ci.yml, whose GITHUB_TOKEN can only read, and runs the isolation suite on PRs without one', () => {
+    expect(ci.permissions).toEqual({ contents: 'read' });
+    for (const [name, job] of Object.entries(ci.jobs)) {
+      expect(job.permissions, name).toBeUndefined();
+      expect(job.environment, name).toBeUndefined();
+    }
+    // The `secrets` context in any expression, as doctor reads it.
+    expect(ciText).not.toMatch(/\$\{\{[^}]*(?<![\w.-])secrets\b/);
+    expect(ci.jobs['isolation']!.if).toBeUndefined();
+    expect(ci.jobs['isolation']!.steps.map((s) => s.run)).toContain('npm run test:isolation');
+  });
+
+  it('runs main-secrets.yml on main alone, never on a pull request, with a read-only GITHUB_TOKEN', () => {
+    expect(secrets.on).toEqual({ push: { branches: ['main'] }, schedule: [{ cron: expect.any(String) }], workflow_dispatch: null });
+    expect(secrets.permissions).toEqual({ contents: 'read' });
+    // A manual run can name any branch: its code never gets a secret.
+    for (const [name, job] of Object.entries(secrets.jobs)) {
+      expect(job.if, name).toMatch(/^github\.ref == 'refs\/heads\/main'( &&|$)/);
+      expect(job.permissions, name).toBeUndefined();
+    }
+  });
+
+  it('still runs isolation n° 11 with the Claude login, the token given to its step alone, on every push to main', () => {
+    const job = secrets.jobs['isolation-claude']!;
+    const test = job.steps.find((s) => s.run?.includes('test/isolation/claude-settings.test.ts'))!;
+    expect(test.run).toMatch(/^npx vitest run --project isolation test\/isolation\/claude-settings\.test\.ts$/);
+    expect(test.env).toMatchObject({ FACTORY_ISOLATION: '1', CLAUDE_CODE_OAUTH_TOKEN: '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}' });
+    expect(job.steps.filter((s) => JSON.stringify(s.env ?? {}).includes('secrets.'))).toEqual([test]);
+    // The claude ci.yml installed before ORC-475, pinned as docker/runner.Dockerfile pins it.
+    const install = job.steps.find((s) => s.run?.startsWith('npm install -g @anthropic-ai/claude-code@'))!;
+    expect(install.run).toBe(`npm install -g @anthropic-ai/claude-code@${/claude-code@(\d+\.\d+\.\d+)/.exec(runner)?.[1]}`);
+    expect(job.steps.indexOf(install)).toBeLessThan(job.steps.indexOf(test));
+  });
+
+  it('still runs isolation n° 12 and 13 on the real GitHub, under the environment limited to main', () => {
+    const job = secrets.jobs['isolation-github']!;
+    expect(job.environment).toBe('isolation-github');
+    expect(job.if).toContain("vars.FACTORY_ISO_GH_APP_ID != ''");
+    const test = job.steps.find((s) => s.run?.includes('isolation-12-ci-secrets.test.ts'))!;
+    expect(test.run).toContain('test/isolation/isolation-13-run-token.test.ts');
+    expect(test.env).toMatchObject({ FACTORY_ISO_GH_APP_KEY: '${{ secrets.FACTORY_ISO_GH_APP_KEY }}' });
+    expect(ci.jobs['isolation-github']).toBeUndefined();
+  });
+
+  it('is accepted by doctor, with no environment on the repository, as it has none', async () => {
+    const lines: string[] = [];
+    const code = await runDoctor({
+      repoPath: root,
+      api: {
+        listWorkflows: async () => [
+          { path: '.github/workflows/ci.yml', content: ciText },
+          { path: '.github/workflows/main-secrets.yml', content: secretsText },
+        ],
+        listEnvironments: async () => [],
+        branchProtection: async () => ({ branch: 'main', classic: false, rules: ['pull_request', 'required_status_checks'], pullRequestRulesets: [{ id: 1, bypass: 'never' }] }),
+        installationPermissions: async () => GITHUB_APP_PERMISSIONS,
+      },
+      host: { verdict: 'accepted', reasons: [] },
+      json: true,
+      out: (line) => lines.push(line),
+    });
+    const report = JSON.parse(lines.join('\n')) as { accepted: boolean; workflows: { path: string; verdict: string; reasons: string[] }[] };
+    expect(report.workflows.map(({ path, verdict, reasons }) => ({ path, verdict, reasons }))).toEqual([
+      { path: '.github/workflows/ci.yml', verdict: 'accepted', reasons: ['no secret referenced, a read-only GITHUB_TOKEN'] },
+      { path: '.github/workflows/main-secrets.yml', verdict: 'accepted', reasons: ["secrets only on triggers that do not reach the factory's branches"] },
+    ]);
+    expect({ code, accepted: report.accepted }).toEqual({ code: 0, accepted: true });
   });
 });
