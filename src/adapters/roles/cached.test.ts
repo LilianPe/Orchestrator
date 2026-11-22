@@ -6,7 +6,7 @@ import type { ProjectAuthz } from './types.js';
 
 const PROJECT: ProjectAuthz = {
   teamKey: 'REL',
-  repoPath: '/repo',
+  github: 'acme/app',
   maintainers: ['u-maint'],
   validators: ['u-valid'],
   githubLogins: { 'u-dev': 'dev-gh', 'u-reader': 'reader-gh' },

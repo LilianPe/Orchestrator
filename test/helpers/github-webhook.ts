@@ -119,7 +119,7 @@ export function workflowRunBody(opts: { id?: number; attempt?: number; minutes?:
   };
 }
 
-/** The daemon's GitHub ingestion over `store` and `forge`, project `p` on `/repo`, writing through `accept`. */
+/** The daemon's GitHub ingestion over `store` and `forge`, project `p` on `acme/app`, writing through `accept`. */
 export function githubIngest(store: Store, accept: (e: FactoryEvent) => Promise<boolean>, forge?: Forge, now = () => 1_000) {
   return createGithubIngest({
     secret: () => GH_SECRET,
@@ -128,8 +128,7 @@ export function githubIngest(store: Store, accept: (e: FactoryEvent) => Promise<
     ctx: githubMapContext({
       store,
       forge: forge ?? { findPr: async () => undefined },
-      projects: [{ id: 'p', repoPath: '/repo' }],
-      repoOf: async (repoPath) => (repoPath === '/repo' ? REPO.full_name : undefined),
+      projects: [{ id: 'p', github: REPO.full_name }],
       now,
     }),
   });

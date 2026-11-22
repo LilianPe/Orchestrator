@@ -63,7 +63,7 @@ export class CachedRoleResolver implements RoleResolver {
     // GitHub logins ignore case: one cache entry per user, whatever case the webhook or the configuration wrote.
     const login = (github ?? p.githubLogins[actorId])?.toLowerCase();
     const repo = this.o.repo;
-    const permission = login && repo ? this.cached(`repo:${p.repoPath}:${login}`, () => repo.repoPermission(p.repoPath, login)) : undefined;
+    const permission = login && repo ? this.cached(`repo:${p.github.toLowerCase()}:${login}`, () => repo.repoPermission(p.github, login)) : undefined;
     const id = github === undefined ? actorId : Object.keys(p.githubLogins).find((u) => p.githubLogins[u]!.toLowerCase() === github);
     // A GitHub login configured for no Linear user holds no Linear role, and reads no team.
     if (id === undefined) return writes(await permission);

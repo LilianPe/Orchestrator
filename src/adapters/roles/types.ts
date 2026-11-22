@@ -18,15 +18,16 @@ export interface TeamDirectory {
 export const REPO_PERMISSIONS = ['admin', 'maintain', 'write', 'triage', 'read', 'none'] as const;
 export type RepoPermission = (typeof REPO_PERMISSIONS)[number];
 
-/** Reads a user's permission on the repo of `repoPath` (the GitHub App forge, `FakeForge`). */
+/** Reads a user's permission on the GitHub repository `github`, `owner/name` (the GitHub App forge, `FakeForge`). */
 export interface RepoPermissions {
-  repoPermission(repoPath: string, login: string): Promise<RepoPermission>;
+  repoPermission(github: string, login: string): Promise<RepoPermission>;
 }
 
 /** Who holds the roles of a project that no source gives: from the instance configuration until `.factory/config.yml` (ORC-209). */
 export interface ProjectAuthz {
   teamKey: string;
-  repoPath: string;
+  /** The repository on GitHub, `owner/name` (ORC-478): whose permissions give the GitHub roles. */
+  github: string;
   /** Linear user ids of the designated maintainers (`/refreeze`). */
   maintainers: readonly string[];
   /** Linear user ids of the designated spec validators. */

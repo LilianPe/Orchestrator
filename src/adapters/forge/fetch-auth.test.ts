@@ -10,7 +10,8 @@ import { repoRoot } from '../../app/root.js';
 import { execCmd, type Exec } from '../exec.js';
 import { GitHubAppForge } from './github-app.js';
 import type { HttpClient } from './github-app.js';
-import type { GitAuth } from './types.js';
+import type { CloneAuth } from './types.js';
+import { cloneAuth } from '../../app/project-github.js';
 import { makeRepoConfig } from '../../app/repo-variables.js';
 import { fetchFromForge } from '../../core/clean-verify.js';
 import { cloneAtStart } from '../../ghost/history.js';
@@ -105,8 +106,9 @@ async function fixture() {
     return execCmd(cmd, args, { ...opts, env: { ...NO_CREDENTIALS, ...opts.env } });
   };
   const logs: string[] = [];
-  const forge = new GitHubAppForge({ appId: '1', privateKey: privatePem, installationId: 42, http: tokenApi, exec, webBase: server.base, resolveRepo: async () => ({ owner: 'acme', name: 'app' }), log: (m) => logs.push(m) });
-  const auth: GitAuth = (r) => forge.fetchEnv(r);
+  const forge = new GitHubAppForge({ appId: '1', privateKey: privatePem, installationId: 42, http: tokenApi, webBase: server.base, log: (m) => logs.push(m) });
+  // As the daemon wires it (ORC-478): the factory's clone stands for `acme/app`.
+  const auth = cloneAuth((github) => forge.fetchEnv(github), new Map([[repo, 'acme/app']]))!;
   return { dir, repo, second, server, exec, lines, logs, forge, auth, url: `${server.base}/acme/app.git` };
 }
 
@@ -115,17 +117,17 @@ describe('the daemon fetches a private repository with the App installation toke
     const f = await fixture();
     const without = await fetchOrigin(f.exec, f.repo, { log: (m) => f.logs.push(m) }).then(() => 'fetched', (err: Error) => err.message);
     expect(without).toMatch(/the forge could not be read/);
-    await fetchOrigin(f.exec, f.repo, { auth: (r) => f.forge.fetchEnv(r), log: (m) => f.logs.push(m) });
+    await fetchOrigin(f.exec, f.repo, { auth: f.auth, log: (m) => f.logs.push(m) });
     expect(git(f.repo, 'rev-parse', 'refs/remotes/origin/main')).toBe(f.second);
     expect(f.server.auths).toContain(BASIC);
   });
 
   it('never puts the token in a command line, a log line, an error or the repository config', async () => {
     const f = await fixture();
-    await fetchOrigin(f.exec, f.repo, { auth: (r) => f.forge.fetchEnv(r), log: (m) => f.logs.push(m) });
+    await fetchOrigin(f.exec, f.repo, { auth: f.auth, log: (m) => f.logs.push(m) });
     // A failed fetch too: its error and its log line name the command, never the token.
     git(f.repo, 'remote', 'set-url', 'origin', `${f.server.base}/acme/gone.git`);
-    const err = await fetchOrigin(f.exec, f.repo, { auth: (r) => f.forge.fetchEnv(r), log: (m) => f.logs.push(m) }).catch((e: Error) => e);
+    const err = await fetchOrigin(f.exec, f.repo, { auth: f.auth, log: (m) => f.logs.push(m) }).catch((e: Error) => e);
     expect(err).toBeInstanceOf(Error);
     const said = [...f.lines, ...f.logs, (err as Error).message, String((err as Error).cause), readFileSync(join(f.repo, '.git', 'config'), 'utf8')].join('\n');
     expect(f.lines.some((l) => l.includes(' fetch '))).toBe(true);
@@ -133,20 +135,28 @@ describe('the daemon fetches a private repository with the App installation toke
     expect(said).not.toContain(Buffer.from(`x-access-token:${TOKEN}`).toString('base64'));
   });
 
-  it("leaves the machine's own credentials to an origin not on the App's forge, and to a repository the App has no token for", async () => {
+  it('never sends the token to an origin off the App\'s forge, whatever the clone\'s origin says', async () => {
     const f = await fixture();
-    git(f.repo, 'remote', 'set-url', 'origin', 'git@elsewhere.example:acme/app.git');
-    expect(await f.forge.fetchEnv(f.repo)).toEqual({});
-    git(f.repo, 'remote', 'set-url', 'origin', `${f.server.base}/acme/app.git`);
-    const noToken = new GitHubAppForge({ appId: '1', privateKey: privatePem, installationId: 7, http: tokenApi, exec: f.exec, webBase: f.server.base, resolveRepo: async () => ({ owner: 'acme', name: 'app' }), log: (m) => f.logs.push(m) });
-    expect(await noToken.fetchEnv(f.repo)).toEqual({});
+    // The same repository served elsewhere: another host for git, though the env holds the token (ORC-478).
+    const elsewhere = await privateServer(join(f.dir, 'srv'));
+    git(f.repo, 'remote', 'set-url', 'origin', `${elsewhere.base}/acme/app.git`);
+    await expect(fetchOrigin(f.exec, f.repo, { auth: f.auth, log: (m) => f.logs.push(m) })).rejects.toThrow(/the forge could not be read/);
+    expect(elsewhere.auths.length).toBeGreaterThan(0);
+    expect(elsewhere.auths).not.toContain(BASIC);
+  });
+
+  it("leaves the machine's own credentials to a clone that stands for no project, and to a repository the App has no token for", async () => {
+    const f = await fixture();
+    expect(await f.auth(join(f.dir, 'replayed'))).toEqual({});
+    const noToken = new GitHubAppForge({ appId: '1', privateKey: privatePem, installationId: 7, http: tokenApi, webBase: f.server.base, log: (m) => f.logs.push(m) });
+    expect(await noToken.fetchEnv('acme/app')).toEqual({});
     expect(f.logs.join('\n')).toMatch(/the machine's git credentials/);
   });
 });
 
 /** Each read of the forge the daemon makes, against the private server: what it gives back, given `auth` or not. */
 type Fixture = Awaited<ReturnType<typeof fixture>>;
-const READS: Record<string, (f: Fixture, auth?: GitAuth) => Promise<unknown>> = {
+const READS: Record<string, (f: Fixture, auth?: CloneAuth) => Promise<unknown>> = {
   "a launch's fetch (GitWorkspaces)": (f, auth) =>
     new GitWorkspaces({ root: join(f.dir, 'ws'), exec: f.exec, ...(auth ? { auth } : {}) }).prepare({ projectId: 'p', repoPath: f.repo, ticketId: 'T-1', title: 't', kind: 'trunk-readonly', runId: 'r1' }),
   "the repository's config, on its default branch (read before a launch)": (f, auth) => makeRepoConfig({ exec: f.exec, ...(auth ? { auth } : {}) })({ repoPath: f.repo }),
@@ -172,12 +182,12 @@ describe('when GitHub does not give the token (ORC-442)', () => {
     return { ok: false, status, headers: { get: () => null }, text: async () => JSON.stringify({ message: `answer ${status}` }) };
   };
   const forgeOn = (f: Fixture, http: HttpClient, now = () => Date.now()) =>
-    new GitHubAppForge({ appId: '1', privateKey: privatePem, installationId: 42, http, exec: f.exec, webBase: f.server.base, resolveRepo: async () => ({ owner: 'acme', name: 'app' }), log: (m) => f.logs.push(m), now });
+    new GitHubAppForge({ appId: '1', privateKey: privatePem, installationId: 42, http, webBase: f.server.base, log: (m) => f.logs.push(m), now });
 
   it('a 5xx fails the read as a transient error, never a read without the token', async () => {
     const f = await fixture();
     const forge = forgeOn(f, answering(502, []));
-    const err = await fetchOrigin(f.exec, f.repo, { auth: (r) => forge.fetchEnv(r) }).catch((e: Error) => e);
+    const err = await fetchOrigin(f.exec, f.repo, { auth: () => forge.fetchEnv('acme/app') }).catch((e: Error) => e);
     expect((err as Error).message).toMatch(/no installation token/);
     expect(isTransient(err)).toBe(true);
     expect(f.lines.some((l) => l.includes(' fetch '))).toBe(false);
@@ -188,12 +198,12 @@ describe('when GitHub does not give the token (ORC-442)', () => {
     const asked: string[] = [];
     let now = Date.parse('2026-11-21T10:00:00Z');
     const forge = forgeOn(f, answering(404, asked), () => now);
-    expect(await forge.fetchEnv(f.repo)).toEqual({});
-    expect(await forge.fetchEnv(f.repo)).toEqual({});
+    expect(await forge.fetchEnv('acme/app')).toEqual({});
+    expect(await forge.fetchEnv('acme/app')).toEqual({});
     expect(asked).toHaveLength(1);
     expect(f.logs.filter((l) => l.includes('no installation token'))).toHaveLength(1);
     now += 10 * 60_000 + 1;
-    await forge.fetchEnv(f.repo);
+    await forge.fetchEnv('acme/app');
     expect(asked).toHaveLength(2);
   });
 

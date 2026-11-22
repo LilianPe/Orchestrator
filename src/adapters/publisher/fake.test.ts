@@ -5,7 +5,7 @@ import { FakePublisher } from './fake.js';
 import type { PublishRequest } from './types.js';
 
 const req = (o: Partial<PublishRequest> = {}): PublishRequest => ({
-  projectId: 'p', repoPath: '/repo', ticketId: 'REL-1', runId: 'r1', worktree: '/w', branch: 'factory/rel-1-x', sha: 'aaa', title: 'feat: x', body: 'b', ...o,
+  projectId: 'p', github: 'acme/app', ticketId: 'REL-1', runId: 'r1', worktree: '/w', branch: 'factory/rel-1-x', sha: 'aaa', title: 'feat: x', body: 'b', ...o,
 });
 
 describePublisherContract('FakePublisher', () => {

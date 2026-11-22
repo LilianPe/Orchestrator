@@ -59,7 +59,7 @@ describe.skipIf(!enabled)('isolation 8: logical escape through the diff', () => 
       execFileSync('chmod', ['-R', '0777', repo]);
       return git(repo, 'rev-parse', 'HEAD');
     };
-    const publish = (sha: string) => publisher.publish({ projectId: 'p', repoPath, ticketId: 'ISO-8', runId: `iso8-${name}`, worktree: repo, branch: branch!, sha, title: 't', body: 'b' });
+    const publish = (sha: string) => publisher.publish({ projectId: 'p', github: 'acme/app', ticketId: 'ISO-8', runId: `iso8-${name}`, worktree: repo, branch: branch!, sha, title: 't', body: 'b' });
     const onForge = () => git(remote, 'for-each-ref', '--format=%(objectname)', `refs/heads/${branch!}`);
     return { root, repo, repoPath, forge, commitFile, publish, onForge };
   }

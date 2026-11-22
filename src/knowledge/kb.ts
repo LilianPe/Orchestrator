@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, posix } from 'node:path';
 import { execCmd, HARDENING, mustExec, type Exec, type ExecOpts } from '../adapters/exec.js';
-import type { GitAuth } from '../adapters/forge/types.js';
+import type { CloneAuth } from '../adapters/forge/types.js';
 import { fetchOrigin, originHeadOf, remoteGitEnv } from '../adapters/workspace/git-workspaces.js';
 import { within } from '../core/clean-verify.js';
 import { unfenced } from '../core/prompt.js';
@@ -47,14 +47,14 @@ export class KnowledgeBase {
   /** When a pull last brought the clone up to its remote: a write within `freshMs` of it pulls no more. */
   private pulledAt: number | undefined;
   private freshMs: number;
-  private auth: GitAuth | undefined;
+  private auth: CloneAuth | undefined;
   /** Whether the clone has a remote, asked once: the daemon does not change it. */
   private remote: Promise<boolean> | undefined;
 
   constructor(
     readonly repoPath: string,
     /** `auth`: what reads and pushes a private remote (ORC-442), the App's token, in git's environment alone. */
-    o: { exec?: Exec; freshMs?: number; auth?: GitAuth } = {},
+    o: { exec?: Exec; freshMs?: number; auth?: CloneAuth } = {},
   ) {
     const exec = o.exec ?? execCmd;
     this.git = (cmd, args, opts) => exec(cmd, [...HARDENING.flatMap((c) => ['-c', c]), ...args], opts);

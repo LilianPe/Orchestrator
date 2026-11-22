@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
+import { projectGithub } from '../app/project-github.js';
 import { repoRoot } from '../app/root.js';
 import { FactoryYmlError } from '../config/factory-yml.js';
 import { GITHUB_APP_SECRETS, LINEAR_SECRETS, loadSealedFactoryYml } from '../config/server-secrets.js';
@@ -20,9 +21,10 @@ export interface BaselineOptions {
   /** Linear and GitHub, as the adapters read them. */
   sources: {
     completedIssues(teamKey: string, since: number, until: number): Promise<CompletedIssue[]>;
-    mergedPrs(repoPath: string, since: number, until: number): Promise<MergedPr[]>;
+    mergedPrs(github: string, since: number, until: number): Promise<MergedPr[]>;
   };
-  project: { id: string; repoPath: string; teamKey: string };
+  /** `github`: its repository on GitHub, `owner/name` (ORC-478). */
+  project: { id: string; github: string; teamKey: string };
   /** The factory's start: the baseline covers the 90 days before it. */
   start: number;
   replace: boolean;
@@ -68,7 +70,7 @@ export async function runBaseline(o: BaselineOptions): Promise<number> {
     o.print(`The start ${day(o.start)} is still to come: the baseline is the ${BASELINE_DAYS} days before the factory started.`);
     return 1;
   }
-  const [issues, prs] = await Promise.all([o.sources.completedIssues(o.project.teamKey, period.since, period.until), o.sources.mergedPrs(o.project.repoPath, period.since, period.until)]);
+  const [issues, prs] = await Promise.all([o.sources.completedIssues(o.project.teamKey, period.since, period.until), o.sources.mergedPrs(o.project.github, period.since, period.until)]);
   const baseline = computeBaseline(o.project.id, period, issues, prs, o.now);
   const span = `${day(period.since)} → ${day(period.until)}`;
   if (!(await o.store.putBaseline(baseline, o.replace))) {
@@ -114,13 +116,20 @@ export async function runBaselineCommand(home: string, args: readonly string[]):
     console.log(forge);
     return 1;
   }
+  let github;
+  try {
+    ({ github } = await projectGithub({ repoPath: project.repoPath, teamKey: project.linearTeamKey, repos: yml?.repos }));
+  } catch (err) {
+    console.log(`${project.id}: ${(err as Error).message}`);
+    return 1;
+  }
   // The daemon migrates the schema; this only writes rows.
   const store = await openStore({ env: process.env, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
   try {
     return await runBaseline({
       store,
       sources: { completedIssues: (...a) => tracker.completedIssues(...a), mergedPrs: (...a) => forge.mergedPrs(...a) },
-      project: { id: project.id, repoPath: project.repoPath, teamKey: project.linearTeamKey },
+      project: { id: project.id, github, teamKey: project.linearTeamKey },
       start,
       replace: !!values.replace,
       now: Date.now(),

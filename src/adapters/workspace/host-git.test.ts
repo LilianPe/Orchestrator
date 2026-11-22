@@ -5,7 +5,6 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { makeOriginUrl } from '../../app/repo-variables.js';
 import { GitWorkspaces, originHead } from './git-workspaces.js';
 import { execCmd } from '../exec.js';
 
@@ -371,11 +370,10 @@ describe('what an agent wrote, under the commands the factory runs on the host (
       expect(f.fired()).toEqual([]);
     });
 
-    it("the read of the forge's URL and of the default branch", async () => {
+    it('the read of the default branch', async () => {
       const f = fixture();
       const { path } = await f.ws.prepare(req(f.repo));
       planted(f, reach(path));
-      await makeOriginUrl()({ repoPath: f.repo });
       await originHead(execCmd, f.repo);
       expect(f.fired()).toEqual([]);
     });

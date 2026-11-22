@@ -17,13 +17,13 @@ function withStore(issues: CompletedIssue[] = [], prs: MergedPr[] = []) {
       asked.push({ teamKey, since, until });
       return issues;
     },
-    mergedPrs: async (repoPath, since, until) => {
-      asked.push({ repoPath, since, until });
+    mergedPrs: async (github, since, until) => {
+      asked.push({ github, since, until });
       return prs;
     },
   };
   const baseline = (o: Partial<BaselineOptions> = {}) =>
-    runBaseline({ store, sources, project: { id: 'p', repoPath: '/repo', teamKey: 'ORC' }, start: START, replace: false, now: NOW, print: (l) => void lines.push(l), ...o });
+    runBaseline({ store, sources, project: { id: 'p', github: 'acme/app', teamKey: 'ORC' }, start: START, replace: false, now: NOW, print: (l) => void lines.push(l), ...o });
   return { store, lines, asked, baseline };
 }
 
@@ -35,7 +35,7 @@ describe('factory baseline (ORC-230)', () => {
     );
     expect(await baseline()).toBe(0);
     const period = { since: START - 90 * DAY, until: START };
-    expect(asked).toEqual([{ teamKey: 'ORC', ...period }, { repoPath: '/repo', ...period }]);
+    expect(asked).toEqual([{ teamKey: 'ORC', ...period }, { github: 'acme/app', ...period }]);
     const stored = await store.latestBaseline();
     expect(stored).toMatchObject({ projectId: 'p', ...period, computedAt: NOW });
     expect(Object.fromEntries(Object.entries(stored!.measures).map(([m, v]) => [m, v.value]))).toEqual({ delivered: 1, lead_time: 2 * DAY, tokens_per_merged: null, first_try: 1 });

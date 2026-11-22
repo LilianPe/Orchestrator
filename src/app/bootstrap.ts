@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { serve } from '@hono/node-server';
 import { GitHubAppForge } from '../adapters/forge/github-app.js';
-import { createGithubIngest, githubMapContext, githubRepoOf } from '../adapters/forge/github-ingest.js';
+import { createGithubIngest, githubMapContext } from '../adapters/forge/github-ingest.js';
 import { githubAuthorizeUrl, githubSignIn } from '../adapters/forge/github-login.js';
 import { GithubReconciler } from '../adapters/forge/github-reconcile.js';
 import { NoForge } from '../adapters/forge/no-forge.js';
@@ -37,6 +37,7 @@ import { claudeAccountReader, disabledControls, readCapsOf, specPublicationOf, s
 import { loadSealedFactoryYml } from '../config/server-secrets.js';
 import { startRefusals, type StartChecks } from '../config/start-refusals.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../config/repo-config.js';
+import { cloneAuth, httpsGithub, projectGithub } from './project-github.js';
 import { makeDryRunFiles, makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint } from './repo-variables.js';
 import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens, sealSecretsAtRest, validatorWarnings } from '../config/instance.js';
 import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
@@ -156,14 +157,25 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const workflow = defaultWorkflow(settings);
   // The replay of closed tickets (ORC-231): driven by the fantome's own steps, with the instance's step settings.
   const ghost = presetWorkflow(fantome, settings);
-  const projects: ProjectRuntime[] = instance.projects.map((p) => ({
+  // Each project's repository on GitHub, resolved once (ORC-478): a project whose origin is not on GitHub stops the start here.
+  const [origins, knowledgeGithub] = await Promise.all([
+    Promise.all(instance.projects.map((p) => projectGithub({ repoPath: p.repoPath, teamKey: p.linearTeamKey, repos: yml?.repos }).catch((err: Error) => {
+      throw new Error(`${p.id}: ${err.message}`);
+    }))),
+    instance.knowledge ? httpsGithub(instance.knowledge.repoPath) : undefined,
+  ]);
+  const projects: ProjectRuntime[] = instance.projects.map((p, i) => ({
     id: p.id,
     repoPath: p.repoPath,
+    github: origins[i]!.github,
     teamKey: p.linearTeamKey,
     // The replay of closed tickets (ORC-231): nothing of the project leaves the factory.
     workflow: isFantome(p) ? ghost : workflow,
     ...(projectEffects(p) ? { effects: 'none' as const } : {}),
   }));
+  // The clones fetch by their path until ORC-471 part 2: each project's, and the knowledge base's, fetched over HTTPS from GitHub.
+  const clones = new Map(projects.flatMap((p, i) => (origins[i]!.https ? [[p.repoPath, p.github] as const] : [])));
+  if (knowledgeGithub) clones.set(instance.knowledge!.repoPath, knowledgeGithub);
   // Said at each start, not only by `factory doctor`.
   for (const p of projects) for (const file of ignoredWorkflowFiles(p.repoPath)) log(`${p.id}: ${ignoredWorkflowWarning(file)}`);
   for (const line of validatorWarnings(instance.projects)) log(line);
@@ -257,7 +269,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const appForge = githubApp ? new GitHubAppForge({ ...githubApp, log }) : undefined;
     // The daemon's own git reads a private repository with the App's token (ORC-442); without the App, with the machine's credentials.
     const gitAuth = appForge?.fetchEnv.bind(appForge);
-    const workspaces = new GitWorkspaces({ root: paths.workspaces, log, auth: gitAuth });
+    const clonesAuth = cloneAuth(gitAuth, clones);
+    const workspaces = new GitWorkspaces({ root: paths.workspaces, log, auth: clonesAuth });
     const forge = appForge ?? new NoForge();
     if (githubApp) {
       log(
@@ -277,13 +290,14 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       budgets: yml?.budgets,
     });
     for (const p of problems) log(`Invalid configuration, no run is launched until it is fixed and the factory restarted: ${p}`);
-    const kb = instance.knowledge ? new KnowledgeBase(instance.knowledge.repoPath, { auth: gitAuth }) : undefined;
+    const kb = instance.knowledge ? new KnowledgeBase(instance.knowledge.repoPath, { auth: clonesAuth }) : undefined;
     // The roles of a human event's signed actor (ORC-186): Linear team members and GitHub rights, read
     // again past their TTL, and the designations of factory.yml.
     const roles = new CachedRoleResolver({
       projects: (id) => {
-        const p = instance.projects.find((x) => x.id === id);
-        return p && { teamKey: p.linearTeamKey, repoPath: p.repoPath, maintainers: [], validators: [], githubLogins: {}, ...p.authz };
+        const i = instance.projects.findIndex((x) => x.id === id);
+        const p = instance.projects[i];
+        return p && { teamKey: p.linearTeamKey, github: projects[i]!.github, maintainers: [], validators: [], githubLogins: {}, ...p.authz };
       },
       team: {
         teamMembers: (teamKey) => (linearTracker ? linearTracker.teamMembers(teamKey) : Promise.reject(new Error('Linear not connected'))),
@@ -295,7 +309,6 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     let reconcileProject: (p: ProjectRuntime) => Promise<void> = async () => {};
     // Before any run of this process: `verify` reads the base branch at this URL, whatever an agent writes in the repository's config (ORC-151).
     const originUrl = makeOriginUrl();
-    if (sandboxes) await Promise.all(projects.map((p) => originUrl(p).catch((err: Error) => log(`Warning: ${p.id}: unreadable origin, verify will read it again: ${err.message}`))));
     // What `factory ghost start` reads before a replay (ORC-376): a replay runs with sandboxes only.
     await store.setMeta(SANDBOXES_META, sandboxes ? '1' : '0');
     const replays = new Replays({
@@ -350,7 +363,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       roles,
       repoVariables: makeRepoVariables({ yml, log }),
       readSecrets: (refs) => repoSecrets.read(refs),
-      repoConfig: makeRepoConfig({ log, auth: gitAuth }),
+      repoConfig: makeRepoConfig({ log, auth: clonesAuth }),
       originUrl,
       gitAuth,
       fullReadPaths: (t) => Object.keys(t.frozenTests?.files ?? {}),
@@ -441,7 +454,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       secret: () => githubSecret,
       accept,
       log,
-      ctx: githubMapContext({ store, forge, projects, repoOf: githubRepoOf(), now: () => clock.now(), factoryAppId: githubApp?.appId }),
+      ctx: githubMapContext({ store, forge, projects, now: () => clock.now(), factoryAppId: githubApp?.appId }),
     });
 
     const oauthStates = new Set<string>();

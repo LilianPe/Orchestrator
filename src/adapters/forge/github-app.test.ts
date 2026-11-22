@@ -2,7 +2,6 @@ import { ArtifactsRefused, NoCommitsBetween, ReviewLinesRefused } from './types.
 import { generateKeyPairSync, verify } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { describeForgeContract } from '../../../test/contracts/forge.contract.js';
-import type { Exec } from '../exec.js';
 import {
   createAppJwt,
   GitHubAppForge,
@@ -68,7 +67,7 @@ function checksRoutes(runs: unknown[], statuses: unknown[]): Route[] {
 
 function makeForge(
   routes: Route[],
-  opts: { now?: () => number; calls?: Call[]; log?: (m: string) => void; exec?: Exec; installationId?: string | number } = {},
+  opts: { now?: () => number; calls?: Call[]; log?: (m: string) => void; installationId?: string | number } = {},
 ) {
   const calls = opts.calls ?? [];
   const forge = new GitHubAppForge({
@@ -76,10 +75,8 @@ function makeForge(
     privateKey: privatePem,
     installationId: opts.installationId,
     http: fakeHttp(routes, calls),
-    resolveRepo: async () => ({ owner: 'acme', name: 'app' }),
     now: opts.now ?? (() => NOW),
     log: opts.log,
-    exec: opts.exec,
   });
   return { forge, calls };
 }
@@ -153,7 +150,7 @@ describeForgeContract('GitHubAppForge (scripted fetch)', () => ({
     }),
     { installationId: 42 },
   ).forge,
-  repoPath: '/repo',
+  github: 'acme/app',
   missingBranch: 'factory/rel-404',
   pr: { branch: 'factory/rel-1-x', number: 7 },
   unresolved: [{ author: 'alice', body: 'src/a.ts:3 — renommer', at: Date.parse('2026-10-10T10:00:00Z'), source: 'review' }],
@@ -164,7 +161,6 @@ describeForgeContract('GitHubAppForge (scripted fetch)', () => ({
     http: async () => {
       throw new TypeError('fetch failed');
     },
-    resolveRepo: async () => ({ owner: 'acme', name: 'app' }),
     now: () => NOW,
   }),
   unreadableChecks: 'factory/rel-2-y',
@@ -211,49 +207,47 @@ describe('GitHubAppForge installation tokens', () => {
       { now: () => now, calls },
     );
 
-    await forge.findPr('/repo', 'factory/REL-1');
+    await forge.findPr('acme/app', 'factory/REL-1');
     const tokenCall = calls.find((c) => c.url.endsWith('/access_tokens'))!;
     expect(tokenCall.method).toBe('POST');
     expect(tokenCall.body).toEqual({ repositories: ['app'] });
     const appJwt = tokenCall.headers.authorization!.replace(/^Bearer /, '');
     expect(JSON.parse(Buffer.from(appJwt.split('.')[1]!, 'base64url').toString())).toMatchObject({ iss: '123' });
 
-    await forge.findPr('/repo', 'factory/REL-1');
+    await forge.findPr('acme/app', 'factory/REL-1');
     expect(calls.filter((c) => c.url.endsWith('/access_tokens'))).toHaveLength(1);
 
     now = NOW + 30 * 60_000;
-    await forge.findPr('/repo', 'factory/REL-1');
+    await forge.findPr('acme/app', 'factory/REL-1');
     expect(calls.filter((c) => c.url.endsWith('/access_tokens'))).toHaveLength(1);
 
     // GitHub answered with a 2 h expiry: the forge caps it at 1 h, so the cache is already expired here.
     now = NOW + 61 * 60_000;
-    await forge.findPr('/repo', 'factory/REL-1');
+    await forge.findPr('acme/app', 'factory/REL-1');
     expect(calls.filter((c) => c.url.endsWith('/access_tokens'))).toHaveLength(2);
   });
 
   it('skips installation discovery when installationId is configured', async () => {
     const calls: Call[] = [];
     const { forge } = makeForge([tokenRoute('99'), pullsRoute([])], { calls, installationId: 99 });
-    await forge.findPr('/repo', 'factory/REL-1');
+    await forge.findPr('acme/app', 'factory/REL-1');
     expect(calls.some((c) => c.url.endsWith('/installation'))).toBe(false);
     expect(calls.find((c) => c.url.endsWith('/access_tokens'))!.body).toEqual({ repositories: ['app'] });
   });
 
-  it('resolves owner/name with git, never gh', async () => {
+  it('calls the repository its owner/name names, and none for a name that is not one (ORC-478)', async () => {
     const calls: Call[] = [];
-    const exec: Exec = async (cmd) => {
-      expect(cmd).toBe('git');
-      return { stdout: 'git@github.com:acme/app.git\n', stderr: '', code: 0 };
-    };
     const forge = new GitHubAppForge({
       appId: '123',
       privateKey: privatePem,
       http: fakeHttp([installationRoute(), tokenRoute(42), pullsRoute([])], calls),
-      exec,
       now: () => NOW,
     });
-    await forge.findPr('/repo', 'factory/REL-1');
+    await forge.findPr('acme/app', 'factory/REL-1');
     expect(calls.some((c) => c.url.startsWith('https://api.github.com/repos/acme/app/pulls'))).toBe(true);
+    const asked = calls.length;
+    for (const github of ['/repo', 'acme', 'acme/app/x', '/app']) await expect(forge.findPr(github, 'factory/REL-1')).rejects.toThrow(/owner\/name/);
+    expect(calls).toHaveLength(asked);
   });
 
   it('rejects an invalid private key without echoing it', () => {
@@ -323,7 +317,7 @@ describe('GitHubAppForge.findPr', () => {
       pullsRoute([openPr()]),
       ...checksRoutes(runs, statuses),
     ]);
-    expect(await forge.findPr('/repo', 'factory/REL-1')).toEqual({
+    expect(await forge.findPr('acme/app', 'factory/REL-1')).toEqual({
       number: 7,
       url: 'https://github.com/acme/app/pull/7',
       state: 'OPEN',
@@ -337,7 +331,7 @@ describe('GitHubAppForge.findPr', () => {
 
   it('returns undefined without a PR', async () => {
     const { forge } = makeForge([installationRoute(), tokenRoute(42), pullsRoute([])]);
-    expect(await forge.findPr('/repo', 'factory/REL-1')).toBeUndefined();
+    expect(await forge.findPr('acme/app', 'factory/REL-1')).toBeUndefined();
   });
 
   it('reports merged PRs without fetching checks', async () => {
@@ -350,7 +344,7 @@ describe('GitHubAppForge.findPr', () => {
       ],
       { calls },
     );
-    expect(await forge.findPr('/repo', 'factory/REL-1')).toMatchObject({ state: 'MERGED', checks: 'none', mergeSha: 'm1', mergedAt: Date.parse('2026-10-22T09:00:00Z') });
+    expect(await forge.findPr('acme/app', 'factory/REL-1')).toMatchObject({ state: 'MERGED', checks: 'none', mergeSha: 'm1', mergedAt: Date.parse('2026-10-22T09:00:00Z') });
     expect(calls.some((c) => c.url.includes('/check-runs'))).toBe(false);
   });
 
@@ -370,7 +364,7 @@ describe('GitHubAppForge.findPr', () => {
     ['an entry that is not an object', { body: { check_runs: [null] } }, /not a list of check runs/],
     ['an entry without a status', { body: { check_runs: [{ id: 1, name: 'ci', conclusion: 'success' }] } }, /not a list of check runs/],
   ])('rejects, saying it is unreadable, check runs answered as %s: never none, never a raw TypeError', async (_case, answer, message) => {
-    const err = await answeringRuns(answer).findPr('/repo', 'factory/REL-1').catch((e: unknown) => e);
+    const err = await answeringRuns(answer).findPr('acme/app', 'factory/REL-1').catch((e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
     expect(err).not.toBeInstanceOf(TypeError);
     expect((err as Error).message).toMatch(message);
@@ -380,18 +374,18 @@ describe('GitHubAppForge.findPr', () => {
     ['an answer without its list', { body: { state: 'pending' } }],
     ['an entry without a state', { body: { statuses: [{ context: 'legacy-ci' }] } }],
   ])('rejects, saying it is unreadable, commit statuses answered as %s', async (_case, answer) => {
-    await expect(answeringRuns({ body: { check_runs: [] } }, answer).findPr('/repo', 'factory/REL-1')).rejects.toThrow(
+    await expect(answeringRuns({ body: { check_runs: [] } }, answer).findPr('acme/app', 'factory/REL-1')).rejects.toThrow(
       /\/status: unreadable answer, not a list of commit statuses: /,
     );
   });
 
   it('cuts a long unreadable answer in its error', async () => {
-    await expect(answeringRuns({ raw: `<html>${'x'.repeat(1000)}` }).findPr('/repo', 'factory/REL-1')).rejects.toThrow(/: "<html>x{194}"…$/);
+    await expect(answeringRuns({ raw: `<html>${'x'.repeat(1000)}` }).findPr('acme/app', 'factory/REL-1')).rejects.toThrow(/: "<html>x{194}"…$/);
   });
 
   it('rejects, saying it is unreadable, a list of PRs that is not one: never read as no PR', async () => {
     const { forge } = makeForge([tokenRoute(42), pullsRoute({ message: 'ok' })], { installationId: 42 });
-    await expect(forge.findPr('/repo', 'factory/REL-1')).rejects.toThrow(/pulls: unreadable answer, not a list of pull requests: "\{\\"message\\":\\"ok\\"\}"$/);
+    await expect(forge.findPr('acme/app', 'factory/REL-1')).rejects.toThrow(/pulls: unreadable answer, not a list of pull requests: "\{\\"message\\":\\"ok\\"\}"$/);
   });
 
   it.each([
@@ -400,7 +394,7 @@ describe('GitHubAppForge.findPr', () => {
     ['an entry without a number', [openPr({ number: undefined })]],
   ])('rejects, saying it is unreadable, a list of PRs with %s: never a raw TypeError', async (_case, body) => {
     const { forge } = makeForge([tokenRoute(42), pullsRoute(body)], { installationId: 42 });
-    const err = await forge.findPr('/repo', 'factory/REL-1').catch((e: unknown) => e);
+    const err = await forge.findPr('acme/app', 'factory/REL-1').catch((e: unknown) => e);
     expect(err).not.toBeInstanceOf(TypeError);
     expect((err as Error).message).toMatch(/pulls: unreadable answer, not a list of pull requests: /);
   });
@@ -421,7 +415,7 @@ describe('GitHubAppForge.findPr', () => {
           ? { body: { total_count: 101, statuses: page(url) === 1 ? Array.from({ length: 100 }, (_, i) => ok(i)) : [{ context: 'late-ci', state: 'error' }] } }
           : undefined,
     ], { installationId: 42 });
-    expect(await forge.findPr('/repo', 'factory/REL-1')).toMatchObject({ checks: 'fail', failedChecks: ['late', 'late-ci'] });
+    expect(await forge.findPr('acme/app', 'factory/REL-1')).toMatchObject({ checks: 'fail', failedChecks: ['late', 'late-ci'] });
     for (const endpoint of ['check-runs', 'status']) {
       expect(calls.filter((c) => new URL(c.url).pathname.endsWith(`/${endpoint}`)).map((c) => new URL(c.url).searchParams.get('per_page') + ':' + page(new URL(c.url)))).toEqual(['100:1', '100:2']);
     }
@@ -445,7 +439,7 @@ describe('GitHubAppForge.findPr', () => {
           : undefined,
       (url) => (url.pathname === '/repos/acme/app/commits/abc123/status' ? { body: { statuses: [] } } : undefined),
     ], { installationId: 42 });
-    expect(await forge.findPr('/repo', 'factory/REL-1')).toMatchObject({ checks: 'fail', failedChecks: ['factory/lint'] });
+    expect(await forge.findPr('acme/app', 'factory/REL-1')).toMatchObject({ checks: 'fail', failedChecks: ['factory/lint'] });
   });
 
   it('rejects, past ten pages, check runs a server answers the same whatever the page: never loops', async () => {
@@ -456,7 +450,7 @@ describe('GitHubAppForge.findPr', () => {
       (url) => (url.pathname === '/repos/acme/app/commits/abc123/check-runs' ? { body: { total_count: 100, check_runs: full } } : undefined),
       (url) => (url.pathname === '/repos/acme/app/commits/abc123/status' ? { body: { statuses: [] } } : undefined),
     ], { installationId: 42 });
-    await expect(forge.findPr('/repo', 'factory/REL-1')).rejects.toThrow(/check-runs: more than 1000 entries, never read as complete$/);
+    await expect(forge.findPr('acme/app', 'factory/REL-1')).rejects.toThrow(/check-runs: more than 1000 entries, never read as complete$/);
     expect(calls.filter((c) => c.url.includes('/check-runs'))).toHaveLength(11);
   });
 
@@ -471,13 +465,13 @@ describe('GitHubAppForge.findPr', () => {
           : undefined,
       (url) => (url.pathname === '/repos/acme/app/commits/abc123/status' ? { body: { statuses: [] } } : undefined),
     ], { installationId: 42 });
-    expect(await forge.findPr('/repo', 'factory/REL-1')).toMatchObject({ checks: 'pass' });
+    expect(await forge.findPr('acme/app', 'factory/REL-1')).toMatchObject({ checks: 'pass' });
     expect(calls.filter((c) => c.url.includes('/check-runs'))).toHaveLength(11);
   });
 
   it('reports closed PRs', async () => {
     const { forge } = makeForge([installationRoute(), tokenRoute(42), pullsRoute([openPr({ state: 'closed' })])]);
-    expect(await forge.findPr('/repo', 'factory/REL-1')).toMatchObject({ state: 'CLOSED', checks: 'none' });
+    expect(await forge.findPr('acme/app', 'factory/REL-1')).toMatchObject({ state: 'CLOSED', checks: 'none' });
   });
 });
 
@@ -501,7 +495,7 @@ describe('GitHubAppForge.unresolvedReviewComments', () => {
       ],
       { calls },
     );
-    expect(await forge.unresolvedReviewComments('/repo', 7)).toEqual([
+    expect(await forge.unresolvedReviewComments('acme/app', 7)).toEqual([
       { author: 'lilian', body: 'src/a.ts:12 — Renomme ça', at: Date.parse('2026-10-10T10:00:00Z'), source: 'review' },
     ]);
     const gql = calls.find((c) => c.url.endsWith('/graphql'))!;
@@ -512,7 +506,7 @@ describe('GitHubAppForge.unresolvedReviewComments', () => {
 
   it.each([['not JSON', '<html>oops</html>'], ['empty', '']])('rejects, saying it is unreadable, a GraphQL answer %s', async (_case, raw) => {
     const { forge } = makeForge([tokenRoute(42), (url) => (url.pathname === '/graphql' ? { raw } : undefined)], { installationId: 42 });
-    await expect(forge.unresolvedReviewComments('/repo', 7)).rejects.toThrow(/graphql: unreadable answer/);
+    await expect(forge.unresolvedReviewComments('acme/app', 7)).rejects.toThrow(/graphql: unreadable answer/);
   });
 
   it.each([
@@ -525,7 +519,7 @@ describe('GitHubAppForge.unresolvedReviewComments', () => {
     ['a thread whose comments have no pageInfo', { data: { repository: { pullRequest: { reviewThreads: conn([{ id: 't', isResolved: false, comments: { nodes: [] } }]) } } } }],
   ])('rejects, saying it is unreadable, never a raw TypeError, review threads answered with %s', async (_case, answer) => {
     const { forge } = makeForge([tokenRoute(42), (url) => (url.pathname === '/graphql' ? { body: answer } : undefined)], { installationId: 42 });
-    const err = await forge.unresolvedReviewComments('/repo', 7).catch((e: unknown) => e);
+    const err = await forge.unresolvedReviewComments('acme/app', 7).catch((e: unknown) => e);
     expect(err).not.toBeInstanceOf(TypeError);
     expect((err as Error)?.message).toMatch(/POST \/graphql: unreadable answer, not a GraphQL answer with review threads: /);
   });
@@ -553,7 +547,7 @@ describe('GitHubAppForge.unresolvedReviewComments', () => {
       return { body: { data: { node: { comments: conn([comment('alice', 'toujours faux, gère aussi null', '2026-10-10T11:00:00Z')]) } } } };
     };
     const { forge } = makeForge([installationRoute(), tokenRoute(42), graphql], { calls });
-    expect(await forge.unresolvedReviewComments('/repo', 7)).toEqual([
+    expect(await forge.unresolvedReviewComments('acme/app', 7)).toEqual([
       { author: 'alice', body: 'src/a.ts:12 — gère null', at: Date.parse('2026-10-10T10:00:00Z'), source: 'review' },
       { author: 'alice', body: 'src/a.ts:12 — toujours faux, gère aussi null', at: Date.parse('2026-10-10T11:00:00Z'), source: 'review' },
       { author: 'carol', body: 'src/b.ts — renomme', at: Date.parse('2026-10-10T12:00:00Z'), source: 'review' },
@@ -570,7 +564,7 @@ describe('GitHubAppForge.unresolvedReviewComments', () => {
     const calls: Call[] = [];
     const comments = [comment('alice', 'gère null', '2026-10-10T10:00:00Z'), comment('ci', 'CI failed', '2026-10-10T10:05:00Z', 'src/a.ts', 12, 'Bot'), comment('bob', 'oui', '2026-10-10T10:10:00Z')];
     const { forge } = makeForge([installationRoute(), tokenRoute(42), (url) => (url.pathname === '/graphql' ? { body: threadsAnswer([thread(false, comments)]) } : undefined)], { calls });
-    expect((await forge.unresolvedReviewComments('/repo', 7)).map((i) => i.author)).toEqual(['alice', 'bob']);
+    expect((await forge.unresolvedReviewComments('acme/app', 7)).map((i) => i.author)).toEqual(['alice', 'bob']);
     expect(JSON.stringify(calls.find((c) => c.url.endsWith('/graphql'))!.body)).toContain('author { __typename login }');
   });
 
@@ -582,7 +576,7 @@ describe('GitHubAppForge.unresolvedReviewComments', () => {
         const more = threadsAnswer([thread(false, [comment('alice', 'a', '2026-10-10T10:00:00Z')], 'more', 'T1')]);
         return { body: (body as { query: string }).query.includes('reviewThreads') ? more : { data: { node } } };
       };
-    const read = (node: unknown) => makeForge([tokenRoute(42), graphql(node)], { installationId: 42 }).forge.unresolvedReviewComments('/repo', 7);
+    const read = (node: unknown) => makeForge([tokenRoute(42), graphql(node)], { installationId: 42 }).forge.unresolvedReviewComments('acme/app', 7);
     await expect(read(null)).rejects.toThrow(/review thread T1 not found/);
     await expect(read({ comments: { nodes: [] } })).rejects.toThrow(/unreadable answer, not a GraphQL answer with a review thread's comments/);
   });
@@ -593,7 +587,7 @@ describe('GitHubAppForge.unresolvedReviewComments', () => {
       tokenRoute(42),
       (url) => (url.pathname === '/graphql' ? { body: { errors: [{ message: 'Resource not accessible' }] } } : undefined),
     ]);
-    await expect(forge.unresolvedReviewComments('/repo', 7)).rejects.toThrow(/Resource not accessible/);
+    await expect(forge.unresolvedReviewComments('acme/app', 7)).rejects.toThrow(/Resource not accessible/);
   });
 });
 
@@ -603,7 +597,7 @@ describe('GitHubAppForge secrets', () => {
     const { forge } = makeForge([installationRoute(), tokenRoute(42, 'ghs_very_secret'), pullsRoute([])], {
       log: (m) => logs.push(m),
     });
-    await forge.findPr('/repo', 'factory/REL-1');
+    await forge.findPr('acme/app', 'factory/REL-1');
     expect(logs.length).toBeGreaterThan(0);
     expect(logs.join('\n')).not.toContain('ghs_very_secret');
   });
@@ -614,7 +608,7 @@ describe('GitHubAppForge secrets', () => {
       tokenRoute(42, 'ghs_very_secret'),
       (url) => (url.pathname === '/repos/acme/app/pulls' ? { status: 500, body: { message: 'boom' } } : undefined),
     ]);
-    const error = await forge.findPr('/repo', 'factory/REL-1').catch((e: Error) => e);
+    const error = await forge.findPr('acme/app', 'factory/REL-1').catch((e: Error) => e);
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain('boom');
     expect((error as Error).message).not.toContain('ghs_very_secret');
@@ -623,21 +617,21 @@ describe('GitHubAppForge secrets', () => {
   it('never puts the installation token in the error of a cut token answer', async () => {
     const cut: Route = (url) =>
       url.pathname === '/app/installations/42/access_tokens' ? { status: 201, raw: '{"token":"ghs_very_secret","expires_at":"2026-' } : undefined;
-    const error = await makeForge([installationRoute(), cut]).forge.findPr('/repo', 'factory/REL-1').catch((e: Error) => e);
+    const error = await makeForge([installationRoute(), cut]).forge.findPr('acme/app', 'factory/REL-1').catch((e: Error) => e);
     expect((error as Error).message).toMatch(/access_tokens: unreadable answer, not JSON$/);
     expect((error as Error).message).not.toContain('ghs_very_secret');
   });
 
   it('rejects a token answer without its token, saying it is unreadable, with no part of the answer in the error', async () => {
     const odd: Route = (url) => (url.pathname === '/app/installations/42/access_tokens' ? { status: 201, body: { tokn: 'ghs_very_secret' } } : undefined);
-    const error = await makeForge([installationRoute(), odd]).forge.findPr('/repo', 'factory/REL-1').catch((e: Error) => e);
+    const error = await makeForge([installationRoute(), odd]).forge.findPr('acme/app', 'factory/REL-1').catch((e: Error) => e);
     expect((error as Error).message).toMatch(/access_tokens: unreadable answer, not an installation token$/);
     expect((error as Error).message).not.toContain('ghs_very_secret');
   });
 
   it('rejects an installation answer without its id, saying it is unreadable', async () => {
     const odd: Route = (url) => (url.pathname === '/repos/acme/app/installation' ? { body: { id: '42' } } : undefined);
-    await expect(makeForge([odd]).forge.findPr('/repo', 'factory/REL-1')).rejects.toThrow(/installation: unreadable answer, not an installation: /);
+    await expect(makeForge([odd]).forge.findPr('acme/app', 'factory/REL-1')).rejects.toThrow(/installation: unreadable answer, not an installation: /);
   });
 });
 
@@ -649,29 +643,29 @@ describe('GitHubAppForge.mergePr (ORC-148)', () => {
 
   it('merges with the expected head sha, so GitHub refuses a head that moved', async () => {
     const { forge, calls } = makeForge([tokenRoute(42), pullRoute(openPr()), repoRoute(), mergeRoute(200, { merged: true, sha: 'm1' })], { installationId: 42 });
-    expect(await forge.mergePr('/repo', 7, 'abc123')).toEqual({ merged: true, deduplicated: false });
+    expect(await forge.mergePr('acme/app', 7, 'abc123')).toEqual({ merged: true, deduplicated: false });
     expect(calls.find((c) => c.method === 'PUT')!.body).toEqual({ sha: 'abc123', merge_method: 'merge' });
   });
 
   it('merges with a method the repository allows: squash when merge commits are off', async () => {
     const { forge, calls } = makeForge([tokenRoute(42), pullRoute(openPr()), repoRoute({ allow_merge_commit: false }), mergeRoute(200, { merged: true })], { installationId: 42 });
-    await forge.mergePr('/repo', 7, 'abc123');
+    await forge.mergePr('acme/app', 7, 'abc123');
     expect(calls.find((c) => c.method === 'PUT')!.body).toEqual({ sha: 'abc123', merge_method: 'squash' });
   });
 
   it('answers a head moved since the review as a refusal, not an error', async () => {
     const { forge } = makeForge([tokenRoute(42), pullRoute(openPr({ head: { ref: 'factory/REL-1', sha: 'new999' } })), repoRoute(), mergeRoute(409, { message: 'Head branch was modified.' })], { installationId: 42 });
-    expect(await forge.mergePr('/repo', 7, 'abc123')).toEqual({ merged: false, reason: 'head_moved' });
+    expect(await forge.mergePr('acme/app', 7, 'abc123')).toEqual({ merged: false, reason: 'head_moved' });
   });
 
   it('answers a PR GitHub will not merge (conflict, required checks) as a refusal with its message', async () => {
     const { forge } = makeForge([tokenRoute(42), pullRoute(openPr()), repoRoute(), mergeRoute(405, { message: 'Pull Request is not mergeable' })], { installationId: 42 });
-    expect(await forge.mergePr('/repo', 7, 'abc123')).toEqual({ merged: false, reason: 'not_mergeable', message: 'Pull Request is not mergeable' });
+    expect(await forge.mergePr('acme/app', 7, 'abc123')).toEqual({ merged: false, reason: 'not_mergeable', message: 'Pull Request is not mergeable' });
   });
 
   it('a replay finds the PR already merged on that head and writes nothing', async () => {
     const { forge, calls } = makeForge([tokenRoute(42), pullRoute(openPr({ state: 'closed', merged_at: '2026-10-30T10:00:00Z' }))], { installationId: 42 });
-    expect(await forge.mergePr('/repo', 7, 'abc123')).toEqual({ merged: true, deduplicated: true });
+    expect(await forge.mergePr('acme/app', 7, 'abc123')).toEqual({ merged: true, deduplicated: true });
     expect(calls.some((c) => c.method === 'PUT')).toBe(false);
   });
 
@@ -690,25 +684,25 @@ describe('GitHubAppForge.mergePr (ORC-148)', () => {
 
   it('merges an unchecked head when the base has no check either: a repository with no CI', async () => {
     const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...noCi(), mergeRoute(200, { merged: true })], { installationId: 42 });
-    expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: true, deduplicated: false });
+    expect(await forge.mergePr('acme/app', 7, 'abc123', { unchecked: true })).toEqual({ merged: true, deduplicated: false });
     expect(calls.some((c) => c.method === 'PUT')).toBe(true);
   });
 
   it('refuses an unchecked head when the base has checks: its CI has not run on it yet', async () => {
     const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([]), workflows([]), ...baseChecks([{ id: 1, name: 'test', status: 'completed', conclusion: 'success' }])], { installationId: 42 });
-    expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'checks_missing' });
+    expect(await forge.mergePr('acme/app', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'checks_missing' });
     expect(calls.some((c) => c.method === 'PUT')).toBe(false);
   });
 
   it('refuses an unchecked head in a repository with an active Actions workflow: a CI on pull_request leaves main unchecked', async () => {
     const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([]), workflows([{ state: 'active', path: '.github/workflows/ci.yml' }]), ...baseChecks([])], { installationId: 42 });
-    expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'checks_missing' });
+    expect(await forge.mergePr('acme/app', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'checks_missing' });
     expect(calls.some((c) => c.method === 'PUT')).toBe(false);
   });
 
   it('refuses an unchecked head whose checks appeared since the factory read it', async () => {
     const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([{ id: 2, name: 'test', status: 'in_progress', conclusion: null }]), workflows([]), ...baseChecks([])], { installationId: 42 });
-    expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'checks_missing' });
+    expect(await forge.mergePr('acme/app', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'checks_missing' });
     expect(calls.some((c) => c.method === 'PUT')).toBe(false);
   });
 
@@ -716,20 +710,20 @@ describe('GitHubAppForge.mergePr (ORC-148)', () => {
     // GitHub's read may lag (or the head came back to abc123): a PUT with abc123 would merge it unchecked.
     const moved = openPr({ head: { ref: 'factory/REL-1', sha: 'new999' }, base: { ref: 'main', sha: 'base999' } });
     const { forge, calls } = makeForge([tokenRoute(42), pullRoute(moved), repoRoute(), mergeRoute(200, { merged: true })], { installationId: 42 });
-    expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'head_moved' });
+    expect(await forge.mergePr('acme/app', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'head_moved' });
     expect(calls.some((c) => c.method === 'PUT')).toBe(false);
   });
 
   it('GitHub\'s own dynamic workflows (Pages, Dependabot) are no CI', async () => {
     const dynamic = [{ state: 'active', path: 'dynamic/pages/pages-build-deployment' }, { state: 'active', path: 'dynamic/dependabot/dependabot-updates' }];
     const { forge } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([]), workflows(dynamic), ...baseChecks([]), mergeRoute(200, { merged: true })], { installationId: 42 });
-    expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: true, deduplicated: false });
+    expect(await forge.mergePr('acme/app', 7, 'abc123', { unchecked: true })).toEqual({ merged: true, deduplicated: false });
   });
 
   it('workflows unreadable (Actions permission missing, 403): an answer, taken as a CI, not an error', async () => {
     const denied: Route = (url) => (url.pathname === '/repos/acme/app/actions/workflows' ? { status: 403, body: { message: 'Resource not accessible by integration' } } : undefined);
     const { forge } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([]), denied, ...baseChecks([])], { installationId: 42 });
-    expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'checks_missing' });
+    expect(await forge.mergePr('acme/app', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'checks_missing' });
   });
 
   it.each([
@@ -739,14 +733,14 @@ describe('GitHubAppForge.mergePr (ORC-148)', () => {
   ])('a 403 on the workflows with %s is a rate limit, not a CI: it rejects, never merges, so the effect is replayed', async (_case, headers, message) => {
     const limited: Route = (url) => (url.pathname === '/repos/acme/app/actions/workflows' ? { status: 403, headers, body: { message } } : undefined);
     const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([]), limited, ...baseChecks([]), mergeRoute(200, { merged: true })], { installationId: 42 });
-    await expect(forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).rejects.toMatchObject({ status: 403, rateLimited: true });
+    await expect(forge.mergePr('acme/app', 7, 'abc123', { unchecked: true })).rejects.toMatchObject({ status: 403, rateLimited: true });
     expect(calls.some((c) => c.method === 'PUT')).toBe(false);
   });
 
   it('a 404 on the workflows (Actions not visible to the app) is still taken as a CI', async () => {
     const hidden: Route = (url) => (url.pathname === '/repos/acme/app/actions/workflows' ? { status: 404, body: { message: 'Not Found' } } : undefined);
     const { forge } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([]), hidden, ...baseChecks([])], { installationId: 42 });
-    expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'checks_missing' });
+    expect(await forge.mergePr('acme/app', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'checks_missing' });
   });
 
   it('rejects, never merges, when GitHub answers the checks of the head and the base without their list: an unread CI is no proof of none', async () => {
@@ -755,7 +749,7 @@ describe('GitHubAppForge.mergePr (ORC-148)', () => {
       (url) => (url.pathname === `/repos/acme/app/commits/${sha}/status` ? { body: { state: 'success' } } : undefined),
     ]);
     const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), workflows([]), ...unlisted, mergeRoute(200, { merged: true })], { installationId: 42 });
-    await expect(forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).rejects.toThrow(/unreadable answer/);
+    await expect(forge.mergePr('acme/app', 7, 'abc123', { unchecked: true })).rejects.toThrow(/unreadable answer/);
     expect(calls.some((c) => c.method === 'PUT')).toBe(false);
   });
 
@@ -765,7 +759,7 @@ describe('GitHubAppForge.mergePr (ORC-148)', () => {
   ])('rejects, never merges, when GitHub answers the workflows %s: no proof of a repository without CI', async (_case, answer) => {
     const unlisted: Route = (url) => (url.pathname === '/repos/acme/app/actions/workflows' ? answer : undefined);
     const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([]), unlisted, ...baseChecks([]), mergeRoute(200, { merged: true })], { installationId: 42 });
-    await expect(forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).rejects.toThrow(/actions\/workflows: unreadable answer, not a list of workflows: /);
+    await expect(forge.mergePr('acme/app', 7, 'abc123', { unchecked: true })).rejects.toThrow(/actions\/workflows: unreadable answer, not a list of workflows: /);
     expect(calls.some((c) => c.method === 'PUT')).toBe(false);
   });
 
@@ -775,7 +769,7 @@ describe('GitHubAppForge.mergePr (ORC-148)', () => {
         ? { body: { total_count: 101, workflows: url.searchParams.get('page') === '2' ? [{ state: 'active', path: '.github/workflows/ci.yml' }] : Array.from({ length: 100 }, (_, i) => ({ state: 'disabled_manually', path: `.github/workflows/w${i}.yml` })) } }
         : undefined;
     const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([]), paged, ...baseChecks([]), mergeRoute(200, { merged: true })], { installationId: 42 });
-    expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'checks_missing' });
+    expect(await forge.mergePr('acme/app', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'checks_missing' });
     expect(calls.some((c) => c.method === 'PUT')).toBe(false);
   });
 
@@ -785,7 +779,7 @@ describe('GitHubAppForge.mergePr (ORC-148)', () => {
     ['repository settings that are not an object', [pullRoute(openPr()), (url: URL, init: HttpRequest) => (url.pathname === '/repos/acme/app' && init.method === 'GET' ? { raw: '' } : undefined)], /GET \/repos\/acme\/app: unreadable answer, not repository settings: undefined$/],
   ])('rejects, saying it is unreadable, never merges, on %s: never a raw TypeError', async (_case, routes, message) => {
     const { forge, calls } = makeForge([tokenRoute(42), ...(routes as Route[]), mergeRoute(200, { merged: true })], { installationId: 42 });
-    const err = await forge.mergePr('/repo', 7, 'abc123', { unchecked: true }).catch((e: unknown) => e);
+    const err = await forge.mergePr('acme/app', 7, 'abc123', { unchecked: true }).catch((e: unknown) => e);
     expect(err).not.toBeInstanceOf(TypeError);
     expect((err as Error).message).toMatch(message);
     expect(calls.some((c) => c.method === 'PUT')).toBe(false);
@@ -793,7 +787,7 @@ describe('GitHubAppForge.mergePr (ORC-148)', () => {
 
   it('throws on another error, so the effect is retried', async () => {
     const { forge } = makeForge([tokenRoute(42), pullRoute(openPr()), repoRoute(), mergeRoute(502, { message: 'Bad gateway' })], { installationId: 42 });
-    await expect(forge.mergePr('/repo', 7, 'abc123')).rejects.toMatchObject({ status: 502 });
+    await expect(forge.mergePr('acme/app', 7, 'abc123')).rejects.toMatchObject({ status: 502 });
   });
 });
 
@@ -803,7 +797,7 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
 
   it('returns the open PR of the branch without creating one, and asks for open PRs only', async () => {
     const { forge, calls } = makeForge([tokenRoute(42), pullsRoute([openPr()])], { installationId: 42 });
-    expect(await forge.ensurePr('/repo', req)).toEqual({ number: 7, url: 'https://github.com/acme/app/pull/7', deduplicated: true });
+    expect(await forge.ensurePr('acme/app', req)).toEqual({ number: 7, url: 'https://github.com/acme/app/pull/7', deduplicated: true });
     const list = new URL(calls.find((c) => c.url.includes('/pulls'))!.url);
     expect(Object.fromEntries(list.searchParams)).toEqual({ head: 'acme:factory/REL-1', state: 'open', per_page: '1' });
     expect(writes(calls)).toEqual([]);
@@ -818,7 +812,7 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
       ],
       { installationId: 42 },
     );
-    expect(await forge.ensurePr('/repo', req)).toEqual({ number: 8, url: 'u8', deduplicated: false });
+    expect(await forge.ensurePr('acme/app', req)).toEqual({ number: 8, url: 'u8', deduplicated: false });
     expect(writes(calls).map((c) => c.body)).toEqual([{ title: req.title, head: req.branch, base: 'main', body: req.body }]);
   });
 
@@ -831,7 +825,7 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
       ],
       { installationId: 42 },
     );
-    await forge.ensurePr('/repo', { ...req, draft: true });
+    await forge.ensurePr('acme/app', { ...req, draft: true });
     expect(writes(calls).map((c) => c.body)).toEqual([{ title: req.title, head: req.branch, base: 'main', body: req.body, draft: true }]);
   });
 
@@ -851,7 +845,7 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
       ],
       { installationId: 42 },
     );
-    expect(await forge.ensurePr('/repo', { ...req, draft: true })).toEqual({ number: 8, url: 'u8', deduplicated: false });
+    expect(await forge.ensurePr('acme/app', { ...req, draft: true })).toEqual({ number: 8, url: 'u8', deduplicated: false });
     expect(posted).toHaveLength(2);
   });
 
@@ -864,8 +858,8 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
       ],
       { installationId: 42 },
     );
-    await expect(forge.ensurePr('/repo', req)).rejects.toBeInstanceOf(NoCommitsBetween);
-    await expect(forge.ensurePr('/repo', req)).rejects.toThrow('No commits between main and factory/REL-1');
+    await expect(forge.ensurePr('acme/app', req)).rejects.toBeInstanceOf(NoCommitsBetween);
+    await expect(forge.ensurePr('acme/app', req)).rejects.toThrow('No commits between main and factory/REL-1');
   });
 
   describe('setExclusiveLabel (ORC-198)', () => {
@@ -877,7 +871,7 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
 
     it("takes the group's other label off and adds the one asked, leaving the PR's other labels alone", async () => {
       const { forge, calls } = makeForge([tokenRoute(42), labels(['bug', 'revue: auto']), writes], { installationId: 42 });
-      await forge.setExclusiveLabel('/repo', 7, 'revue: requise', GROUP);
+      await forge.setExclusiveLabel('acme/app', 7, 'revue: requise', GROUP);
       // Added before the other is taken off: a failure between the two never leaves the PR without one.
       expect(written(calls)).toEqual([
         ['POST', LABELS, { labels: ['revue: requise'] }],
@@ -887,19 +881,19 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
 
     it('writes nothing when the label is already the only one of the group: a replay leaves one visible effect', async () => {
       const { forge, calls } = makeForge([tokenRoute(42), labels(['revue: requise', 'bug']), writes], { installationId: 42 });
-      await forge.setExclusiveLabel('/repo', 7, 'revue: requise', GROUP);
+      await forge.setExclusiveLabel('acme/app', 7, 'revue: requise', GROUP);
       expect(written(calls)).toEqual([]);
     });
 
     it('a label already gone when it is taken off is no failure (a human or a replay took it off first)', async () => {
       const gone: Route = (url, init) => (init.method === 'DELETE' && url.pathname.startsWith(LABELS) ? { status: 404, body: { message: 'Label does not exist' } } : undefined);
       const { forge } = makeForge([tokenRoute(42), labels(['revue: auto', 'revue: requise']), gone, writes], { installationId: 42 });
-      await expect(forge.setExclusiveLabel('/repo', 7, 'revue: requise', GROUP)).resolves.toBeUndefined();
+      await expect(forge.setExclusiveLabel('acme/app', 7, 'revue: requise', GROUP)).resolves.toBeUndefined();
     });
 
     it('rejects, saying it is unreadable, a list of labels that is no list', async () => {
       const { forge, calls } = makeForge([tokenRoute(42), (url, init) => (url.pathname === LABELS && init.method === 'GET' ? { body: { message: 'ok' } } : undefined), writes], { installationId: 42 });
-      await expect(forge.setExclusiveLabel('/repo', 7, 'revue: auto', GROUP)).rejects.toThrow(/unreadable answer, not a list of labels/);
+      await expect(forge.setExclusiveLabel('acme/app', 7, 'revue: auto', GROUP)).rejects.toThrow(/unreadable answer, not a list of labels/);
       expect(written(calls)).toEqual([]);
     });
   });
@@ -908,13 +902,13 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
     const pull = (draft: boolean): Route => (url, init) => (url.pathname === '/repos/acme/app/pulls/7' && init.method === 'GET' ? { body: openPr({ draft, node_id: 'PR_node' }) } : undefined);
     const mutation: Route = (url, init) => (url.pathname === '/graphql' && init.method === 'POST' ? { body: { data: { markPullRequestReadyForReview: { clientMutationId: null } } } } : undefined);
     const drafted = makeForge([tokenRoute(42), pull(true), mutation], { installationId: 42 });
-    await drafted.forge.markPrReady('/repo', 7);
+    await drafted.forge.markPrReady('acme/app', 7);
     const posted = drafted.calls.filter((c) => c.url.endsWith('/graphql'));
     expect(posted).toHaveLength(1);
     expect(JSON.stringify(posted[0]!.body)).toContain('markPullRequestReadyForReview');
     expect(JSON.stringify(posted[0]!.body)).toContain('PR_node');
     const ready = makeForge([tokenRoute(42), pull(false), mutation], { installationId: 42 });
-    await ready.forge.markPrReady('/repo', 7);
+    await ready.forge.markPrReady('acme/app', 7);
     expect(ready.calls.filter((c) => c.url.endsWith('/graphql'))).toEqual([]);
   });
 
@@ -927,7 +921,7 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
       ],
       { installationId: 42 },
     );
-    await expect(forge.markPrReady('/repo', 7)).rejects.toThrow('not allowed');
+    await expect(forge.markPrReady('acme/app', 7)).rejects.toThrow('not allowed');
   });
 
   it.each([
@@ -939,7 +933,7 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
       [tokenRoute(42), (url, init) => (url.pathname === '/repos/acme/app/pulls/7' && init.method === 'GET' ? { body: pr } : undefined), (url) => (url.pathname === '/graphql' ? { body: { data: {} } } : undefined)],
       { installationId: 42 },
     );
-    const err = await forge.markPrReady('/repo', 7).catch((e: unknown) => e);
+    const err = await forge.markPrReady('acme/app', 7).catch((e: unknown) => e);
     expect(err).not.toBeInstanceOf(TypeError);
     expect((err as Error).message).toMatch(message);
     expect(calls.some((c) => c.url.endsWith('/graphql'))).toBe(false);
@@ -959,7 +953,7 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
       ],
       { installationId: 42 },
     );
-    const err = await forge.markPrReady('/repo', 7).catch((e: unknown) => e);
+    const err = await forge.markPrReady('acme/app', 7).catch((e: unknown) => e);
     expect(err).not.toBeInstanceOf(TypeError);
     expect((err as Error)?.message).toMatch(/POST \/graphql: unreadable answer, not a GraphQL answer to markPullRequestReadyForReview: /);
   });
@@ -973,7 +967,7 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
       ],
       { installationId: 42 },
     );
-    await expect(forge.markPrReady('/repo', 7)).rejects.toThrow(/POST \/graphql: unreadable answer, not a GraphQL answer to markPullRequestReadyForReview: undefined$/);
+    await expect(forge.markPrReady('acme/app', 7)).rejects.toThrow(/POST \/graphql: unreadable answer, not a GraphQL answer to markPullRequestReadyForReview: undefined$/);
   });
 
   it.each([
@@ -984,7 +978,7 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
       [tokenRoute(42), (url, init) => (url.pathname === '/repos/acme/app/pulls' && init.method === 'GET' ? { body: answer } : undefined), (url, init) => (url.pathname === '/repos/acme/app/pulls' && init.method === 'POST' ? { status: 201, body: openPr({ number: 8 }) } : undefined)],
       { installationId: 42 },
     );
-    const err = await forge.ensurePr('/repo', req).catch((e: unknown) => e);
+    const err = await forge.ensurePr('acme/app', req).catch((e: unknown) => e);
     expect(err).not.toBeInstanceOf(TypeError);
     expect((err as Error).message).toMatch(/pulls: unreadable answer, not a list of pull requests: /);
     expect(writes(calls)).toEqual([]);
@@ -995,12 +989,12 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
       [tokenRoute(42), (url, init) => (url.pathname === '/repos/acme/app/pulls' && init.method === 'POST' ? { status: 201, body: { number: 8 } } : undefined), pullsRoute([])],
       { installationId: 42 },
     );
-    await expect(forge.ensurePr('/repo', req)).rejects.toThrow(/POST \/repos\/acme\/app\/pulls: unreadable answer, not a pull request: /);
+    await expect(forge.ensurePr('acme/app', req)).rejects.toThrow(/POST \/repos\/acme\/app\/pulls: unreadable answer, not a pull request: /);
   });
 
   it("gives the factory's git the repository's URL and the token, the token in the environment alone (ORC-125)", async () => {
     const { forge } = makeForge([tokenRoute(42, 'ghs_push_token')], { installationId: 42 });
-    const access = await forge.gitAccess('/repo');
+    const access = await forge.gitAccess('acme/app');
     expect(access.url).toBe('https://github.com/acme/app.git');
     expect(access.url).not.toContain('ghs_push_token');
     expect(access.env['GIT_CONFIG_KEY_0']).toBe('http.https://github.com/.extraheader');
@@ -1018,9 +1012,9 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
       };
     };
     const raced = makeForge([tokenRoute(42), pulls([openPr()])], { installationId: 42 });
-    expect(await raced.forge.ensurePr('/repo', req)).toEqual({ number: 7, url: 'https://github.com/acme/app/pull/7', deduplicated: true });
+    expect(await raced.forge.ensurePr('acme/app', req)).toEqual({ number: 7, url: 'https://github.com/acme/app/pull/7', deduplicated: true });
     const invalid = makeForge([tokenRoute(42), pulls([])], { installationId: 42 });
-    await expect(invalid.forge.ensurePr('/repo', req)).rejects.toMatchObject({ status: 422 });
+    await expect(invalid.forge.ensurePr('acme/app', req)).rejects.toMatchObject({ status: 422 });
   });
 
   it('updates the check run of the sha that carries the external id instead of creating one', async () => {
@@ -1036,7 +1030,7 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
       ],
       { installationId: 42 },
     );
-    const out = await forge.upsertCheckRun('/repo', {
+    const out = await forge.upsertCheckRun('acme/app', {
       sha: 'abc123', name: 'factory/verify', externalId: 'REL-1:4:1', status: 'completed', conclusion: 'success', title: 'Vert', summary: '3 vérifications',
     });
     expect(out).toEqual({ id: 12, deduplicated: true });
@@ -1063,7 +1057,7 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
       ],
       { installationId: 42 },
     );
-    const out = await forge.upsertCheckRun('/repo', { sha: 'abc123', name: 'factory/verify', externalId: 'REL-1:9:1', status: 'completed', conclusion: 'success', summary: 'Vert' });
+    const out = await forge.upsertCheckRun('acme/app', { sha: 'abc123', name: 'factory/verify', externalId: 'REL-1:9:1', status: 'completed', conclusion: 'success', summary: 'Vert' });
     expect(out).toEqual({ id: 2000, deduplicated: true });
     // A summary alone still gets its output, titled by the check's name.
     expect(writes(calls).map((c) => c.body)).toEqual([
@@ -1080,7 +1074,7 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
       ],
       { installationId: 42 },
     );
-    expect(await forge.upsertCheckRun('/repo', { sha: 'abc123', name: 'factory/verify', externalId: 'REL-1:4:1', status: 'in_progress' })).toEqual({
+    expect(await forge.upsertCheckRun('acme/app', { sha: 'abc123', name: 'factory/verify', externalId: 'REL-1:4:1', status: 'in_progress' })).toEqual({
       id: 21,
       deduplicated: false,
     });
@@ -1099,7 +1093,7 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
       ],
       { installationId: 42 },
     );
-    const err = await forge.upsertCheckRun('/repo', { sha: 'abc123', name: 'factory/verify', externalId: 'REL-1:4:1', status: 'in_progress' }).catch((e: unknown) => e);
+    const err = await forge.upsertCheckRun('acme/app', { sha: 'abc123', name: 'factory/verify', externalId: 'REL-1:4:1', status: 'in_progress' }).catch((e: unknown) => e);
     expect((err as Error).message).toMatch(/check-runs: unreadable answer, not a list of check runs: /);
     expect(writes(calls)).toEqual([]);
   });
@@ -1113,7 +1107,7 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
       ],
       { installationId: 42 },
     );
-    await expect(forge.upsertCheckRun('/repo', { sha: 'abc123', name: 'factory/verify', externalId: 'REL-1:4:1', status: 'in_progress' })).rejects.toThrow(
+    await expect(forge.upsertCheckRun('acme/app', { sha: 'abc123', name: 'factory/verify', externalId: 'REL-1:4:1', status: 'in_progress' })).rejects.toThrow(
       /POST \/repos\/acme\/app\/check-runs: unreadable answer, not a check run: "\{\}"$/,
     );
   });
@@ -1127,7 +1121,7 @@ describe('GitHubAppForge.postReview (ORC-183)', () => {
 
   it('posts one review on the commit read, its comments on their lines, marked with its external id', async () => {
     const { forge, calls } = makeForge([tokenRoute(42), listed([{ id: 1, body: 'a human review' }]), created()], { installationId: 42 });
-    expect(await forge.postReview('/repo', 7, review)).toEqual({ id: 31, deduplicated: false });
+    expect(await forge.postReview('acme/app', 7, review)).toEqual({ id: 31, deduplicated: false });
     expect(writes(calls).map((c) => c.body)).toEqual([
       {
         commit_id: 'abc123',
@@ -1142,23 +1136,23 @@ describe('GitHubAppForge.postReview (ORC-183)', () => {
     const page = (n: number) => Array.from({ length: n === 1 ? 100 : 1 }, (_, i) => ({ id: n * 1000 + i, body: n === 2 ? 'x\n\n<!-- factory-review:review@abc123 -->' : 'other' }));
     const pages: Route = (url, init) => (url.pathname === '/repos/acme/app/pulls/7/reviews' && init.method === 'GET' ? { body: page(Number(url.searchParams.get('page'))) } : undefined);
     const { forge, calls } = makeForge([tokenRoute(42), pages, created()], { installationId: 42 });
-    expect(await forge.postReview('/repo', 7, review)).toEqual({ id: 2000, deduplicated: true });
+    expect(await forge.postReview('acme/app', 7, review)).toEqual({ id: 2000, deduplicated: true });
     expect(writes(calls)).toEqual([]);
   });
 
   it('says when GitHub cannot place a comment on its line, so the caller posts the findings in the text', async () => {
     const { forge } = makeForge([tokenRoute(42), listed([]), created(422, { message: 'Unprocessable Entity', errors: ['Line could not be resolved'] })], { installationId: 42 });
-    await expect(forge.postReview('/repo', 7, review)).rejects.toBeInstanceOf(ReviewLinesRefused);
+    await expect(forge.postReview('acme/app', 7, review)).rejects.toBeInstanceOf(ReviewLinesRefused);
     // Without inline comments, a 422 is GitHub's own refusal, thrown as it is.
     const plain = makeForge([tokenRoute(42), listed([]), created(422, { message: 'Unprocessable Entity' })], { installationId: 42 }).forge;
-    const err = await plain.postReview('/repo', 7, { ...review, comments: [] }).catch((e: unknown) => e);
+    const err = await plain.postReview('acme/app', 7, { ...review, comments: [] }).catch((e: unknown) => e);
     expect(err).not.toBeInstanceOf(ReviewLinesRefused);
     expect((err as Error).message).toMatch(/422/);
   });
 
   it('rejects, never posts a second review, when the list comes back unreadable', async () => {
     const { forge, calls } = makeForge([tokenRoute(42), listed({ reviews: [] } as never), created()], { installationId: 42 });
-    await expect(forge.postReview('/repo', 7, review)).rejects.toThrow(/unreadable answer, not a list of reviews/);
+    await expect(forge.postReview('acme/app', 7, review)).rejects.toThrow(/unreadable answer, not a list of reviews/);
     expect(writes(calls)).toEqual([]);
   });
 });
@@ -1179,9 +1173,9 @@ describe('GitHubAppForge.repoPermission (ORC-186)', () => {
       ],
       { calls },
     );
-    expect(await forge.repoPermission('/repo', 'dev')).toBe('maintain');
-    expect(await forge.repoPermission('/repo', 'reader')).toBe('read');
-    expect(await forge.repoPermission('/repo', 'custom')).toBe('write');
+    expect(await forge.repoPermission('acme/app', 'dev')).toBe('maintain');
+    expect(await forge.repoPermission('acme/app', 'reader')).toBe('read');
+    expect(await forge.repoPermission('acme/app', 'custom')).toBe('write');
     expect(calls.find((c) => c.url.includes('/collaborators/'))!.headers.authorization).toBe('Bearer ghs_test_token');
   });
 
@@ -1192,8 +1186,8 @@ describe('GitHubAppForge.repoPermission (ORC-186)', () => {
       permissionRoute('ghost', 404, { message: 'Not Found' }),
       permissionRoute('down', 502, { message: 'Bad Gateway' }),
     ]);
-    expect(await forge.repoPermission('/repo', 'ghost')).toBe('none');
-    await expect(forge.repoPermission('/repo', 'down')).rejects.toThrow(/502/);
+    expect(await forge.repoPermission('acme/app', 'ghost')).toBe('none');
+    await expect(forge.repoPermission('acme/app', 'down')).rejects.toThrow(/502/);
   });
 
   it.each([
@@ -1201,12 +1195,12 @@ describe('GitHubAppForge.repoPermission (ORC-186)', () => {
     ['a permission that is no string', { permission: 3 }],
   ])('rejects, never answers none, on a permission answer that is %s', async (_case, body) => {
     const { forge } = makeForge([installationRoute(42), tokenRoute(42), permissionRoute('odd', 200, body)]);
-    await expect(forge.repoPermission('/repo', 'odd')).rejects.toThrow(/permission: unreadable answer, not a permission: /);
+    await expect(forge.repoPermission('acme/app', 'odd')).rejects.toThrow(/permission: unreadable answer, not a permission: /);
   });
 
   it('throws, never answers none, when the app is not installed on the repo', async () => {
     const { forge } = makeForge([(url) => (url.pathname === '/repos/acme/app/installation' ? { status: 404, body: { message: 'Not Found' } } : undefined)]);
-    await expect(forge.repoPermission('/repo', 'dev')).rejects.toThrow(/installation.*404/);
+    await expect(forge.repoPermission('acme/app', 'dev')).rejects.toThrow(/installation.*404/);
   });
 });
 
@@ -1294,7 +1288,7 @@ describe('GitHubAppForge artifacts (ORC-407)', () => {
   it('creates factory/artifacts as an orphan with its README and the files, and links each one by the commit that holds it', async () => {
     const git = gitData();
     const { forge, calls } = makeForge([tokenRoute(42), git.route], { installationId: 42 });
-    const urls = await forge.hostArtifacts('/repo', [png('before-375-aa'), png('after-375-bb')]);
+    const urls = await forge.hostArtifacts('acme/app', [png('before-375-aa'), png('after-375-bb')]);
     const head = git.refs.get('heads/factory/artifacts')!;
     expect(git.commits.get(head)!.parents).toEqual([]);
     expect([...git.tip().keys()].sort()).toEqual(['ORC-1/after-375-bb.png', 'ORC-1/before-375-aa.png', 'README.md']);
@@ -1319,8 +1313,8 @@ describe('GitHubAppForge artifacts (ORC-407)', () => {
       },
     });
     const { forge } = makeForge([tokenRoute(42), git.route], { installationId: 42 });
-    await forge.hostArtifacts('/repo', [png('a')]);
-    await forge.hostArtifacts('/repo', [png('b')]);
+    await forge.hostArtifacts('acme/app', [png('a')]);
+    await forge.hostArtifacts('acme/app', [png('b')]);
     expect(deleted).toBe(true);
     const head = git.refs.get('heads/factory/artifacts')!;
     expect(git.commits.get(head)!.parents).toEqual([]);
@@ -1331,15 +1325,15 @@ describe('GitHubAppForge artifacts (ORC-407)', () => {
     const git = gitData();
     const calls: Call[] = [];
     const { forge } = makeForge([tokenRoute(42), git.route], { installationId: 42, calls });
-    await forge.hostArtifacts('/repo', [png('after-375-aa')]);
+    await forge.hostArtifacts('acme/app', [png('after-375-aa')]);
     const first = git.refs.get('heads/factory/artifacts')!;
-    await forge.hostArtifacts('/repo', [png('after-375-bb')]);
+    await forge.hostArtifacts('acme/app', [png('after-375-bb')]);
     const second = git.refs.get('heads/factory/artifacts')!;
     expect(git.commits.get(second)!.parents).toEqual([first]);
     const patch = calls.filter((c) => c.method === 'PATCH');
     expect(patch.map((c) => [new URL(c.url).pathname, c.body])).toEqual([['/repos/acme/app/git/refs/heads/factory/artifacts', { sha: second, force: false }]]);
     calls.length = 0;
-    const again = await forge.hostArtifacts('/repo', [png('after-375-aa')]);
+    const again = await forge.hostArtifacts('acme/app', [png('after-375-aa')]);
     expect(again).toEqual([`https://github.com/acme/app/blob/${second}/ORC-1/after-375-aa.png?raw=true`]);
     expect(calls.filter((c) => c.url.includes('/git/commits') && c.method === 'POST')).toEqual([]);
     expect(calls.filter((c) => c.url.includes('/git/refs'))).toEqual([]);
@@ -1355,8 +1349,8 @@ describe('GitHubAppForge artifacts (ORC-407)', () => {
       },
     });
     const { forge } = makeForge([tokenRoute(42), git.route], { installationId: 42 });
-    await forge.hostArtifacts('/repo', [png('after-375-aa')]);
-    await forge.hostArtifacts('/repo', [png('after-375-bb')]);
+    await forge.hostArtifacts('acme/app', [png('after-375-aa')]);
+    await forge.hostArtifacts('acme/app', [png('after-375-bb')]);
     expect(raced).toBe(true);
     expect([...git.tip().keys()].sort()).toEqual(['ORC-1/after-375-aa.png', 'ORC-1/after-375-bb.png', 'ORC-2/after-375-cc.png', 'README.md']);
   });
@@ -1364,19 +1358,19 @@ describe('GitHubAppForge artifacts (ORC-407)', () => {
   it('takes a protection rule, a missing permission or an empty repository for an answer, and a rate limit or a 5xx for a failure to retry', async () => {
     const refusing = (status: number, message: string, headers?: Record<string, string>) =>
       makeForge([tokenRoute(42), gitData({ refuse: (url, init) => (init.method === 'POST' && url.pathname.endsWith('/git/refs') ? { status, body: { message }, ...(headers ? { headers } : {}) } : undefined) }).route], { installationId: 42 }).forge;
-    await expect(refusing(422, 'Repository rule violations found').hostArtifacts('/repo', [png('a')])).rejects.toBeInstanceOf(ArtifactsRefused);
-    await expect(refusing(403, 'Resource not accessible by integration').hostArtifacts('/repo', [png('a')])).rejects.toThrow(/GitHub refuses to write factory\/artifacts: .*Resource not accessible/);
-    await expect(refusing(409, 'Git Repository is empty.').hostArtifacts('/repo', [png('a')])).rejects.toBeInstanceOf(ArtifactsRefused);
-    const limited = refusing(403, 'API rate limit exceeded', { 'x-ratelimit-remaining': '0' }).hostArtifacts('/repo', [png('a')]);
+    await expect(refusing(422, 'Repository rule violations found').hostArtifacts('acme/app', [png('a')])).rejects.toBeInstanceOf(ArtifactsRefused);
+    await expect(refusing(403, 'Resource not accessible by integration').hostArtifacts('acme/app', [png('a')])).rejects.toThrow(/GitHub refuses to write factory\/artifacts: .*Resource not accessible/);
+    await expect(refusing(409, 'Git Repository is empty.').hostArtifacts('acme/app', [png('a')])).rejects.toBeInstanceOf(ArtifactsRefused);
+    const limited = refusing(403, 'API rate limit exceeded', { 'x-ratelimit-remaining': '0' }).hostArtifacts('acme/app', [png('a')]);
     await expect(limited).rejects.toMatchObject({ status: 403, rateLimited: true });
-    await expect(refusing(502, 'Bad Gateway').hostArtifacts('/repo', [png('a')])).rejects.not.toBeInstanceOf(ArtifactsRefused);
+    await expect(refusing(502, 'Bad Gateway').hostArtifacts('acme/app', [png('a')])).rejects.not.toBeInstanceOf(ArtifactsRefused);
   });
 
   it('gives up after three writers in a row moved the branch, to be retried later, not answered', async () => {
     const git = gitData({ beforeMove: () => git.refs.has('heads/factory/artifacts') && git.otherWriter(`ORC-9/x-${Math.random()}.png`) });
     const { forge } = makeForge([tokenRoute(42), git.route], { installationId: 42 });
-    await forge.hostArtifacts('/repo', [png('a')]).catch(() => {});
-    const err = await forge.hostArtifacts('/repo', [png('b')]).catch((e: Error) => e);
+    await forge.hostArtifacts('acme/app', [png('a')]).catch(() => {});
+    const err = await forge.hostArtifacts('acme/app', [png('b')]).catch((e: Error) => e);
     expect(err).toBeInstanceOf(Error);
     expect(err).not.toBeInstanceOf(ArtifactsRefused);
     expect(String(err)).toMatch(/moved under each of 3 writes/);
@@ -1385,7 +1379,7 @@ describe('GitHubAppForge artifacts (ORC-407)', () => {
   it('refuses a path that is not a folder and a file, before any call: an answer, which no retry would change', async () => {
     const { forge, calls } = makeForge([tokenRoute(42), gitData().route], { installationId: 42 });
     for (const path of ['../x.png', 'x.png', 'ORC-1/../x.png', 'ORC-1/.x.png', '/ORC-1/x.png']) {
-      await expect(forge.hostArtifacts('/repo', [{ path, content: Buffer.from('x') }])).rejects.toThrow(ArtifactsRefused);
+      await expect(forge.hostArtifacts('acme/app', [{ path, content: Buffer.from('x') }])).rejects.toThrow(ArtifactsRefused);
     }
     expect(calls).toEqual([]);
   });
@@ -1394,17 +1388,17 @@ describe('GitHubAppForge artifacts (ORC-407)', () => {
     const git = gitData();
     const calls: Call[] = [];
     const { forge } = makeForge([tokenRoute(42), git.route], { installationId: 42, calls });
-    expect(await forge.pruneArtifacts('/repo', async () => true)).toEqual([]);
-    await forge.hostArtifacts('/repo', [png('a'), { path: 'ORC-2/b.png', content: Buffer.from('b') }, { path: 'ORC-3/c.png', content: Buffer.from('c') }]);
+    expect(await forge.pruneArtifacts('acme/app', async () => true)).toEqual([]);
+    await forge.hostArtifacts('acme/app', [png('a'), { path: 'ORC-2/b.png', content: Buffer.from('b') }, { path: 'ORC-3/c.png', content: Buffer.from('c') }]);
     const before = git.refs.get('heads/factory/artifacts')!;
     calls.length = 0;
-    expect(await forge.pruneArtifacts('/repo', async (f) => f !== 'ORC-2')).toEqual(['ORC-1', 'ORC-3']);
+    expect(await forge.pruneArtifacts('acme/app', async (f) => f !== 'ORC-2')).toEqual(['ORC-1', 'ORC-3']);
     expect([...git.tip().keys()].sort()).toEqual(['ORC-2/b.png', 'README.md']);
     const after = git.refs.get('heads/factory/artifacts')!;
     expect(git.commits.get(after)!.parents).toEqual([before]);
     expect(calls.filter((c) => c.method === 'PATCH').map((c) => c.body)).toEqual([{ sha: after, force: false }]);
     calls.length = 0;
-    expect(await forge.pruneArtifacts('/repo', async () => false)).toEqual([]);
+    expect(await forge.pruneArtifacts('acme/app', async () => false)).toEqual([]);
     expect(writes(calls)).toEqual([]);
   });
 });
@@ -1417,32 +1411,32 @@ describe('GitHubAppForge.pullRequest, for factory ghost (ORC-181)', () => {
   it("reads a merged PR's author, merge commit and commits' headlines, oldest first", async () => {
     const merged = openPr({ number: 12, html_url: 'https://github.com/acme/app/pull/12', state: 'closed', merged_at: '2026-10-01T10:00:00Z', merge_commit_sha: 'm12', user: { login: 'lilian' } });
     const { forge } = makeForge([installationRoute(42), tokenRoute(42), pull(merged), commits(['feat: a\n\nbody', 'fix: b'])]);
-    expect(await forge.pullRequest('/repo', 12)).toEqual({ number: 12, url: 'https://github.com/acme/app/pull/12', author: 'lilian', mergeSha: 'm12', commits: ['feat: a', 'fix: b'] });
+    expect(await forge.pullRequest('acme/app', 12)).toEqual({ number: 12, url: 'https://github.com/acme/app/pull/12', author: 'lilian', mergeSha: 'm12', commits: ['feat: a', 'fix: b'] });
   });
 
   it('gives no merge commit to a PR not merged, whatever test merge GitHub names', async () => {
     const open = openPr({ number: 12, merge_commit_sha: 'test-merge', user: { login: 'lilian' } });
     const { forge } = makeForge([installationRoute(42), tokenRoute(42), pull(open), commits(['wip'])]);
-    expect(await forge.pullRequest('/repo', 12)).toEqual({ number: 12, url: 'https://github.com/acme/app/pull/7', author: 'lilian', commits: ['wip'] });
+    expect(await forge.pullRequest('acme/app', 12)).toEqual({ number: 12, url: 'https://github.com/acme/app/pull/7', author: 'lilian', commits: ['wip'] });
   });
 
   it("gives each commit's headline as git's %s does: its first paragraph on one line, CRLF or not", async () => {
     const merged = openPr({ number: 12, state: 'closed', merged_at: '2026-10-01T10:00:00Z', merge_commit_sha: 'm12', user: { login: 'lilian' } });
     const { forge } = makeForge([installationRoute(42), tokenRoute(42), pull(merged), commits(['feat: a long subject\nthat wraps\n\nbody', 'fix: b\r\n\r\nbody\r\n'])]);
-    expect((await forge.pullRequest('/repo', 12)).commits).toEqual(['feat: a long subject that wraps', 'fix: b']);
+    expect((await forge.pullRequest('acme/app', 12)).commits).toEqual(['feat: a long subject that wraps', 'fix: b']);
   });
 
   it('throws on a list of commits shorter than the PR says, as GitHub cuts it at 250', async () => {
     const merged = openPr({ number: 12, state: 'closed', merged_at: '2026-10-01T10:00:00Z', merge_commit_sha: 'm12', user: { login: 'lilian' }, commits: 3 });
-    await expect(makeForge([installationRoute(42), tokenRoute(42), pull(merged), commits(['a', 'b'])]).forge.pullRequest('/repo', 12)).rejects.toThrow(/2 commits of 3/);
+    await expect(makeForge([installationRoute(42), tokenRoute(42), pull(merged), commits(['a', 'b'])]).forge.pullRequest('acme/app', 12)).rejects.toThrow(/2 commits of 3/);
   });
 
   it('throws on a PR GitHub does not have, and on commits it cannot read', async () => {
     const gone: Route = (url) => (url.pathname === '/repos/acme/app/pulls/12' ? { status: 404, body: { message: 'Not Found' } } : undefined);
-    await expect(makeForge([installationRoute(42), tokenRoute(42), gone]).forge.pullRequest('/repo', 12)).rejects.toThrow(/404 Not Found/);
+    await expect(makeForge([installationRoute(42), tokenRoute(42), gone]).forge.pullRequest('acme/app', 12)).rejects.toThrow(/404 Not Found/);
     const odd: Route = (url) => (url.pathname === '/repos/acme/app/pulls/12/commits' ? { body: [{ sha: 'c0' }] } : undefined);
     const merged = openPr({ number: 12, state: 'closed', merged_at: '2026-10-01T10:00:00Z', merge_commit_sha: 'm12', user: { login: 'lilian' } });
-    await expect(makeForge([installationRoute(42), tokenRoute(42), pull(merged), odd]).forge.pullRequest('/repo', 12)).rejects.toThrow(/unreadable answer/);
+    await expect(makeForge([installationRoute(42), tokenRoute(42), pull(merged), odd]).forge.pullRequest('acme/app', 12)).rejects.toThrow(/unreadable answer/);
   });
 });
 
@@ -1478,7 +1472,7 @@ describe('GitHubAppForge.ciFailures (ORC-459)', () => {
       ],
       { installationId: 42, calls },
     );
-    expect(await forge.ciFailures('/repo', 7)).toEqual({
+    expect(await forge.ciFailures('acme/app', 7)).toEqual({
       head: 'abc123',
       failed: [
         { name: 'test', conclusion: 'failure', log: '2026-11-21T10:00:00.0000000Z FAIL a.test.ts' },
@@ -1494,16 +1488,16 @@ describe('GitHubAppForge.ciFailures (ORC-459)', () => {
   it('says a log GitHub refuses (expired, no permission, down) and still names the check: a log never costs the fix its run', async () => {
     const make = (status: number) =>
       makeForge([tokenRoute(42), pull, ...checksRoutes([job(11, 'test')], []), ...base([]), logRoute(() => ({ status, body: { message: 'nope' } }))], { installationId: 42 }).forge;
-    expect((await make(410).ciFailures('/repo', 7)).failed).toEqual([{ name: 'test', conclusion: 'failure', noLog: 'GitHub refused its log (410)' }]);
-    expect((await make(403).ciFailures('/repo', 7)).failed[0]!.noLog).toBe('GitHub refused its log (403)');
-    expect((await make(503).ciFailures('/repo', 7)).failed[0]!.noLog).toBe('GitHub refused its log (503)');
+    expect((await make(410).ciFailures('acme/app', 7)).failed).toEqual([{ name: 'test', conclusion: 'failure', noLog: 'GitHub refused its log (410)' }]);
+    expect((await make(403).ciFailures('acme/app', 7)).failed[0]!.noLog).toBe('GitHub refused its log (403)');
+    expect((await make(503).ciFailures('acme/app', 7)).failed[0]!.noLog).toBe('GitHub refused its log (503)');
   });
 
   it('reads MAX_LOGS logs at most, and keeps only the end of each', async () => {
     const calls: Call[] = [];
     const jobs = Array.from({ length: 8 }, (_, i) => job(100 + i, `job-${i}`));
     const { forge } = makeForge([tokenRoute(42), pull, ...checksRoutes(jobs, []), ...base([]), logRoute(() => ({ raw: 'x'.repeat(200_000) + '\nEND' }))], { installationId: 42, calls });
-    const { failed } = await forge.ciFailures('/repo', 7);
+    const { failed } = await forge.ciFailures('acme/app', 7);
     expect(failed.map((c) => c.name)).toEqual(jobs.map((j) => j.name));
     expect(calls.filter((c) => c.url.includes('/actions/jobs/'))).toHaveLength(5);
     expect(failed.filter((c) => c.log !== undefined)).toHaveLength(5);
@@ -1513,9 +1507,9 @@ describe('GitHubAppForge.ciFailures (ORC-459)', () => {
 
   it('rejects a PR without its base, and unreadable check runs, never read as no failure', async () => {
     const noBase = makeForge([tokenRoute(42), (url) => (url.pathname === '/repos/acme/app/pulls/7' ? { body: openPr() } : undefined)], { installationId: 42 }).forge;
-    await expect(noBase.ciFailures('/repo', 7)).rejects.toThrow(/unreadable answer, not a pull request with its base/);
+    await expect(noBase.ciFailures('acme/app', 7)).rejects.toThrow(/unreadable answer, not a pull request with its base/);
     const badRun = makeForge([tokenRoute(42), pull, ...checksRoutes([{ name: 'test', status: 'completed', conclusion: 'failure' }], []), ...base([])], { installationId: 42 }).forge;
-    await expect(badRun.ciFailures('/repo', 7)).rejects.toThrow(/unreadable answer, not a list of check runs/);
+    await expect(badRun.ciFailures('acme/app', 7)).rejects.toThrow(/unreadable answer, not a list of check runs/);
   });
 });
 

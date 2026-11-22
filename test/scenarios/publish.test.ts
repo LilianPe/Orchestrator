@@ -52,7 +52,7 @@ describe('the factory publishes (ORC-125)', () => {
   it('a green verify: pushed by the factory, a draft PR linked to the ticket, then Human Review on that commit, out of draft', async () => {
     const h = verified();
     await delegate(h);
-    expect(h.publisher.published).toEqual([expect.objectContaining({ ticketId: 'REL-1', branch: BRANCH, sha: SHA, worktree: WORKTREE, repoPath: '/repo' })]);
+    expect(h.publisher.published).toEqual([expect.objectContaining({ ticketId: 'REL-1', branch: BRANCH, sha: SHA, worktree: WORKTREE, github: 'acme/app' })]);
     expect(h.forge.opened).toEqual([expect.objectContaining({ branch: BRANCH, draft: true })]);
     const t = await h.ticket();
     expect(t).toMatchObject({ logical: 'human_review', prNumber: 1, prState: 'OPEN', verifiedSha: SHA, reviewSha: SHA });

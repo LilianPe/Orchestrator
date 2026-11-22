@@ -1,4 +1,5 @@
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { generateKeyPairSync } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -22,6 +23,14 @@ import { TrackerSwitch } from './tracker-switch.js';
 
 /** A start on a MemoryStore of its own, Postgres being the instance's only store (ORC-178): test/integration/open-store.test.ts starts on it. */
 const startOnMemory = (o: BootOptions) => startFactory({ store: new MemoryStore(), ...o });
+
+/** A clone whose origin is `origin`, the GitHub repository `acme/app` by default: a project's repository (ORC-478). */
+function githubClone(origin = 'https://github.com/acme/app.git'): string {
+  const dir = mkdtempSync(join(tmpdir(), 'factory-repo-'));
+  execFileSync('git', ['init', '--quiet', dir]);
+  execFileSync('git', ['-C', dir, 'remote', 'add', 'origin', origin]);
+  return dir;
+}
 
 /** The daemon's `secrets_key`, from its environment: Linear's tokens are never written in clear (ORC-470). */
 const KEY_ENV = { FACTORY_SECRETS_KEY: 'k'.repeat(44) };
@@ -168,7 +177,7 @@ describe('bootstrap', () => {
 
   it("runs a project on the factory/default workflow, its repository's .factory/workflow.yml ignored (ORC-388)", async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    const repo = mkdtempSync(join(tmpdir(), 'factory-boot-repo-'));
+    const repo = githubClone();
     mkdirSync(join(repo, '.factory'));
     writeFileSync(join(repo, '.factory/workflow.yml'), 'version: 1\nlimits: { verify_attempts: 9 }\njobs:\n  dev:\n    model: opus\n');
     saveInstance(home, { port: 4178, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', repoPath: repo, linearTeamKey: 'REL' }] });
@@ -186,6 +195,39 @@ describe('bootstrap', () => {
     }
     expect(deps!.projects[0]!.workflow).toEqual(defaultWorkflow({ budgets: { maxTurns: { build: 40 } } }));
     expect(logs).toContain('p: Warning: .factory/workflow.yml is ignored: the workflow is the factory/default preset. Delete it; its setup and checks go in .factory/config.yml.');
+  });
+
+  it("knows each project's repository on GitHub from the start: its team's factory.yml entry, else its origin (ORC-478)", async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    const projects = [
+      { id: 'app', repoPath: githubClone('git@github.com:acme/app.git'), linearTeamKey: 'REL' },
+      { id: 'tool', repoPath: githubClone('https://github.com/acme/tool'), linearTeamKey: 'REL' },
+    ];
+    saveInstance(home, { port: 4179, host: '127.0.0.1', relay: { kind: 'none' }, projects });
+    appendFileSync(join(home, 'factory.yml'), 'repos:\n  - linear_team: REL\n    github: Acme/App\n');
+    let deps: DaemonDeps | undefined;
+    const recover = vi.spyOn(Daemon.prototype, 'recover').mockImplementation(async function (this: Daemon) {
+      deps = (this as unknown as { d: DaemonDeps }).d;
+    });
+    try {
+      await (await startOnMemory({ home, fakeRunner: true, log: () => {}, env: {} })).stop();
+    } finally {
+      recover.mockRestore();
+    }
+    expect(deps!.projects.map((p) => p.github)).toEqual(['Acme/App', 'acme/tool']);
+    // `verify` reads the forge at that URL, whatever the clone's config says afterwards.
+    execFileSync('git', ['-C', projects[0]!.repoPath, 'remote', 'set-url', 'origin', 'https://evil.example/forged.git']);
+    expect(await deps!.originUrl!(deps!.projects[0]!)).toBe('https://github.com/Acme/App');
+  });
+
+  it('refuses to start on a project whose origin is not a GitHub repository, naming it, before the store opens (ORC-478)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    const projects = [{ id: 'web', repoPath: githubClone('https://gitlab.example.com/acme/web.git'), linearTeamKey: 'REL' }];
+    saveInstance(home, { port: 4180, host: '127.0.0.1', relay: { kind: 'none' }, projects });
+    const store = new MemoryStore();
+    const close = vi.spyOn(store, 'close');
+    await expect(startFactory({ store, home, fakeRunner: true, log: () => {}, env: {} })).rejects.toThrow(/^web: the origin remote of .* is not a GitHub repository: set it to https:\/\/github\.com\/<owner>\/<name>/);
+    expect(close).not.toHaveBeenCalled();
   });
 
   it('refuses to start on a Claude token a header cannot carry, naming the variable (ORC-337)', async () => {
@@ -235,7 +277,7 @@ describe('bootstrap', () => {
 
   it('plans the reconciliation of each project in the store at start, once, and drops a removed project\'s (ORC-185)', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    const project = (id: string, key: string) => ({ id, repoPath: mkdtempSync(join(tmpdir(), 'factory-repo-')), linearTeamKey: key });
+    const project = (id: string, key: string) => ({ id, repoPath: githubClone(), linearTeamKey: key });
     // The same store at each start, as the instance's database is.
     const store = new MemoryStore();
     const planned = async () => {
@@ -260,7 +302,7 @@ describe('bootstrap', () => {
   // ORC-200: nothing pauses or resumes the queue any more; a pause left from before would hold every launch for good.
   it('lifts a pause of the queue left from before the global pause was removed, and says so', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    saveInstance(home, { port: 4177, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', repoPath: mkdtempSync(join(tmpdir(), 'factory-repo-')), linearTeamKey: 'REL' }] });
+    saveInstance(home, { port: 4177, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', repoPath: githubClone(), linearTeamKey: 'REL' }] });
     const store = new MemoryStore();
     await store.setMeta('paused', '1');
     const logs: string[] = [];
@@ -389,7 +431,7 @@ describe('bootstrap', () => {
 
   it('warns at startup of each project whose spec gate no validator can pass: none designated, or a lone one (ORC-421)', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    const repo = () => mkdtempSync(join(tmpdir(), 'factory-repo-'));
+    const repo = () => githubClone();
     const authz = (validators: string[]) => ({ maintainers: [], validators, githubLogins: {} });
     const projects = [
       { id: 'none', repoPath: repo(), linearTeamKey: 'AAA' },

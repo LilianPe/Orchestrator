@@ -42,20 +42,21 @@ export interface ForgeBranch {
   url: string;
 }
 
+/** Every method names the repository by its GitHub `owner/name` (ORC-478), the project's `github`: never by a clone. */
 export interface Forge {
-  findPr(repoPath: string, branch: string): Promise<PrInfo | undefined>;
-  unresolvedReviewComments(repoPath: string, prNumber: number): Promise<FeedbackItem[]>;
+  findPr(github: string, branch: string): Promise<PrInfo | undefined>;
+  unresolvedReviewComments(github: string, prNumber: number): Promise<FeedbackItem[]>;
   /**
    * The PR's red CI as its fix reads it (ORC-459): the failed checks of its head, each with the end of its log as the forge
    * returned it (untrusted, raw), and the CI of its base branch on the commit the PR is compared with.
    */
-  ciFailures(repoPath: string, prNumber: number): Promise<CiFailureReport>;
+  ciFailures(github: string, prNumber: number): Promise<CiFailureReport>;
   /** Every open PR of the repository, the most recently updated first, each with its first files (ORC-207): every page read, never a list cut short. */
-  openPrs(repoPath: string): Promise<OpenPr[]>;
+  openPrs(github: string): Promise<OpenPr[]>;
   /** Every branch whose name starts with `prefix` (ORC-207): every page read. */
-  branches(repoPath: string, prefix: string): Promise<ForgeBranch[]>;
+  branches(github: string, prefix: string): Promise<ForgeBranch[]>;
   /** The most recently committed branches, the default one left out (ORC-207): a selection, not the whole list. */
-  recentBranches(repoPath: string): Promise<ForgeBranch[]>;
+  recentBranches(github: string): Promise<ForgeBranch[]>;
 }
 
 /** A PR read by its number, as a replay compares with it (`factory ghost`): its author's login, its merge commit once merged, its commits' headlines oldest first. */
@@ -166,16 +167,23 @@ export interface ArtifactHost {
    * Commits `files` on the branch, created as an orphan if absent, by a fast-forward only; a replay that finds them all writes
    * nothing. Returns each file's link, in order. `ArtifactsRefused` when the forge refuses the write.
    */
-  hostArtifacts(repoPath: string, files: readonly HostedFile[]): Promise<string[]>;
+  hostArtifacts(github: string, files: readonly HostedFile[]): Promise<string[]>;
   /** Removes the branch's top-level folders `expired` says yes to, in one commit, by a fast-forward only; returns them. */
-  pruneArtifacts(repoPath: string, expired: (folder: string) => Promise<boolean>): Promise<string[]>;
+  pruneArtifacts(github: string, expired: (folder: string) => Promise<boolean>): Promise<string[]>;
 }
 
 /**
- * The env of the daemon's own git that reads a repository's forge (ORC-442), the App's token in it; `{}` where the machine's own
- * git credentials serve (no App, an origin elsewhere). In the environment only: never in a URL, a command line nor a config.
+ * The env of the daemon's own git that reads the GitHub repository `github` (`owner/name`, ORC-442, ORC-478), the App's token in
+ * it, sent to the App's forge alone; `{}` where the machine's own git credentials serve (no App, no token for the repository). In
+ * the environment only: never in a URL, a command line nor a config.
  */
-export type GitAuth = (repoPath: string) => Promise<Record<string, string>>;
+export type GitAuth = (github: string) => Promise<Record<string, string>>;
+
+/**
+ * `GitAuth` of the clone at `repoPath`: the token of the GitHub repository it is the factory's clone of (`cloneAuth`), `{}` for
+ * any other. ponytail: ORC-471 part 2 fetches a mirror the daemon names by its repository, and this goes with `repo_path`.
+ */
+export type CloneAuth = (repoPath: string) => Promise<Record<string, string>>;
 
 export interface ForgeWriter {
   /**
@@ -184,23 +192,23 @@ export interface ForgeWriter {
    * had no check at all; merged only in a repository with no CI (read at the merge: the head still without check, no
    * active Actions workflow of the repository's own, the PR's base commit without check).
    */
-  mergePr(repoPath: string, number: number, sha: string, opts?: { unchecked?: boolean }): Promise<MergeResult>;
+  mergePr(github: string, number: number, sha: string, opts?: { unchecked?: boolean }): Promise<MergeResult>;
   /** Opens the branch's PR, or returns its open one: never a second open PR for the branch. A closed or merged one is not reused (ORC-138, point 7). */
-  ensurePr(repoPath: string, req: PrRequest): Promise<{ number: number; url: string; deduplicated: boolean }>;
+  ensurePr(github: string, req: PrRequest): Promise<{ number: number; url: string; deduplicated: boolean }>;
   /** Takes the PR out of draft; one already out stays as it is. */
-  markPrReady(repoPath: string, number: number): Promise<void>;
+  markPrReady(github: string, number: number): Promise<void>;
   /** Git access to the repository for the factory alone (ORC-125): the App's token, limited to it, never given to a run. */
-  gitAccess(repoPath: string): Promise<GitAccess>;
+  gitAccess(github: string): Promise<GitAccess>;
   /** Creates the check run, or updates the one of the sha that carries `externalId`. */
-  upsertCheckRun(repoPath: string, req: CheckRunRequest): Promise<{ id: number; deduplicated: boolean }>;
+  upsertCheckRun(github: string, req: CheckRunRequest): Promise<{ id: number; deduplicated: boolean }>;
   /**
    * Posts the review on the PR, a comment that changes nothing of its state (the check carries the verdict), or finds the one
    * that carries `externalId`. `ReviewLinesRefused` when a comment cannot go on its line.
    */
-  postReview(repoPath: string, number: number, req: ReviewRequest): Promise<{ id: number; deduplicated: boolean }>;
+  postReview(github: string, number: number, req: ReviewRequest): Promise<{ id: number; deduplicated: boolean }>;
   /**
    * Leaves `label` the only one of `group` on the PR (ORC-198), its other labels untouched: a final state, read first, so
    * that a label already in place writes nothing. GitHub creates a label the repository does not have yet.
    */
-  setExclusiveLabel(repoPath: string, number: number, label: string, group: readonly string[]): Promise<void>;
+  setExclusiveLabel(github: string, number: number, label: string, group: readonly string[]): Promise<void>;
 }

@@ -50,7 +50,7 @@ export class GithubReconciler {
       if (!project) return;
       let pr;
       try {
-        pr = await this.d.forge.findPr(project.repoPath, t.branch);
+        pr = await this.d.forge.findPr(project.github, t.branch);
       } catch (err) {
         this.d.log(`github reconcile ${t.ticketId}: ${(err as Error).message}`);
         return;

@@ -1,4 +1,4 @@
-import { GitHubApiError, GitHubAppAuth, isRecord, repoApi, type GitHubRepoRef } from './github-app.js';
+import { GitHubApiError, GitHubAppAuth, isRecord, repoApi, repoRef, type GitHubRepoRef } from './github-app.js';
 
 /** One workflow file, decoded from the Contents API. */
 export interface WorkflowSource {
@@ -109,9 +109,9 @@ function hasRequiredReviewers(rules: EnvironmentDto['protection_rules']): boolea
  * "no workflow" or "no environment" (ORC-273): `doctor` would then skip the CI secret check.
  */
 export class GitHubAppApi extends GitHubAppAuth {
-  async listWorkflows(repoPath: string): Promise<WorkflowSource[]> {
+  async listWorkflows(github: string): Promise<WorkflowSource[]> {
     // Resolved before the try: a 404 on the installation or its token is a configuration error, never "no CI".
-    const repo = await this.repo(repoPath);
+    const repo = repoRef(github);
     const token = await this.installationToken(repo);
     const contents = `/repos/${segment(repo.owner)}/${segment(repo.name)}/contents`;
     let entries: DirEntryDto[];
@@ -133,24 +133,24 @@ export class GitHubAppApi extends GitHubAppAuth {
     return sources.sort((a, b) => a.path.localeCompare(b.path));
   }
 
-  async listEnvironments(repoPath: string): Promise<EnvironmentProtection[]> {
-    const repo = await this.repo(repoPath);
+  async listEnvironments(github: string): Promise<EnvironmentProtection[]> {
+    const repo = repoRef(github);
     const token = await this.installationToken(repo);
     const path = `/repos/${segment(repo.owner)}/${segment(repo.name)}/environments`;
     const environments = await this.allPages(path, 'environments', 'a list of environments', isEnvironment, token);
     return environments.map((environment) => ({ name: environment.name, requiredReviewers: hasRequiredReviewers(environment.protection_rules) }));
   }
 
-  async branchProtection(repoPath: string): Promise<BranchProtection> {
-    const repo = await this.repo(repoPath);
+  async branchProtection(github: string): Promise<BranchProtection> {
+    const repo = repoRef(github);
     const token = await this.installationToken(repo);
     const { default_branch: branch } = await this.read('GET', repoApi(repo), token, isRepository, 'a repository with its default branch');
     return this.#protection(repo, token, branch);
   }
 
   /** Any branch's protection, read as `branchProtection` reads the default one's (the real GitHub's test, ORC-427). */
-  async protectionOf(repoPath: string, branch: string): Promise<BranchProtection> {
-    const repo = await this.repo(repoPath);
+  async protectionOf(github: string, branch: string): Promise<BranchProtection> {
+    const repo = repoRef(github);
     return this.#protection(repo, await this.installationToken(repo), branch);
   }
 
@@ -168,8 +168,8 @@ export class GitHubAppApi extends GitHubAppAuth {
   }
 
   /** What the App's installation on the repository holds, as granted, not as the manifest asks: read with the App's JWT. */
-  async installationPermissions(repoPath: string): Promise<Record<string, string>> {
-    const repo = await this.repo(repoPath);
+  async installationPermissions(github: string): Promise<Record<string, string>> {
+    const repo = repoRef(github);
     return (await this.read('GET', `${repoApi(repo)}/installation`, this.appJwt(), isInstallation, 'an installation with its permissions')).permissions;
   }
 }

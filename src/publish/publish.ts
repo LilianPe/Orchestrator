@@ -60,7 +60,7 @@ export class GitPublisher implements Publisher {
       const pushed = onForge.head !== req.sha;
       if (!pushed) this.d.log(`publish of ${req.ticketId}: ${req.sha} is already on the forge, not pushed again`);
       else await this.pushChecked(req, url, env, workDir, onForge.head);
-      const pr = await this.d.forge.ensurePr(req.repoPath, { branch: req.branch, base: onForge.base, title: req.title, body: req.body, draft: true }).catch((err: Error) => {
+      const pr = await this.d.forge.ensurePr(req.github, { branch: req.branch, base: onForge.base, title: req.title, body: req.body, draft: true }).catch((err: Error) => {
         // Only here can the forge's branch hold nothing the base lacks: a head on the commit skips the check of step 3.
         throw err instanceof NoCommitsBetween ? nothingToPublish(req.branch) : err;
       });
@@ -73,11 +73,11 @@ export class GitPublisher implements Publisher {
    * reading no config but ours, the App's token, the forge's base and branch head read, the default branch refused.
    */
   private async onForge<T>(
-    req: Pick<PublishRequest, 'repoPath' | 'runId' | 'ticketId' | 'branch'>,
+    req: Pick<PublishRequest, 'github' | 'runId' | 'ticketId' | 'branch'>,
     what: string,
     work: (s: { url: string; env: Record<string, string>; workDir: string; onForge: { base: string; head?: string } }) => Promise<T>,
   ): Promise<T> {
-    const access = await this.d.forge.gitAccess(req.repoPath);
+    const access = await this.d.forge.gitAccess(req.github);
     const workDir = join(this.d.runsDir, req.runId, `${what}-${randomUUID()}`);
     mkdirSync(workDir, { recursive: true });
     try {
@@ -132,7 +132,7 @@ export class GitPublisher implements Publisher {
 
   /** Steps 3 to 5 on the fresh clone at `cloneDir`, whose head is `req.sha`: the forge's heads fetched, the blocking check of the diff, the push. */
   private async checkAndPush(
-    req: Pick<PublishRequest, 'runId' | 'ticketId' | 'branch' | 'sha' | 'untrusted' | 'rewrites' | 'repoPath'>,
+    req: Pick<PublishRequest, 'runId' | 'ticketId' | 'branch' | 'sha' | 'untrusted' | 'rewrites' | 'github'>,
     url: string, env: Record<string, string>, workDir: string, cloneDir: string, known: string | undefined,
   ): Promise<void> {
     const { deadlineMs, sandboxes, inBox } = this.boxes(req);
@@ -155,7 +155,7 @@ export class GitPublisher implements Publisher {
     if (failures.length) throw new PublishRefused('diff', failures.map((f) => `${f.command}: ${f.output}`).join('\n'));
 
     // Read again: the checks above can outlast what a cached token has left to live.
-    const { env: fresh } = await this.d.forge.gitAccess(req.repoPath);
+    const { env: fresh } = await this.d.forge.gitAccess(req.github);
     // `--force-with-lease` and no other force: a fast-forward by the check above, or the factory's own head a rebase replaces,
     // whose lease makes the read and the write one step.
     const push = ['push', '--porcelain', '--no-verify', '--recurse-submodules=no', `--force-with-lease=refs/heads/${req.branch}:${remote ?? ''}`, '--', url, `${req.sha}:refs/heads/${req.branch}`];
