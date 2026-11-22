@@ -236,7 +236,7 @@ Each workflow is read as YAML. A workflow **with secrets** (a `secrets.X`, `secr
 - `push` whose `branches` filter can reach a factory branch (`feat/**`, `*/*`, `**`…) or whose `branches-ignore` does not fully exclude them. The filters are tried on branch names the factory makes (`branchName`, ORC-353, ORC-283): by the repository's naming, for every type it can give, and the legacy `factory/<id>-<slug>`. A pattern under the fixed beginning of one of them (`feat/`, `fix/`, `factory/` by default) always counts as reaching (it may name a team key no example has), and a negation excludes the factory's branches when it matches every one of them (`!feat/*-*`, `!fix/*-*` and `!factory/*-*` together do);
 - `workflow_run` without a filter, or with a filter that reaches a factory branch (extra protection against the same family of risk).
 
-Conversely, a `push` limited to branches the factory never names (`main`, `release/*`) or to tags only does not see secrets on a factory branch. With the default naming, a workflow that runs on `feat/**` or `fix/**` for the team's own branches reaches the factory's too.
+Conversely, a `push` limited to branches the factory never names (`main`, `release/*`) or to tags only does not see secrets on a factory branch, nor does a `schedule` (a list of crons, without branch filter): GitHub runs it on the default branch only (ORC-473). With the default naming, a workflow that runs on `feat/**` or `fix/**` for the team's own branches reaches the factory's too.
 
 Accepted:
 

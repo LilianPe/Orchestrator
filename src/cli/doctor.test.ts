@@ -8,7 +8,7 @@ import type { BranchProtection, EnvironmentProtection, WorkflowSource } from '..
 import { UnreadableAnswerError, type HttpClient, type HttpRequest } from '../adapters/forge/github-app.js';
 import type { BranchNaming } from '../core/naming.js';
 import { MISSING_TEST_COMMAND } from '../config/repo-config.js';
-import { checkHost, runDoctor, runDoctorCommand, type DoctorApi, type HostReport } from './doctor.js';
+import { checkHost, runDoctor, runDoctorCommand, type DoctorApi, type HostReport, type WorkflowReport } from './doctor.js';
 import { GITHUB_APP_PERMISSIONS } from './init.js';
 import { startFactory } from '../app/bootstrap.js';
 import { MemoryStore } from '../store/memory-store.js';
@@ -328,6 +328,29 @@ jobs:
 `;
     const result = await doctor([workflow(ci)]);
     expect(result.code).toBe(0);
+  });
+
+  it('accepts a schedule, a list of crons that runs on the default branch only, never a factory branch (ORC-473)', async () => {
+    const result = await doctor([workflow(secretsWorkflow("  schedule: [{ cron: '0 5 * * 1' }]"))], [], { json: true });
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.text) as { workflows: WorkflowReport[] };
+    expect(report.workflows[0]).toMatchObject({ triggers: ['schedule'], secrets: true, factoryBranches: false, verdict: 'accepted' });
+  });
+
+  it('keeps the pull_request verdict when a schedule comes with it (ORC-473)', async () => {
+    const workflows = async (trigger: string) =>
+      (JSON.parse((await doctor([workflow(secretsWorkflow(trigger))], [], { json: true })).text) as { workflows: WorkflowReport[] }).workflows[0];
+    const alone = await workflows('  pull_request:');
+    const withSchedule = await workflows("  pull_request:\n  schedule: [{ cron: '0 5 * * 1' }]");
+    expect(withSchedule).toMatchObject({ verdict: alone?.verdict, factoryBranches: alone?.factoryBranches, reasons: alone?.reasons });
+    expect(withSchedule?.verdict).toBe('refused');
+    expect(withSchedule?.triggers).toEqual(['pull_request', 'schedule']);
+  });
+
+  it('still refuses a non-object filter on any other trigger (ORC-473)', async () => {
+    const result = await doctor([workflow(secretsWorkflow('  push: [main]'))]);
+    expect(result.code).toBe(1);
+    expect(result.text).toContain('ambiguous filters for the `push` trigger');
   });
 
   it('refuses an ambiguous or unreadable YAML', async () => {
