@@ -6,7 +6,7 @@ The factory assumes the agent is compromised: an issue, a comment, a README or a
 
 How to read the Tests column:
 
-- `test/isolation/…` runs only with `FACTORY_ISOLATION=1` and a container engine: the `isolation` CI job, rootless Podman ([`tests.md`](tests.md#isolation-tests)). Test no. 11 (`test/isolation/claude-settings.test.ts`) also skips without a real `claude` and a credential; tests no. 12 and 13 skip without a test GitHub App (in CI they run in the `isolation-github` job, on `main` only).
+- `test/isolation/…` runs only with `FACTORY_ISOLATION=1` and a container engine: the `isolation` CI job, rootless Podman ([`tests.md`](tests.md#isolation-tests)). Test no. 11 (`test/isolation/claude-settings.test.ts`) also skips without a real `claude` and a credential; tests no. 12 and 13 skip without a test GitHub App. In CI, the tests that need a secret run in `main-secrets.yml`, on `main` only, never on a PR (ORC-475): no. 11 in its `isolation-claude` job, no. 12 and 13 in its `isolation-github` job.
 - `src/…` runs in the `unit` project, on every CI run.
 - A quoted title names the case within the file; without one, the whole file is the test.
 

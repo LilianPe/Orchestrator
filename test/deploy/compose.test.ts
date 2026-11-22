@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -312,15 +312,16 @@ describe('the workflows doctor reads on the pilot repository (ORC-475)', () => {
     expect(ci.jobs['isolation-github']).toBeUndefined();
   });
 
-  it('is accepted by doctor, with no environment on the repository, as it has none', async () => {
+  it('is accepted by doctor, every workflow of the repository, with no environment, as online (gh api …/environments)', async () => {
     const lines: string[] = [];
     const code = await runDoctor({
       repoPath: root,
       api: {
-        listWorkflows: async () => [
-          { path: '.github/workflows/ci.yml', content: ciText },
-          { path: '.github/workflows/main-secrets.yml', content: secretsText },
-        ],
+        // Every file, as GitHub lists them: a third workflow is judged too.
+        listWorkflows: async () =>
+          readdirSync(join(root, '.github/workflows'))
+            .sort()
+            .map((f) => ({ path: `.github/workflows/${f}`, content: read(`.github/workflows/${f}`) })),
         listEnvironments: async () => [],
         branchProtection: async () => ({ branch: 'main', classic: false, rules: ['pull_request', 'required_status_checks'], pullRequestRulesets: [{ id: 1, bypass: 'never' }] }),
         installationPermissions: async () => GITHUB_APP_PERMISSIONS,
