@@ -36,7 +36,7 @@ export function makeRepoConfig(o: { exec?: Exec; fetchDeadlineMs?: number; log?:
     if (fetch) await fetchMirror(repoPath, { deadlineMs: o.fetchDeadlineMs, log: (m) => o.log?.(`${REPO_CONFIG_PATH}: ${m}`) });
     const { ref, name, set } = await originHeadOf(exec, repoPath);
     // The hint only when `origin/HEAD` is missing: `origin/main` is then a guess, perhaps not the default branch.
-    const unreadable = `unreadable default branch (${name})${set ? '' : `: origin/HEAD is not set on the factory's repository; if ${name} is not the default branch, run \`git remote set-head origin --auto\` on this repository`}`;
+    const unreadable = `unreadable default branch (${name})${set ? '' : `: origin/HEAD is not set; the factory's mirror sets it at a fetch once the repository has a default branch, a clone by \`git remote set-head origin --auto\``}`;
     // `ls-tree` tells a file absent from a branch it could not read, which `git show` answers alike.
     const entryOf = (path: string) => git(['ls-tree', '-z', ref, '--', path], () => unreadable);
     // `ls-tree` does not go through a `.factory` that is a link: the file under it would read as absent.

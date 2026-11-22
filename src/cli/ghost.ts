@@ -324,12 +324,23 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
       return app ? app.fetchEnv(github) : {};
     },
   });
-  // Each project's repository on GitHub, read once from its clone's origin until ORC-471 part 3; its git is the daemon's mirror's.
+  /** `read` of `key` once, for every ticket after; a failure is not kept, the next ticket reads again. */
+  const once = <T>(cache: Map<string, Promise<T>>, key: string, read: () => Promise<T>): Promise<T> => {
+    const known = cache.get(key);
+    if (known) return known;
+    const reading = read().catch((err: unknown) => {
+      cache.delete(key);
+      throw err;
+    });
+    cache.set(key, reading);
+    return reading;
+  };
+  // Each project's repository on GitHub, read from its clone's origin until ORC-471 part 3; its git is the daemon's mirror's.
   const origins = new Map<string, Promise<string>>();
-  const githubOf = (repoPath: string) => origins.get(repoPath) ?? origins.set(repoPath, projectGithub({ repoPath }).then((o) => o.github)).get(repoPath)!;
-  // The mirror, made if the daemon has not made it yet: fetched once per command, for every ticket after.
-  const mirrorsReady = new Map<string, Promise<string>>();
-  const mirrorOf = (repoPath: string) => mirrorsReady.get(repoPath) ?? mirrorsReady.set(repoPath, githubOf(repoPath).then((github) => mirrors.ready(github))).get(repoPath)!;
+  const githubOf = (repoPath: string) => once(origins, repoPath, () => projectGithub({ repoPath }).then((o) => o.github));
+  // The mirror, made if the daemon has not made it yet, fetched once per command.
+  const fetched = new Map<string, Promise<string>>();
+  const mirrorOf = (repoPath: string) => once(fetched, repoPath, () => githubOf(repoPath).then((github) => mirrors.ready(github)));
   try {
     let user = 'cli';
     try {

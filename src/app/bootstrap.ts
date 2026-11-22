@@ -272,8 +272,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       ? new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets, proxyHasToken: () => !!claudeTokenOf(), log, sandboxes })
       : Object.assign(new FakeRunner(), { submit: (runId: string, output: AgentOutput) => saveAgentOutput(store, runId, output) });
     const clonesAuth = cloneAuth(gitAuth, clones);
-    // Each mirror made or fetched before the first launch, one project's failure logged and left to its launches, which fetch it again.
-    await Promise.all(projects.map(async (p) => {
+    // Each mirror made or fetched in the background: a first clone can take minutes, and the server, its webhooks and /health do not
+    // wait for it. A launch that comes meanwhile waits for it (`RepoMirrors.fetch`, one git at a time); a failure is logged and left to
+    // the launches, which fetch it again.
+    void Promise.all(projects.map(async (p) => {
       try {
         await mirrors.ready(p.github);
       } catch (err) {

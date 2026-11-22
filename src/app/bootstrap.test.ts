@@ -210,6 +210,8 @@ describe('bootstrap', () => {
     const logs: string[] = [];
     try {
       const app = await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {}, githubUrl: github.url });
+      // Made in the background: the start does not wait for a first clone.
+      await vi.waitFor(() => expect(logs.join('\n')).toContain('is ignored'));
       await app.stop();
     } finally {
       recover.mockRestore();
@@ -225,8 +227,9 @@ describe('bootstrap', () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     saveInstance(home, { port: 4181, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', repoPath: githubClone(), linearTeamKey: 'REL' }] });
     const logs: string[] = [];
-    await (await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} })).stop();
-    expect(logs).toContainEqual(expect.stringMatching(/^Warning: p: the mirror of acme\/app could not be fetched, its launches fetch it again: the forge could not be read/));
+    const app = await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
+    await vi.waitFor(() => expect(logs).toContainEqual(expect.stringMatching(/^Warning: p: the mirror of acme\/app could not be fetched, its launches fetch it again: the forge could not be read/)));
+    await app.stop();
     expect(existsSync(join(home, 'repos', 'acme', 'app'))).toBe(false);
   });
 

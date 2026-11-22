@@ -606,29 +606,30 @@ describe('GitWorkspaces', () => {
     expect(agent('config', '--local', '--name-only', '--list').split('\n').filter((k) => !/^(core|extensions)\./.test(k)).sort()).toEqual(['remote.origin.fetch', 'remote.origin.url', 'user.email', 'user.name']);
   });
 
-  it("checks the agent's files out through a Git LFS of the host's with the forge's token in that checkout's environment alone (ORC-479)", async () => {
-    // As git-lfs's smudge, in the host's own config: what it reads of git's config to reach the forge.
+  it("checks the agent's LFS files out as their pointers, whatever Git LFS the host installs, so that its git sees them unchanged (ORC-479)", async () => {
+    // A pointer committed on the forge, before the host's Git LFS below.
+    const { repo, root } = fixtureRepo();
+    writeFileSync(join(repo, '.gitattributes'), '*.bin filter=lfs\n');
+    writeFileSync(join(repo, 'big.bin'), 'version https://git-lfs.github.com/spec/v1\n');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-qm', 'lfs');
+    git(repo, 'push', '-q', 'origin', 'main');
+    // As `git lfs install` on the host: a smudge that downloads, required, in the host's own config.
     const dir = mkdtempSync(join(tmpdir(), 'factory-git-'));
     const seen = join(dir, 'seen');
     const global = join(dir, 'gitconfig');
-    git(dir, 'config', '--file', global, 'filter.lfs.smudge', `sh -c 'git config http.https://github.com/.extraheader >> "${seen}"; cat'`);
+    git(dir, 'config', '--file', global, 'filter.lfs.smudge', `sh -c 'echo smudged >> "${seen}"; echo downloaded'`);
+    git(dir, 'config', '--file', global, 'filter.lfs.process', 'git-lfs-missing filter-process');
+    git(dir, 'config', '--file', global, 'filter.lfs.required', 'true');
     git(dir, 'config', '--file', global, 'filter.lfs.clean', 'cat');
     vi.stubEnv('GIT_CONFIG_GLOBAL', global);
     vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
     onTestFinished(() => {
       vi.unstubAllEnvs();
     });
-    const { repo, root } = fixtureRepo();
-    writeFileSync(join(repo, '.gitattributes'), '*.bin filter=lfs\n');
-    writeFileSync(join(repo, 'big.bin'), 'data\n');
-    git(repo, 'add', '.');
-    git(repo, 'commit', '-qm', 'lfs');
-    git(repo, 'push', '-q', 'origin', 'main');
-    const auth = async () => ({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader', GIT_CONFIG_VALUE_0: 'AUTHORIZATION: basic SECRET-479' });
-    const w = await new GitWorkspaces({ root, auth }).prepare(req(repo));
-    expect(readFileSync(join(w.path, 'big.bin'), 'utf8')).toBe('data\n');
-    expect(readFileSync(seen, 'utf8').trim()).toBe('AUTHORIZATION: basic SECRET-479');
-    expect(agentConfig(w.path)).not.toContain('SECRET-479');
+    const w = await new GitWorkspaces({ root }).prepare(req(repo));
+    expect(readFileSync(join(w.path, 'big.bin'), 'utf8')).toBe('version https://git-lfs.github.com/spec/v1\n');
+    expect(existsSync(seen)).toBe(false);
     expect(agentConfig(w.path)).not.toContain('lfs');
   });
 

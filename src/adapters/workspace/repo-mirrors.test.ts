@@ -100,6 +100,31 @@ describe('RepoMirrors (ORC-479)', () => {
     expect(git(await mirrors.ready('acme/app'), 'symbolic-ref', 'refs/remotes/origin/HEAD')).toBe('refs/remotes/origin/main');
   });
 
+  it('fetches what was asked of a mirror it had to make first: the forge\'s HEAD to a ref of its own', async () => {
+    const f = forge();
+    const mirrors = new RepoMirrors({ root: f.root, url: f.url });
+    const mirror = mirrors.path('acme/app');
+    await mirrors.fetch(mirror, { refspecs: ['+HEAD:refs/factory/forge-head/x'] });
+    expect(git(mirror, 'rev-parse', 'refs/factory/forge-head/x')).toBe(git(f.work, 'rev-parse', 'HEAD'));
+  });
+
+  it('removes what a daemon killed while making a mirror left aside, and takes the mirror another process made meanwhile', async () => {
+    const f = forge();
+    const mirror = join(f.root, 'acme', 'app');
+    // Left by a kill halfway: a partial copy at the making's own path.
+    git(f.base, 'init', '--quiet', '--bare', `${mirror}.new`);
+    writeFileSync(join(`${mirror}.new`, 'partial'), '');
+    // `factory ghost` makes it while this one fetches: the first one renamed wins, the other's copy goes.
+    const exec: Exec = async (cmd, args, opts) => {
+      const r = await execCmd(cmd, args, opts);
+      if (args.includes('set-head') && !existsSync(mirror)) git(f.base, 'clone', '--quiet', '--bare', f.url('acme/app'), mirror);
+      return r;
+    };
+    await new RepoMirrors({ root: f.root, url: f.url, exec }).ready('acme/app');
+    expect(readdirSync(join(f.root, 'acme'))).toEqual(['app']);
+    expect(existsSync(join(mirror, 'partial'))).toBe(false);
+  });
+
   it("sets origin/HEAD once the forge has a default branch, a repository empty when it was made", async () => {
     const f = forge();
     const empty = f.url('acme/empty');

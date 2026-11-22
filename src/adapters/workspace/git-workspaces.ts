@@ -16,6 +16,8 @@ function assertSafe(id: string): void {
   if (/[\\/]/.test(id) || id.includes('..')) throw new Error(`Invalid identifier: ${id}`);
 }
 
+/** A Git LFS filter the host's config installs, off for the checkout that makes an agent's repository: the files stay its pointers. */
+const NO_LFS = ['filter.lfs.smudge=', 'filter.lfs.process=', 'filter.lfs.required=false'].flatMap((c) => ['-c', c]);
 /** What the agent's repository fetches from its `origin`, as a clone's: every branch of the forge, as remote-tracking refs. */
 const ORIGIN_FETCH = '+refs/heads/*:refs/remotes/origin/*';
 /** A commit's full id, SHA-1 or SHA-256. */
@@ -241,9 +243,10 @@ export class GitWorkspaces implements WorkspaceManager {
    * Its config is written here, key by key, never taken from `repo`'s (ORC-479, after ORC-341's allow list): the factory's
    * identity for a commit (`FACTORY_GIT_IDENTITY`), and `origin` as `repo` names it, without the credentials of a URL
    * (`withoutUserinfo`), fetching every branch. No Git LFS filter: the runner's image has no `git-lfs`, and a filter naming a
-   * missing command fails each checkout (`filter-process`) or each file. The agent has no token (ORC-125): the factory alone
-   * pushes, with its own. The checkout on the host reads the host's own git config, as any git of the daemon, and the forge's
-   * token in its environment alone (`remoteGitEnv`): a Git LFS the host installed downloads as the repository's fetch does.
+   * missing command fails each checkout (`filter-process`) or each file. The checkout on the host runs no LFS filter either
+   * (`NO_LFS`), whatever the host's own config installs: the worktree holds the pointers its index has, which the agent's git,
+   * with no clean filter, reads as unchanged; a file it downloaded would be committed whole in place of its pointer. The agent
+   * has no token (ORC-125): the factory alone pushes, with its own, and the checkout needs none.
    */
   private async agentRepository(repo: string, path: string, trunk: string, checkout: readonly string[]): Promise<void> {
     const making = `${path}.new`;
@@ -261,13 +264,11 @@ export class GitWorkspaces implements WorkspaceManager {
         ...(origin ? ([['remote.origin.url', withoutUserinfo(origin)], ['remote.origin.fetch', ORIGIN_FETCH]] as [string, string][]) : []),
       ];
       for (const [key, value] of config) await here(['-C', making, 'config', key, value]);
-      // The forge's token for a Git LFS of the host's: in the env of that checkout alone, never on a command line nor in the agent's config.
-      const asRepo = await remoteGitEnv(this.o.auth, repo, this.o.fetchDeadlineMs ?? FETCH_DEADLINE_MS);
       // Resolved: it is read from `making`, and the mirror's root can be relative.
       await here(['-C', making, 'fetch', '--quiet', '--no-tags', '--', resolve(repo), '+refs/remotes/origin/*:refs/remotes/origin/*', '+refs/tags/*:refs/tags/*']);
       await here(['-C', making, 'symbolic-ref', 'refs/remotes/origin/HEAD', trunk]);
-      await here(['-C', making, 'checkout', '--quiet', ...checkout], asRepo);
-      await here(['-C', making, 'sparse-checkout', 'set', '--no-cone', '/*', '!/.claude/*', '/.claude/CLAUDE.md'], asRepo);
+      await here([...NO_LFS, '-C', making, 'checkout', '--quiet', ...checkout]);
+      await here([...NO_LFS, '-C', making, 'sparse-checkout', 'set', '--no-cone', '/*', '!/.claude/*', '/.claude/CLAUDE.md']);
       renameSync(making, path);
     } catch (err) {
       await rm(making, { recursive: true, force: true });

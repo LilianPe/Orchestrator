@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, renameSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
@@ -30,6 +29,8 @@ export class RepoMirrors {
   private readonly exec: Exec;
   /** The repository of each mirror, by its path: what `auth` gives the token of. */
   private readonly repos = new Map<string, string>();
+  /** The repositories whose mirror has no `origin/HEAD` yet, said once. */
+  private readonly headless = new Set<string>();
   /** The last fetch of each mirror, which the next one waits for. */
   private readonly turns = new Map<string, Promise<unknown>>();
 
@@ -62,13 +63,17 @@ export class RepoMirrors {
   };
 
   /**
-   * `git fetch origin` in `repo` as `fetchOrigin` does it, after the fetch under way there: a mirror missing yet is made first.
-   * A path that is not a mirror (a replayed ticket's clone) is fetched as it is, without a token.
+   * `git fetch origin` in `repo` as `fetchOrigin` does it, after the fetch under way there: a mirror missing yet is made first,
+   * whole, within `MIRROR_CLONE_DEADLINE_MS` rather than the caller's deadline, then fetched as asked when `refspecs` name more
+   * than its branches. A path that is not a mirror (a replayed ticket's clone) is fetched as it is, without a token.
    */
   readonly fetch: FetchOrigin = (repo, o = {}) =>
     this.turn(repo, async () => {
       const github = this.repos.get(resolve(repo));
-      if (github && !existsSync(repo)) return this.make(github, repo, o.log);
+      if (github && !existsSync(repo)) {
+        await this.make(github, repo, o.log);
+        if (!o.refspecs?.length) return;
+      }
       await fetchOrigin(this.exec, repo, { ...o, auth: this.auth });
       if (github) await this.setHead(repo, o.deadlineMs);
     });
@@ -89,10 +94,12 @@ export class RepoMirrors {
 
   /**
    * A bare repository, its `origin` the forge and what it fetches every branch, fetched whole, `origin/HEAD` set from the forge.
-   * Made aside, then renamed: a daemon killed halfway leaves no mirror half fetched.
+   * Made aside, at a path of its own that the next making removes first, then renamed: a daemon killed halfway leaves neither a
+   * mirror half fetched nor a copy that would stay on the disk. Another process that made it meanwhile (`factory ghost`) wins.
    */
   private async make(github: string, path: string, log?: (message: string) => void): Promise<void> {
-    const making = `${path}.new-${randomUUID()}`;
+    const making = `${path}.new`;
+    await rm(making, { recursive: true, force: true });
     mkdirSync(dirname(path), { recursive: true });
     const git = (...args: string[]) => mustExec(this.exec, 'git', ['-C', making, ...args]);
     try {
@@ -103,7 +110,8 @@ export class RepoMirrors {
       this.repos.set(resolve(making), github);
       await fetchOrigin(this.exec, making, { deadlineMs: MIRROR_CLONE_DEADLINE_MS, auth: this.auth, ...(log ? { log } : {}) });
       await this.setHead(making);
-      renameSync(making, path);
+      if (existsSync(path)) await rm(making, { recursive: true, force: true });
+      else renameSync(making, path);
     } catch (err) {
       await rm(making, { recursive: true, force: true });
       throw err;
@@ -120,7 +128,10 @@ export class RepoMirrors {
     if ((await originHeadOf(this.exec, repo)).set) return;
     const env = await remoteGitEnv(this.auth, repo, deadlineMs);
     const r = await this.exec('git', ['-C', repo, 'remote', 'set-head', 'origin', '--auto'], { env, timeoutMs: deadlineMs });
-    // An empty repository has no default branch yet: `origin/main` is assumed until it has one.
-    if (r.code !== 0) this.o.log?.(`mirror of ${this.repos.get(resolve(repo)) ?? repo}: origin/HEAD not set: ${r.stderr.trim().split('\n')[0] ?? ''}`);
+    // An empty repository has no default branch yet: `origin/main` is assumed until it has one, said once.
+    const github = this.repos.get(resolve(repo)) ?? repo;
+    if (r.code === 0 || this.headless.has(github)) return;
+    this.headless.add(github);
+    this.o.log?.(`mirror of ${github}: origin/HEAD not set, set at a next fetch once the repository has a default branch: ${r.stderr.trim().split('\n')[0] ?? ''}`);
   }
 }
