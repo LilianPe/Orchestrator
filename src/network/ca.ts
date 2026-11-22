@@ -69,7 +69,7 @@ function opensslError(pem: string): string | undefined {
  */
 function replace(path: string, content: string, mode: number): void {
   const next = `${path}.tmp`;
-  rmSync(next, { force: true }); // left by a crash
+  rmSync(next, { force: true }); // left by a crash: made anew, never written through a link planted there
   writeFileSync(next, content, { mode, flush: true });
   chmodSync(next, mode); // whatever the umask
   renameSync(next, path);

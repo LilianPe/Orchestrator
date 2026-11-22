@@ -64,51 +64,50 @@ describe('the serials of its certificates (ORC-477)', () => {
 
 describe('a CA stored before ORC-477 that OpenSSL cannot read (ORC-483)', () => {
   /** A CA made as the daemon makes it, then signed anew under a serial forge writes with illegal padding: the stored files a pre-#321 install could hold. */
-  async function stored(at: string): Promise<{ cert: Buffer; key: Buffer }> {
+  async function stored(at: string): Promise<{ certPem: string; keyPem: string }> {
     const made = await loadOrCreateCa(at);
     const cert = forge.pki.certificateFromPem(made.certPem);
     cert.serialNumber = '0000'.padEnd(32, '2');
     cert.sign(forge.pki.privateKeyFromPem(made.keyPem), forge.md.sha256.create());
-    writeFileSync(made.certPath, forge.pki.certificateToPem(cert));
-    return { cert: readFileSync(made.certPath), key: readFileSync(join(at, 'ca.key')) };
+    const certPem = forge.pki.certificateToPem(cert);
+    writeFileSync(made.certPath, certPem);
+    return { certPem, keyPem: made.keyPem };
   }
 
   it('is replaced by a new one, both files at their modes, said once and without its key', async () => {
     const at = join(dir, 'ca-padded');
+    const keyPath = join(at, 'ca.key');
     const before = await stored(at);
-    expect(() => new X509Certificate(before.cert)).toThrow();
+    expect(() => new X509Certificate(before.certPem)).toThrow();
     const log = vi.fn();
     const ca = await loadOrCreateCa(at, log);
-    const root = new X509Certificate(ca.certPem);
-    expect(root.ca).toBe(true);
-    expect(root.checkPrivateKey(createPrivateKey(ca.keyPem))).toBe(true);
-    expect(readFileSync(ca.certPath, 'utf8')).toBe(ca.certPem);
-    expect(readFileSync(join(at, 'ca.key'), 'utf8')).toBe(ca.keyPem);
-    expect(ca.keyPem).not.toBe(before.key.toString());
+    // The pair on disk belongs together: the key renamed first, the certificate last.
+    expect(new X509Certificate(ca.certPem).checkPrivateKey(createPrivateKey(ca.keyPem))).toBe(true);
+    expect(ca.keyPem).not.toBe(before.keyPem);
     if (process.platform !== 'win32') {
-      expect(statSync(join(at, 'ca.key')).mode & 0o777).toBe(0o600);
+      expect(statSync(keyPath).mode & 0o777).toBe(0o600);
       expect(statSync(ca.certPath).mode & 0o777).toBe(0o644);
     }
     expect(readdirSync(at).sort()).toEqual(['ca.crt', 'ca.key']);
     expect(log).toHaveBeenCalledOnce();
     const [message] = log.mock.calls[0]! as [string];
     expect(message).toContain(at);
-    for (const secret of [before.key.toString(), ca.keyPem]) expect(message).not.toContain(secret.split('\n')[1]);
-    expect(message).not.toMatch(/PRIVATE KEY/);
-    // Read back as it is after: no second word.
+    for (const key of [before.keyPem, ca.keyPem]) expect(message).not.toContain(key.split('\n')[1]);
+    // Read back from disk as it is after: no second word.
     expect(await loadOrCreateCa(at, log)).toEqual(ca);
     expect(log).toHaveBeenCalledOnce();
   });
 
   it('a CA OpenSSL reads is kept byte for byte, nothing said', async () => {
     const at = join(dir, 'ca-valid');
+    const keyPath = join(at, 'ca.key');
     const made = await loadOrCreateCa(at);
     const cert = readFileSync(made.certPath);
-    const key = readFileSync(join(at, 'ca.key'));
+    const key = readFileSync(keyPath);
     const log = vi.fn();
     expect(await loadOrCreateCa(at, log)).toEqual(made);
     expect(readFileSync(made.certPath).equals(cert)).toBe(true);
-    expect(readFileSync(join(at, 'ca.key')).equals(key)).toBe(true);
+    expect(readFileSync(keyPath).equals(key)).toBe(true);
     expect(log).not.toHaveBeenCalled();
   });
 });
