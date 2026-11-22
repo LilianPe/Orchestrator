@@ -51,7 +51,7 @@ export interface EgressProxyOptions {
   caDir: string;
   /** The factory's agent API as the sandbox names it (`FACTORY_API`), and where the daemon listens for it. */
   agentApi?: { host: string; port: number; to: { host: string; port: number } };
-  /** Where a journal that cannot be written is told; the run goes on. */
+  /** Where a journal that cannot be written is told, the run going on; and a stored CA OpenSSL cannot read, replaced (ORC-483). */
   log?: (message: string) => void;
   /** The Claude token of the runs `open` opens (ORC-337): the proxy in the daemon's process. The `proxy` service gets each run's from the daemon (`openRun`). */
   claudeToken?: () => string | undefined;
@@ -240,7 +240,7 @@ export class EgressProxy {
 
   private async listen(run: Run, path: string): Promise<void> {
     this.tlsReady ??= (async () => {
-      const ca = loadOrCreateCa(this.o.caDir);
+      const ca = loadOrCreateCa(this.o.caDir, this.o.log);
       this.tls = { ca: await ca, issuer: await LeafIssuer.create(ca) };
     })();
     await this.tlsReady;
