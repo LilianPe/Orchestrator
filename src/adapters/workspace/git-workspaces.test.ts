@@ -607,12 +607,15 @@ describe('GitWorkspaces', () => {
   });
 
   it("checks the agent's LFS files out as their pointers, whatever Git LFS the host installs, so that its git sees them unchanged (ORC-479)", async () => {
-    // A pointer committed on the forge, before the host's Git LFS below.
+    // A pointer committed on the forge as is, whatever Git LFS the machine running the test has (GitHub's runners install it
+    // system-wide: its clean filter would turn any other text into a pointer to it).
+    const pointer = 'version https://git-lfs.github.com/spec/v1\noid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\nsize 12345\n';
     const { repo, root } = fixtureRepo();
     writeFileSync(join(repo, '.gitattributes'), '*.bin filter=lfs\n');
-    writeFileSync(join(repo, 'big.bin'), 'version https://git-lfs.github.com/spec/v1\n');
-    git(repo, 'add', '.');
+    writeFileSync(join(repo, 'big.bin'), pointer);
+    git(repo, '-c', 'filter.lfs.clean=', '-c', 'filter.lfs.process=', '-c', 'filter.lfs.required=false', 'add', '.');
     git(repo, 'commit', '-qm', 'lfs');
+    expect(git(repo, 'cat-file', '-p', 'HEAD:big.bin')).toBe(pointer.trim());
     git(repo, 'push', '-q', 'origin', 'main');
     // As `git lfs install` on the host: a smudge that downloads, required, in the host's own config.
     const dir = mkdtempSync(join(tmpdir(), 'factory-git-'));
@@ -628,9 +631,12 @@ describe('GitWorkspaces', () => {
       vi.unstubAllEnvs();
     });
     const w = await new GitWorkspaces({ root }).prepare(req(repo));
-    expect(readFileSync(join(w.path, 'big.bin'), 'utf8')).toBe('version https://git-lfs.github.com/spec/v1\n');
+    expect(readFileSync(join(w.path, 'big.bin'), 'utf8')).toBe(pointer);
     expect(existsSync(seen)).toBe(false);
     expect(agentConfig(w.path)).not.toContain('lfs');
+    // As the agent's git sees it in a sandbox, with no config but its repository's: nothing changed.
+    const sandbox = { ...process.env, GIT_CONFIG_GLOBAL: join(dir, 'none'), GIT_CONFIG_NOSYSTEM: '1' };
+    expect(execFileSync('git', ['status', '--porcelain'], { cwd: w.path, encoding: 'utf8', env: sandbox })).toBe('');
   });
 
   it('reads the head of a repository whose refs git packed, on a branch or detached', async () => {
