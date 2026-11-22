@@ -115,9 +115,13 @@ function rsa(): Promise<{ publicKey: string; privateKey: string }> {
   );
 }
 
-/** A positive serial: 16 random bytes, the first below 0x80. */
+/**
+ * A positive serial, 126 random bits: its first byte from 0x40 to 0x7f, so its DER is minimal as it stands. A first byte
+ * of zero, before another one, was written by forge with a zero byte left in front: illegal padding to OpenSSL, which then
+ * read neither that CA in a client's `ca` (dropped without a word, the client trusting nothing) nor that leaf (ORC-477).
+ */
 function serial(): string {
   const b = randomBytes(16);
-  b[0] = b[0]! & 0x7f;
+  b[0] = (b[0]! & 0x3f) | 0x40;
   return b.toString('hex');
 }
