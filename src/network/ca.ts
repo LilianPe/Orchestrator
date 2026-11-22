@@ -1,4 +1,4 @@
-import { generateKeyPair, randomBytes, X509Certificate } from 'node:crypto';
+import { createPrivateKey, generateKeyPair, randomBytes, X509Certificate } from 'node:crypto';
 import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { dirname, join } from 'node:path';
@@ -18,16 +18,18 @@ const DAY = 24 * 60 * 60 * 1000;
 /**
  * `<dir>/ca.crt` and `<dir>/ca.key` (0600), made at the first call. A stored certificate OpenSSL cannot read is replaced,
  * `log` told (ORC-483): before ORC-477, one serial in 65,536 was written with illegal padding, and Node drops such a CA
- * from a client's `ca` without a word, so no sandbox could trust it. One OpenSSL reads is kept as it is.
+ * from a client's `ca` without a word, so no sandbox could trust it. So is one whose key is not its own (ORC-484): one file
+ * restored alone, or two processes racing on the folder. A readable pair that belongs together is kept as it is.
  */
 export async function loadOrCreateCa(dir: string, log?: (message: string) => void): Promise<FactoryCa> {
   const certPath = join(dir, 'ca.crt');
   const keyPath = join(dir, 'ca.key');
-  let unread: string | undefined;
+  let unusable: string | undefined;
   if (existsSync(certPath) && existsSync(keyPath)) {
     const certPem = readFileSync(certPath, 'utf8');
-    unread = opensslError(certPem);
-    if (!unread) return { certPem, keyPem: readFileSync(keyPath, 'utf8'), certPath };
+    const keyPem = readFileSync(keyPath, 'utf8');
+    unusable = unusableReason(certPem, keyPem);
+    if (!unusable) return { certPem, keyPem, certPath };
   }
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const { publicKey, privateKey } = await rsa();
@@ -49,18 +51,27 @@ export async function loadOrCreateCa(dir: string, log?: (message: string) => voi
   // The key first, the certificate last: cut in between, the old certificate stays, still unreadable, and the next start makes another.
   replace(keyPath, privateKey, 0o600);
   replace(certPath, certPem, 0o644);
-  if (unread) log?.(`egress: the CA in ${dir} was unreadable to OpenSSL (${unread}), so no sandbox trusted it: a new one replaced it`);
+  if (unusable) log?.(`egress: the CA in ${dir} could not be used (${unusable}): a new one replaced it`);
   return { certPem, keyPem: privateKey, certPath };
 }
 
-/** Why OpenSSL cannot read `pem`, as Node reports it; undefined when it can. */
-function opensslError(pem: string): string | undefined {
+/**
+ * Why the stored pair cannot sign: a certificate OpenSSL cannot read (no sandbox trusts it), or a key that is not its own
+ * (every leaf fails verification, ORC-484). Never the key's content; undefined when the pair is usable.
+ */
+function unusableReason(certPem: string, keyPem: string): string | undefined {
+  let cert: X509Certificate;
   try {
-    new X509Certificate(pem);
-    return undefined;
+    cert = new X509Certificate(certPem);
   } catch (err) {
-    return (err as Error).message;
+    return `certificate unreadable to OpenSSL, so no sandbox trusted it: ${(err as Error).message}`;
   }
+  try {
+    if (cert.checkPrivateKey(createPrivateKey(keyPem))) return undefined;
+  } catch {
+    // An unreadable key; OpenSSL's message is not passed on, in case it quotes the key.
+  }
+  return 'its key does not match its certificate, so every leaf failed verification';
 }
 
 /**

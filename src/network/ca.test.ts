@@ -98,6 +98,32 @@ describe('a CA stored before ORC-477 that OpenSSL cannot read (ORC-483)', () => 
     expect(log).toHaveBeenCalledOnce();
   });
 
+  it('a readable certificate whose key is another one is replaced the same way (ORC-484)', async () => {
+    const at = join(dir, 'ca-mismatched');
+    const keyPath = join(at, 'ca.key');
+    const made = await loadOrCreateCa(at);
+    // The key of another CA beside this certificate: one file restored from a backup, or two processes racing on the folder.
+    const other = await loadOrCreateCa(join(dir, 'ca-other'));
+    writeFileSync(keyPath, other.keyPem);
+    expect(new X509Certificate(made.certPem).checkPrivateKey(createPrivateKey(other.keyPem))).toBe(false);
+    const log = vi.fn();
+    const ca = await loadOrCreateCa(at, log);
+    expect(new X509Certificate(ca.certPem).checkPrivateKey(createPrivateKey(ca.keyPem))).toBe(true);
+    expect(ca.certPem).not.toBe(made.certPem);
+    expect([made.keyPem, other.keyPem]).not.toContain(ca.keyPem);
+    if (process.platform !== 'win32') {
+      expect(statSync(keyPath).mode & 0o777).toBe(0o600);
+      expect(statSync(ca.certPath).mode & 0o777).toBe(0o644);
+    }
+    expect(readdirSync(at).sort()).toEqual(['ca.crt', 'ca.key']);
+    expect(log).toHaveBeenCalledOnce();
+    const [message] = log.mock.calls[0]! as [string];
+    expect(message).toContain(at);
+    for (const key of [made.keyPem, other.keyPem, ca.keyPem]) expect(message).not.toContain(key.split('\n')[1]);
+    expect(await loadOrCreateCa(at, log)).toEqual(ca);
+    expect(log).toHaveBeenCalledOnce();
+  });
+
   it('a CA OpenSSL reads is kept byte for byte, nothing said', async () => {
     const at = join(dir, 'ca-valid');
     const keyPath = join(at, 'ca.key');
