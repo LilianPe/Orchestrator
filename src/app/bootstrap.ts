@@ -37,7 +37,7 @@ import { claudeAccountReader, disabledControls, readCapsOf, specPublicationOf, s
 import { loadSealedFactoryYml } from '../config/server-secrets.js';
 import { startRefusals, type StartChecks } from '../config/start-refusals.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../config/repo-config.js';
-import { cloneAuth, originGithub, projectGithub } from './project-github.js';
+import { cloneAuth, httpsGithub, projectGithub } from './project-github.js';
 import { makeDryRunFiles, makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint } from './repo-variables.js';
 import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens, sealSecretsAtRest, validatorWarnings } from '../config/instance.js';
 import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
@@ -262,9 +262,11 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const appForge = githubApp ? new GitHubAppForge({ ...githubApp, log }) : undefined;
     // The daemon's own git reads a private repository with the App's token (ORC-442); without the App, with the machine's credentials.
     const gitAuth = appForge?.fetchEnv.bind(appForge);
-    // The clones fetch by their path until ORC-471 part 2: each project's, and the knowledge base's when its origin is on GitHub.
-    const knowledgeGithub = instance.knowledge && (await originGithub(instance.knowledge.repoPath));
-    const clones = new Map([...projects.map((p) => [p.repoPath, p.github] as const), ...(knowledgeGithub ? [[instance.knowledge!.repoPath, knowledgeGithub] as const] : [])]);
+    // The clones fetch by their path until ORC-471 part 2: each project's, and the knowledge base's, fetched over HTTPS from GitHub.
+    const clones = new Map<string, string>();
+    for (const p of projects) if ((await httpsGithub(p.repoPath))?.toLowerCase() === p.github.toLowerCase()) clones.set(p.repoPath, p.github);
+    const knowledgeGithub = instance.knowledge && (await httpsGithub(instance.knowledge.repoPath));
+    if (knowledgeGithub) clones.set(instance.knowledge!.repoPath, knowledgeGithub);
     const clonesAuth = cloneAuth(gitAuth, clones);
     const workspaces = new GitWorkspaces({ root: paths.workspaces, log, auth: clonesAuth });
     const forge = appForge ?? new NoForge();

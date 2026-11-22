@@ -258,7 +258,11 @@ describe('makeRepoVariables (ORC-211)', () => {
 
 describe('makeOriginUrl (ORC-151, ORC-478)', () => {
   it('gives the URL of the repository on GitHub the start resolved, whatever a clone says', async () => {
-    expect(await makeOriginUrl()({ github: 'Org/App' })).toBe('https://github.com/Org/App');
+    expect(await makeOriginUrl()({ github: 'Org/App', repoPath: '/repo' })).toBe('https://github.com/Org/App');
+  });
+
+  it("gives a replayed ticket its clone at the start, never the forge's default branch, which holds what came after (ORC-376)", async () => {
+    expect(await makeOriginUrl()({ github: 'Org/App', repoPath: '/ghost/g1/REL-1/repo', replayed: {} })).toBe('file:///ghost/g1/REL-1/repo');
   });
 });
 

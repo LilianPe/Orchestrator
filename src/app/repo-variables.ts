@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 import { execCmd, execFailure, type Exec } from '../adapters/exec.js';
 import type { CloneAuth } from '../adapters/forge/types.js';
 import { fetchOrigin, originHeadOf } from '../adapters/workspace/git-workspaces.js';
@@ -154,10 +155,11 @@ const START_PART: Partial<Record<string, (text: string) => string>> = { 'package
 
 /**
  * Where `verify`, the dry run and the start recipe read a project's forge (ORC-151): the URL of its repository on GitHub as the start
- * resolved it (`projectGithub`, ORC-478), never what a clone's config or an agent says.
+ * resolved it (`projectGithub`, ORC-478), never what a clone's config or an agent says. A replayed ticket's (ORC-376) is its clone at
+ * the start, which stands for the repository: never the forge's default branch, which holds the human's PR and all that came after.
  */
-export function makeOriginUrl(): (project: { github: string }) => Promise<string> {
-  return async ({ github }) => `https://github.com/${github}`;
+export function makeOriginUrl(): (project: { github: string; repoPath: string; replayed?: unknown }) => Promise<string> {
+  return async ({ github, repoPath, replayed }) => (replayed ? pathToFileURL(repoPath).href : `https://github.com/${github}`);
 }
 
 /**

@@ -7,7 +7,7 @@ import { parseArgs } from 'node:util';
 import { execCmd, mustExec } from '../adapters/exec.js';
 import type { GitHubAppForge } from '../adapters/forge/github-app.js';
 import type { CloneAuth, PullRequestView } from '../adapters/forge/types.js';
-import { originGithub, projectGithub } from '../app/project-github.js';
+import { httpsGithub, projectGithub } from '../app/project-github.js';
 import { fetchOrigin, originHeadOf } from '../adapters/workspace/git-workspaces.js';
 import { repoRoot } from '../app/root.js';
 import { homePaths, loadInstance } from '../config/instance.js';
@@ -318,7 +318,7 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
   // the user's own git credentials, as before: `judge` needs no App.
   const auth: CloneAuth = async (repoPath) => {
     const app = await (forge ??= githubForge(home)).catch(() => undefined);
-    const github = app && (await originGithub(repoPath));
+    const github = app && (await httpsGithub(repoPath));
     return github ? app.fetchEnv(github) : {};
   };
   try {
