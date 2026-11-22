@@ -579,14 +579,15 @@ function triggerLabel(name: string, filters: TriggerFilters): string {
 
 /**
  * The triggers that never run a factory branch's code: GitHub runs them on the last commit of the default branch, from a
- * workflow file on it, or, for `workflow_dispatch`, on the ref a human picks (the App may not dispatch, ORC-443). Every
- * other trigger, an unknown one included, counts as reaching the factory's branches (ORC-476).
+ * workflow file on it, and their event names no factory commit nor pull request to check out, unlike `pull_request_target`
+ * or `workflow_run`. `workflow_dispatch` runs on the ref a human picks (the App may not dispatch, ORC-443); `workflow_call`
+ * gets only the secrets its caller hands it, and doctor judges the caller. Every other trigger, an unknown one included,
+ * counts as reaching the factory's branches (ORC-476).
  */
 const DEFAULT_BRANCH_TRIGGERS = new Set([
   'schedule',
   'workflow_dispatch',
-  'issue_comment',
-  'repository_dispatch',
+  'workflow_call',
   'issues',
   'label',
   'milestone',
@@ -598,10 +599,7 @@ const DEFAULT_BRANCH_TRIGGERS = new Set([
   'fork',
   'public',
   'branch_protection_rule',
-  'check_run',
-  'check_suite',
   'delete',
-  'status',
 ]);
 
 /** Why a workflow with secrets can run on a factory branch; empty when no trigger does. */

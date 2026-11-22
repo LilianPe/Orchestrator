@@ -344,8 +344,8 @@ jobs:
     expect(withSchedule).toMatchObject({ verdict: alone?.verdict, factoryBranches: alone?.factoryBranches, reasons: alone?.reasons, triggers: ['pull_request', 'schedule'] });
   });
 
-  it("refuses secrets on the triggers that run a factory branch's code: reviews, review comments, merge queue, branch creation (ORC-476)", async () => {
-    for (const trigger of ['pull_request_review', 'pull_request_review_comment', 'merge_group', 'create']) {
+  it("refuses secrets on the triggers that run a factory branch's code, or name it to check out: reviews, merge queue, branch creation, comments, dispatches, checks (ORC-476)", async () => {
+    for (const trigger of ['pull_request_review', 'pull_request_review_comment', 'merge_group', 'create', 'issue_comment', 'repository_dispatch', 'check_suite', 'check_run', 'status']) {
       expect(await firstWorkflow(`  ${trigger}:`), trigger).toMatchObject({ factoryBranches: true, verdict: 'refused' });
     }
   });
@@ -356,8 +356,8 @@ jobs:
     expect(report?.reasons.join(' ')).toContain("some_future_event can run the CI on the factory's branches");
   });
 
-  it('accepts secrets on schedule, workflow_dispatch, issue_comment and repository_dispatch, which never run a factory branch (ORC-476)', async () => {
-    for (const trigger of ["schedule: [{ cron: '0 5 * * 1' }]", 'workflow_dispatch:', 'issue_comment:', 'repository_dispatch:']) {
+  it('accepts secrets on schedule, workflow_dispatch and issues, which never run a factory branch, and on workflow_call, judged by its caller (ORC-476)', async () => {
+    for (const trigger of ["schedule: [{ cron: '0 5 * * 1' }]", 'workflow_dispatch:', 'issues:', 'workflow_call:']) {
       expect(await firstWorkflow(`  ${trigger}`), trigger).toMatchObject({ factoryBranches: false, verdict: 'accepted' });
     }
   });
