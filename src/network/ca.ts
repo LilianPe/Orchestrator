@@ -1,7 +1,7 @@
-import { generateKeyPair, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { generateKeyPair, randomBytes, X509Certificate } from 'node:crypto';
+import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { isIP } from 'node:net';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createSecureContext, type SecureContext } from 'node:tls';
 import forge from 'node-forge';
 
@@ -15,11 +15,20 @@ export interface FactoryCa {
 
 const DAY = 24 * 60 * 60 * 1000;
 
-/** `<dir>/ca.crt` and `<dir>/ca.key` (0600), made at the first call. */
-export async function loadOrCreateCa(dir: string): Promise<FactoryCa> {
+/**
+ * `<dir>/ca.crt` and `<dir>/ca.key` (0600), made at the first call. A stored certificate OpenSSL cannot read is replaced,
+ * `log` told (ORC-483): before ORC-477, one serial in 65,536 was written with illegal padding, and Node drops such a CA
+ * from a client's `ca` without a word, so no sandbox could trust it. One OpenSSL reads is kept as it is.
+ */
+export async function loadOrCreateCa(dir: string, log?: (message: string) => void): Promise<FactoryCa> {
   const certPath = join(dir, 'ca.crt');
   const keyPath = join(dir, 'ca.key');
-  if (existsSync(certPath) && existsSync(keyPath)) return { certPem: readFileSync(certPath, 'utf8'), keyPem: readFileSync(keyPath, 'utf8'), certPath };
+  let unread: string | undefined;
+  if (existsSync(certPath) && existsSync(keyPath)) {
+    const certPem = readFileSync(certPath, 'utf8');
+    unread = opensslError(certPem);
+    if (!unread) return { certPem, keyPem: readFileSync(keyPath, 'utf8'), certPath };
+  }
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const { publicKey, privateKey } = await rsa();
   const cert = forge.pki.createCertificate();
@@ -37,9 +46,40 @@ export async function loadOrCreateCa(dir: string): Promise<FactoryCa> {
   ]);
   cert.sign(forge.pki.privateKeyFromPem(privateKey), forge.md.sha256.create());
   const certPem = forge.pki.certificateToPem(cert);
-  writeFileSync(keyPath, privateKey, { mode: 0o600 });
-  writeFileSync(certPath, certPem, { mode: 0o644 });
+  // The key first, the certificate last: cut in between, the old certificate stays, still unreadable, and the next start makes another.
+  replace(keyPath, privateKey, 0o600);
+  replace(certPath, certPem, 0o644);
+  if (unread) log?.(`egress: the CA in ${dir} was unreadable to OpenSSL (${unread}), so no sandbox trusted it: a new one replaced it`);
   return { certPem, keyPem: privateKey, certPath };
+}
+
+/** Why OpenSSL cannot read `pem`, as Node reports it; undefined when it can. */
+function opensslError(pem: string): string | undefined {
+  try {
+    new X509Certificate(pem);
+    return undefined;
+  } catch (err) {
+    return (err as Error).message;
+  }
+}
+
+/**
+ * Written beside `path` at `mode`, then renamed over it: a reader sees the old file or the new one, never half of it. Both
+ * on disk before it returns, so the renames land in their order even across a power cut.
+ */
+function replace(path: string, content: string, mode: number): void {
+  const next = `${path}.tmp`;
+  rmSync(next, { force: true }); // left by a crash: made anew, never written through a link planted there
+  writeFileSync(next, content, { mode, flush: true });
+  chmodSync(next, mode); // whatever the umask
+  renameSync(next, path);
+  if (process.platform === 'win32') return; // a folder cannot be opened there
+  const folder = openSync(dirname(path), 'r');
+  try {
+    fsyncSync(folder);
+  } finally {
+    closeSync(folder);
+  }
 }
 
 /**
