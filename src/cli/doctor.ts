@@ -577,14 +577,42 @@ function triggerLabel(name: string, filters: TriggerFilters): string {
   return name;
 }
 
+/**
+ * The triggers that never run a factory branch's code: GitHub runs them on the last commit of the default branch, from a
+ * workflow file on it, or, for `workflow_dispatch`, on the ref a human picks (the App may not dispatch, ORC-443). Every
+ * other trigger, an unknown one included, counts as reaching the factory's branches (ORC-476).
+ */
+const DEFAULT_BRANCH_TRIGGERS = new Set([
+  'schedule',
+  'workflow_dispatch',
+  'issue_comment',
+  'repository_dispatch',
+  'issues',
+  'label',
+  'milestone',
+  'discussion',
+  'discussion_comment',
+  'gollum',
+  'page_build',
+  'watch',
+  'fork',
+  'public',
+  'branch_protection_rule',
+  'check_run',
+  'check_suite',
+  'delete',
+  'status',
+]);
+
 /** Why a workflow with secrets can run on a factory branch; empty when no trigger does. */
 function exposureReasons(triggers: Map<string, TriggerFilters>, factory: FactoryBranches): string[] {
   const reasons: string[] = [];
   for (const [name, filters] of triggers) {
-    if (name === 'pull_request' || name === 'pull_request_target') {
+    if (DEFAULT_BRANCH_TRIGGERS.has(name)) continue;
+    if (name === 'push' || name === 'workflow_run') {
+      if (pushReachesFactory(filters, factory)) reasons.push(`${triggerLabel(name, filters)} can run the CI on the factory's branches`);
+    } else {
       reasons.push(`${name} can run the CI on the factory's branches`);
-    } else if ((name === 'push' || name === 'workflow_run') && pushReachesFactory(filters, factory)) {
-      reasons.push(`${triggerLabel(name, filters)} can run the CI on the factory's branches`);
     }
   }
   return reasons;

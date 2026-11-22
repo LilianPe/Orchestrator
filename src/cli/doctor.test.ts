@@ -344,6 +344,24 @@ jobs:
     expect(withSchedule).toMatchObject({ verdict: alone?.verdict, factoryBranches: alone?.factoryBranches, reasons: alone?.reasons, triggers: ['pull_request', 'schedule'] });
   });
 
+  it("refuses secrets on the triggers that run a factory branch's code: reviews, review comments, merge queue, branch creation (ORC-476)", async () => {
+    for (const trigger of ['pull_request_review', 'pull_request_review_comment', 'merge_group', 'create']) {
+      expect(await firstWorkflow(`  ${trigger}:`), trigger).toMatchObject({ factoryBranches: true, verdict: 'refused' });
+    }
+  });
+
+  it('counts a trigger it does not know as reaching the factory (ORC-476)', async () => {
+    const report = await firstWorkflow('  some_future_event:');
+    expect(report).toMatchObject({ factoryBranches: true, verdict: 'refused' });
+    expect(report?.reasons.join(' ')).toContain("some_future_event can run the CI on the factory's branches");
+  });
+
+  it('accepts secrets on schedule, workflow_dispatch, issue_comment and repository_dispatch, which never run a factory branch (ORC-476)', async () => {
+    for (const trigger of ["schedule: [{ cron: '0 5 * * 1' }]", 'workflow_dispatch:', 'issue_comment:', 'repository_dispatch:']) {
+      expect(await firstWorkflow(`  ${trigger}`), trigger).toMatchObject({ factoryBranches: false, verdict: 'accepted' });
+    }
+  });
+
   it('still refuses a non-object filter on any other trigger (ORC-473)', async () => {
     const result = await doctor([workflow(secretsWorkflow('  push: [main]'))]);
     expect(result.code).toBe(1);
