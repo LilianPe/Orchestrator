@@ -100,7 +100,6 @@ describe('docs/first-run.md', () => {
   it("quotes the GitHub App's steps as factory init prints them, without a public URL (ORC-474)", () => {
     // The text block of step 2 that opens on the App's steps, up to the `Wrote … factory.yml` that follows them.
     const block = /^```text\n(GitHub App of [\s\S]*?)\n\nWrote /m.exec(guide)?.[1];
-    expect(block).toBeDefined();
     expect(block).toBe(githubAppSteps(undefined, '/home/<user>/.factory', false).trim());
   });
 });
