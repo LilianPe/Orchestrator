@@ -158,17 +158,24 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   // The replay of closed tickets (ORC-231): driven by the fantome's own steps, with the instance's step settings.
   const ghost = presetWorkflow(fantome, settings);
   // Each project's repository on GitHub, resolved once (ORC-478): a project whose origin is not on GitHub stops the start here.
-  const projects: ProjectRuntime[] = await Promise.all(instance.projects.map(async (p) => ({
+  const [origins, knowledgeGithub] = await Promise.all([
+    Promise.all(instance.projects.map((p) => projectGithub({ repoPath: p.repoPath, teamKey: p.linearTeamKey, repos: yml?.repos }).catch((err: Error) => {
+      throw new Error(`${p.id}: ${err.message}`);
+    }))),
+    instance.knowledge ? httpsGithub(instance.knowledge.repoPath) : undefined,
+  ]);
+  const projects: ProjectRuntime[] = instance.projects.map((p, i) => ({
     id: p.id,
     repoPath: p.repoPath,
-    github: await projectGithub({ repoPath: p.repoPath, teamKey: p.linearTeamKey, repos: yml?.repos }).catch((err: Error) => {
-      throw new Error(`${p.id}: ${err.message}`);
-    }),
+    github: origins[i]!.github,
     teamKey: p.linearTeamKey,
     // The replay of closed tickets (ORC-231): nothing of the project leaves the factory.
     workflow: isFantome(p) ? ghost : workflow,
     ...(projectEffects(p) ? { effects: 'none' as const } : {}),
-  })));
+  }));
+  // The clones fetch by their path until ORC-471 part 2: each project's, and the knowledge base's, fetched over HTTPS from GitHub.
+  const clones = new Map(projects.flatMap((p, i) => (origins[i]!.https ? [[p.repoPath, p.github] as const] : [])));
+  if (knowledgeGithub) clones.set(instance.knowledge!.repoPath, knowledgeGithub);
   // Said at each start, not only by `factory doctor`.
   for (const p of projects) for (const file of ignoredWorkflowFiles(p.repoPath)) log(`${p.id}: ${ignoredWorkflowWarning(file)}`);
   for (const line of validatorWarnings(instance.projects)) log(line);
@@ -262,11 +269,6 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const appForge = githubApp ? new GitHubAppForge({ ...githubApp, log }) : undefined;
     // The daemon's own git reads a private repository with the App's token (ORC-442); without the App, with the machine's credentials.
     const gitAuth = appForge?.fetchEnv.bind(appForge);
-    // The clones fetch by their path until ORC-471 part 2: each project's, and the knowledge base's, fetched over HTTPS from GitHub.
-    const clones = new Map<string, string>();
-    for (const p of projects) if ((await httpsGithub(p.repoPath))?.toLowerCase() === p.github.toLowerCase()) clones.set(p.repoPath, p.github);
-    const knowledgeGithub = instance.knowledge && (await httpsGithub(instance.knowledge.repoPath));
-    if (knowledgeGithub) clones.set(instance.knowledge!.repoPath, knowledgeGithub);
     const clonesAuth = cloneAuth(gitAuth, clones);
     const workspaces = new GitWorkspaces({ root: paths.workspaces, log, auth: clonesAuth });
     const forge = appForge ?? new NoForge();
@@ -293,8 +295,9 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     // again past their TTL, and the designations of factory.yml.
     const roles = new CachedRoleResolver({
       projects: (id) => {
-        const p = instance.projects.find((x) => x.id === id);
-        return p && { teamKey: p.linearTeamKey, github: projects.find((x) => x.id === id)!.github, maintainers: [], validators: [], githubLogins: {}, ...p.authz };
+        const i = instance.projects.findIndex((x) => x.id === id);
+        const p = instance.projects[i];
+        return p && { teamKey: p.linearTeamKey, github: projects[i]!.github, maintainers: [], validators: [], githubLogins: {}, ...p.authz };
       },
       team: {
         teamMembers: (teamKey) => (linearTracker ? linearTracker.teamMembers(teamKey) : Promise.reject(new Error('Linear not connected'))),

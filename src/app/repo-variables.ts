@@ -10,6 +10,7 @@ import { zFields } from '../core/clean-verify.js';
 import { fingerprintFiles, type FingerprintFiles } from '../core/dry-run.js';
 import { START_FILES } from '../knowledge/preview-recipe.js';
 import { canonical } from '../runtime/workflow-version.js';
+import { repoEntry } from './project-github.js';
 import { isTable, parseToml, type TomlTable, type TomlValue } from '../checks/toml.js';
 
 /**
@@ -169,7 +170,7 @@ export function makeOriginUrl(): (project: { github: string; repoPath: string; r
  */
 export function makeRepoVariables(o: { yml: FactoryYml | undefined; log: (message: string) => void }): (project: { id: string; github: string; teamKey: string }, config: RepoConfig) => Promise<RepoVariables> {
   return async ({ id, github, teamKey }, config) => {
-    const server = o.yml?.repos?.find((r) => r.linearTeam === teamKey && r.github.toLowerCase() === github.toLowerCase());
+    const server = repoEntry(o.yml?.repos, teamKey, github);
     if (!server) return NO_REPO_VARIABLES;
     const vars = repoVariables(config, server);
     if (vars.missing.length) o.log(`${id}: variables declared by the repository, with no value in factory.yml, left out of the runner: ${vars.missing.join(', ')}`);

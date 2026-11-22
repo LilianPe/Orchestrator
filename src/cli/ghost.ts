@@ -7,7 +7,7 @@ import { parseArgs } from 'node:util';
 import { execCmd, mustExec } from '../adapters/exec.js';
 import type { GitHubAppForge } from '../adapters/forge/github-app.js';
 import type { CloneAuth, PullRequestView } from '../adapters/forge/types.js';
-import { httpsGithub, projectGithub } from '../app/project-github.js';
+import { projectGithub } from '../app/project-github.js';
 import { fetchOrigin, originHeadOf } from '../adapters/workspace/git-workspaces.js';
 import { repoRoot } from '../app/root.js';
 import { homePaths, loadInstance } from '../config/instance.js';
@@ -316,10 +316,13 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
   let forge: Promise<GitHubAppForge> | undefined;
   // A private repository read with the App's token (ORC-442), as the daemon reads it: in git's environment alone. Without the App,
   // the user's own git credentials, as before: `judge` needs no App.
+  // Each project's origin read once: its repository on GitHub, and whether its clone fetches it over HTTPS (the App's token then).
+  const origins = new Map<string, ReturnType<typeof projectGithub>>();
+  const originOf = (repoPath: string) => origins.get(repoPath) ?? origins.set(repoPath, projectGithub({ repoPath })).get(repoPath)!;
   const auth: CloneAuth = async (repoPath) => {
     const app = await (forge ??= githubForge(home)).catch(() => undefined);
-    const github = app && (await httpsGithub(repoPath));
-    return github ? app.fetchEnv(github) : {};
+    const origin = app && (await originOf(repoPath).catch(() => undefined));
+    return origin?.https ? app!.fetchEnv(origin.github) : {};
   };
   try {
     let user = 'cli';
@@ -336,7 +339,7 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
         const said = await store.getMeta(SANDBOXES_META);
         return said === undefined ? undefined : said === '1';
       },
-      humanPr: async (repoPath, number) => (await (forge ??= githubForge(home))).pullRequest(await projectGithub({ repoPath }), number),
+      humanPr: async (repoPath, number) => (await (forge ??= githubForge(home))).pullRequest((await originOf(repoPath)).github, number),
       // The merge commit fetched from origin, with its history: the start is one of its ancestors.
       humanDiff: async (repoPath, { start, mergeSha }) => {
         await fetchOrigin(execCmd, repoPath, { refspecs: [mergeSha], auth });

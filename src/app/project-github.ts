@@ -11,19 +11,26 @@ async function readOrigin(exec: Exec, repoPath: string): Promise<{ failure: stri
 }
 
 /**
- * The GitHub repository (`owner/name`) of a project (ORC-478), resolved once at the start: the forge, its writer, the captures,
+ * The GitHub repository (`owner/name`) of a project (ORC-478), and whether its clone fetches it over HTTPS (`cloneAuth`), resolved once at the start: the forge, its writer, the captures,
  * the App's git token, the roles, the GitHub webhooks and `verify` know the repository by it, never by the clone's remote again.
  * The entry of `factory.yml`'s `repos` of the project's Linear team that the clone's `origin` names gives its spelling, else the
  * origin's own name. An origin that is not on GitHub, or that git cannot read, rejects: the factory reads and writes only there.
  * ponytail: ORC-471 part 3 gives each repository its `github` in `factory.yml`, and no clone is read for it any more.
  */
-export async function projectGithub(o: { repoPath: string; teamKey?: string; repos?: readonly { linearTeam: string; github: string }[]; exec?: Exec }): Promise<string> {
+export async function projectGithub(o: { repoPath: string; teamKey?: string; repos?: readonly RepoEntry[]; exec?: Exec }): Promise<{ github: string; https: boolean }> {
   const origin = await readOrigin(o.exec ?? execCmd, o.repoPath);
   if ('failure' in origin) throw new Error(`the origin remote of ${o.repoPath} cannot be read: ${origin.failure}`);
   // Its URL is never said: it may carry a credential.
   if (!origin.repo) throw new Error(`the origin remote of ${o.repoPath} is not a GitHub repository: set it to https://github.com/<owner>/<name> (or git@github.com:<owner>/<name>.git)`);
-  const named = origin.repo.toLowerCase();
-  return o.repos?.find((r) => r.linearTeam === o.teamKey && r.github.toLowerCase() === named)?.github ?? origin.repo;
+  return { github: repoEntry(o.repos, o.teamKey, origin.repo)?.github ?? origin.repo, https: origin.https };
+}
+
+type RepoEntry = { linearTeam: string; github: string };
+
+/** The entry of `factory.yml`'s `repos` of the Linear team `teamKey` for the GitHub repository `github`, whatever its case. */
+export function repoEntry<T extends RepoEntry>(repos: readonly T[] | undefined, teamKey: string | undefined, github: string): T | undefined {
+  const named = github.toLowerCase();
+  return repos?.find((r) => r.linearTeam === teamKey && r.github.toLowerCase() === named);
 }
 
 /**

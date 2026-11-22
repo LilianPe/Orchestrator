@@ -1056,7 +1056,7 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   // The repository on GitHub as the daemon resolves it at its start, refused alike when its origin is not on GitHub (ORC-478).
   let github: string;
   try {
-    github = await projectGithub({ repoPath: options.repoPath, teamKey: projects[0]?.linearTeamKey, repos, ...(options.exec ? { exec: options.exec } : {}) });
+    ({ github } = await projectGithub({ repoPath: options.repoPath, teamKey: projects[0]?.linearTeamKey, repos, ...(options.exec ? { exec: options.exec } : {}) }));
   } catch (error) {
     return doctorFailure(report, errorMessage(error));
   }

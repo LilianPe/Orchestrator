@@ -428,11 +428,6 @@ export class GitHubAppAuth {
     }
   }
 
-  /** The repository a call names, `owner/name` as the project's `github` (ORC-478): never read from a clone. */
-  protected repo(github: string): GitHubRepoRef {
-    return repoRef(github);
-  }
-
   protected async installationToken(repo: GitHubRepoRef): Promise<string> {
     const key = `${repo.owner}/${repo.name}`;
     const now = this.now();
@@ -582,7 +577,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
    * repo or the installation included (an app not installed is a configuration error, not a refusal).
    */
   async repoPermission(github: string, login: string): Promise<RepoPermission> {
-    const repo = this.repo(github);
+    const repo = repoRef(github);
     const token = await this.installationToken(repo);
     try {
       return toRepoPermission(
@@ -595,7 +590,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
   }
 
   async findPr(github: string, branch: string): Promise<PrInfo | undefined> {
-    const repo = this.repo(github);
+    const repo = repoRef(github);
     const token = await this.installationToken(repo);
     const query = new URLSearchParams({ head: `${repo.owner}:${branch}`, state: 'all', per_page: '1' });
     const [pr] = await this.read('GET', `${repoApi(repo)}/pulls?${query}`, token, isPulls, 'a list of pull requests');
@@ -614,7 +609,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
    * a permission, the network) is said, not thrown: the names still go to the agent.
    */
   async ciFailures(github: string, number: number): Promise<CiFailureReport> {
-    const repo = this.repo(github);
+    const repo = repoRef(github);
     const token = await this.installationToken(repo);
     const pr = await this.read('GET', `${repoApi(repo)}/pulls/${number}`, token, isBasedPull, 'a pull request with its base');
     const head = `${repoApi(repo)}/commits/${encodeURIComponent(pr.head.sha)}`;
@@ -655,7 +650,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
   }
 
   async mergePr(github: string, number: number, sha: string, opts: { unchecked?: boolean } = {}): Promise<MergeResult> {
-    const repo = this.repo(github);
+    const repo = repoRef(github);
     const token = await this.installationToken(repo);
     const url = `${repoApi(repo)}/pulls/${number}`;
     // A replay: the first call merged it on that head. Merged on another head is not ours to call merged.
@@ -685,7 +680,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
    * open PR behind it (another validation error) is thrown as is.
    */
   async ensurePr(github: string, req: PrRequest): Promise<{ number: number; url: string; deduplicated: boolean }> {
-    const repo = this.repo(github);
+    const repo = repoRef(github);
     const token = await this.installationToken(repo);
     const base = `${repoApi(repo)}/pulls`;
     const openPr = async () => {
@@ -715,7 +710,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
 
   /** The REST API cannot do it: only this GraphQL mutation takes a PR out of draft. Read first: a PR already out writes nothing. */
   async markPrReady(github: string, number: number): Promise<void> {
-    const repo = this.repo(github);
+    const repo = repoRef(github);
     const token = await this.installationToken(repo);
     const pr = await this.read('GET', `${repoApi(repo)}/pulls/${number}`, token, isDraftState, 'a pull request with its draft state');
     if (!pr.draft) return;
@@ -728,7 +723,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
 
   /** In the environment: a command line is visible to every process of the host, and git quotes it in its errors. */
   async gitAccess(github: string): Promise<GitAccess> {
-    const repo = this.repo(github);
+    const repo = repoRef(github);
     return { url: `${repoWebUrl(repo, this.webBase)}.git`, env: this.tokenEnv(await this.installationToken(repo)) };
   }
 
@@ -747,8 +742,8 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
    * retried, never read without the token it needs.
    */
   async fetchEnv(github: string): Promise<Record<string, string>> {
-    const repo = this.repo(github);
-    const key = `${repo.owner}/${repo.name}`.toLowerCase();
+    const repo = repoRef(github);
+    const key = github.toLowerCase();
     const refused = this.#noToken.get(key);
     if (refused !== undefined && refused > this.now()) return {};
     try {
@@ -771,7 +766,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
    * empty, it would create a second run for the same external id (ORC-273).
    */
   async upsertCheckRun(github: string, req: CheckRunRequest): Promise<{ id: number; deduplicated: boolean }> {
-    const repo = this.repo(github);
+    const repo = repoRef(github);
     const token = await this.installationToken(repo);
     const base = repoApi(repo);
     const query = new URLSearchParams({ check_name: req.name, app_id: this.appId, filter: 'all' });
@@ -797,7 +792,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
    * `externalId` is the replay's. An unreadable list rejects. A 422 on a review with comments is a line GitHub cannot place.
    */
   async postReview(github: string, number: number, req: ReviewRequest): Promise<{ id: number; deduplicated: boolean }> {
-    const repo = this.repo(github);
+    const repo = repoRef(github);
     const token = await this.installationToken(repo);
     const path = `${repoApi(repo)}/pulls/${number}/reviews`;
     const mark = reviewMark(req.externalId);
@@ -825,7 +820,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
 
   /** Its labels read first, every page: a label of the group in place, alone, writes nothing; one already gone (404) is no failure. */
   async setExclusiveLabel(github: string, number: number, label: string, group: readonly string[]): Promise<void> {
-    const repo = this.repo(github);
+    const repo = repoRef(github);
     const token = await this.installationToken(repo);
     const path = `${repoApi(repo)}/issues/${number}/labels`;
     const names: string[] = [];
@@ -876,7 +871,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
    * commit when it is merged (never the test merge GitHub names for an open one), its commits' headlines oldest first.
    */
   async pullRequest(github: string, number: number): Promise<PullRequestView> {
-    const repo = this.repo(github);
+    const repo = repoRef(github);
     const token = await this.installationToken(repo);
     const path = `${repoApi(repo)}/pulls/${number}`;
     const [pr, commits] = await Promise.all([
@@ -896,7 +891,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
 
   /** GraphQL with the installation token, each answer checked before it is read (ORC-273). */
   private async graphQl(github: string): Promise<{ owner: string; name: string; gql: GraphQl }> {
-    const repo = this.repo(github);
+    const repo = repoRef(github);
     const token = await this.installationToken(repo);
     const gql: GraphQl = async <T>(query: string, variables: Record<string, unknown>, isData: (d: unknown) => d is T, what: string) => {
       // With errors, `data` is not read.
@@ -936,7 +931,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
   async hostArtifacts(github: string, files: readonly HostedFile[]): Promise<string[]> {
     // No retry would make it one: an answer, as a refusal.
     for (const f of files) if (!ARTIFACT_PATH.test(f.path)) throw new ArtifactsRefused(`not a path on ${ARTIFACTS_BRANCH}: ${f.path}`);
-    const repo = this.repo(github);
+    const repo = repoRef(github);
     // Uploaded once, whatever the attempts: a blob does not depend on the tip.
     let blobs: Promise<TreeEntry[]> | undefined;
     const { commit } = await this.onArtifacts(repo, `Host ${files.length} visual-proof capture(s) [skip ci]`, (_tip, token, api) =>
@@ -955,7 +950,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     // An attempt after a race asks again only of a folder it has not seen.
     const verdicts = new Map<string, Promise<boolean>>();
     const ask = (folder: string) => verdicts.get(folder) ?? verdicts.set(folder, expired(folder)).get(folder)!;
-    const { entries } = await this.onArtifacts(this.repo(github), 'Remove the captures of PRs closed 30 days ago [skip ci]', async (tip, token, api) => {
+    const { entries } = await this.onArtifacts(repoRef(github), 'Remove the captures of PRs closed 30 days ago [skip ci]', async (tip, token, api) => {
       if (!tip) return [];
       const tree = await this.read('GET', `${api}/git/trees/${encodeURIComponent(tip.tree)}`, token, isTree, 'a git tree');
       if (tree.truncated) throw new Error(`the tree of ${ARTIFACTS_BRANCH} is too large for GitHub to list in full`);

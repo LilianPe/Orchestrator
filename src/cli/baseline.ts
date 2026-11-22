@@ -118,7 +118,7 @@ export async function runBaselineCommand(home: string, args: readonly string[]):
   }
   let github;
   try {
-    github = await projectGithub({ repoPath: project.repoPath, teamKey: project.linearTeamKey, repos: yml?.repos });
+    ({ github } = await projectGithub({ repoPath: project.repoPath, teamKey: project.linearTeamKey, repos: yml?.repos }));
   } catch (err) {
     console.log(`${project.id}: ${(err as Error).message}`);
     return 1;

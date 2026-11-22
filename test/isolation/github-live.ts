@@ -1,4 +1,4 @@
-import { GitHubAppForge, type GitHubAppForgeOptions } from '../../src/adapters/forge/github-app.js';
+import { GitHubAppForge, repoRef, type GitHubAppForgeOptions } from '../../src/adapters/forge/github-app.js';
 import { readPrivateKey } from '../../src/config/github-app.js';
 
 /**
@@ -30,7 +30,7 @@ export function appOptions(): GitHubAppForgeOptions {
 /** The factory's forge on the test App, and the token it holds for a repository: the run's token. */
 export class LiveForge extends GitHubAppForge {
   async token(github: string): Promise<string> {
-    return this.installationToken(this.repo(github));
+    return this.installationToken(repoRef(github));
   }
 }
 
