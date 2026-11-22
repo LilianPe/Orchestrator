@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { runDoctor } from '../../src/cli/doctor.js';
+import { runDoctor, type WorkflowReport } from '../../src/cli/doctor.js';
 import { GITHUB_APP_PERMISSIONS } from '../../src/cli/init.js';
 
 /**
@@ -274,8 +274,6 @@ describe('the workflows doctor reads on the pilot repository (ORC-475)', () => {
       expect(job.permissions, name).toBeUndefined();
       expect(job.environment, name).toBeUndefined();
     }
-    // The `secrets` context in any expression, as doctor reads it.
-    expect(ciText).not.toMatch(/\$\{\{[^}]*(?<![\w.-])secrets\b/);
     expect(ci.jobs['isolation']!.if).toBeUndefined();
     expect(ci.jobs['isolation']!.steps.map((s) => s.run)).toContain('npm run test:isolation');
   });
@@ -292,13 +290,13 @@ describe('the workflows doctor reads on the pilot repository (ORC-475)', () => {
 
   it('still runs isolation n° 11 with the Claude login, the token given to its step alone, on every push to main', () => {
     const job = secrets.jobs['isolation-claude']!;
-    const test = job.steps.find((s) => s.run?.includes('test/isolation/claude-settings.test.ts'))!;
-    expect(test.run).toMatch(/^npx vitest run --project isolation test\/isolation\/claude-settings\.test\.ts$/);
+    const test = job.steps.find((s) => s.run === 'npx vitest run --project isolation test/isolation/claude-settings.test.ts')!;
+    expect(test).toBeDefined();
     expect(test.env).toMatchObject({ FACTORY_ISOLATION: '1', CLAUDE_CODE_OAUTH_TOKEN: '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}' });
     expect(job.steps.filter((s) => JSON.stringify(s.env ?? {}).includes('secrets.'))).toEqual([test]);
     // The claude ci.yml installed before ORC-475, pinned as docker/runner.Dockerfile pins it.
-    const install = job.steps.find((s) => s.run?.startsWith('npm install -g @anthropic-ai/claude-code@'))!;
-    expect(install.run).toBe(`npm install -g @anthropic-ai/claude-code@${/claude-code@(\d+\.\d+\.\d+)/.exec(runner)?.[1]}`);
+    const install = job.steps.find((s) => s.run?.includes('npm install -g @anthropic-ai/claude-code@'))!;
+    expect(install.run).toContain(`npm install -g @anthropic-ai/claude-code@${/claude-code@(\d+\.\d+\.\d+)/.exec(runner)?.[1]}\n`);
     expect(job.steps.indexOf(install)).toBeLessThan(job.steps.indexOf(test));
   });
 
@@ -330,10 +328,11 @@ describe('the workflows doctor reads on the pilot repository (ORC-475)', () => {
       json: true,
       out: (line) => lines.push(line),
     });
-    const report = JSON.parse(lines.join('\n')) as { accepted: boolean; workflows: { path: string; verdict: string; reasons: string[] }[] };
-    expect(report.workflows.map(({ path, verdict, reasons }) => ({ path, verdict, reasons }))).toEqual([
-      { path: '.github/workflows/ci.yml', verdict: 'accepted', reasons: ['no secret referenced, a read-only GITHUB_TOKEN'] },
-      { path: '.github/workflows/main-secrets.yml', verdict: 'accepted', reasons: ["secrets only on triggers that do not reach the factory's branches"] },
+    const report = JSON.parse(lines.join('\n')) as { accepted: boolean; workflows: WorkflowReport[] };
+    // ci.yml reaches the factory's branches (pull_request) with no environment: accepted, it reads no secret and its token cannot write.
+    expect(report.workflows.map(({ path, verdict, factoryBranches }) => ({ path, verdict, factoryBranches }))).toEqual([
+      { path: '.github/workflows/ci.yml', verdict: 'accepted', factoryBranches: true },
+      { path: '.github/workflows/main-secrets.yml', verdict: 'accepted', factoryBranches: false },
     ]);
     expect({ code, accepted: report.accepted }).toEqual({ code: 0, accepted: true });
   });

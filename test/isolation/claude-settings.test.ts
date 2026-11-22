@@ -12,8 +12,8 @@ import { packDir as pack } from '../helpers/harness.js';
 /**
  * Isolation test n° 11 (ORC-205, ORC-284): ORC-128's trapped repository, replayed against the real
  * `claude -p` at each Claude Code version, with the factory's own options. It needs a login, so it is
- * skipped without one (the CI has none). The factory's reset of `.claude/` is left out on purpose: the
- * test checks the options alone, the reset being defence in depth.
+ * skipped without one (in CI, only main-secrets.yml gives it one, on main: ORC-475). The factory's reset
+ * of `.claude/` is left out on purpose: the test checks the options alone, the reset being defence in depth.
  */
 const enabled = process.env['FACTORY_ISOLATION'] === '1' && !!(process.env['CLAUDE_CODE_OAUTH_TOKEN'] || process.env['ANTHROPIC_API_KEY']);
 
