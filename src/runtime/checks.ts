@@ -236,7 +236,7 @@ export abstract class DaemonChecks extends DaemonBase {
   /** What a clone of ours reads a private forge with (ORC-442), as the project's repository is fetched. */
   private forgeEnvOf(project: ProjectRuntime): { forgeEnv?: () => Promise<Record<string, string>> } {
     const auth = this.d.gitAuth;
-    return auth ? { forgeEnv: () => auth(project.repoPath) } : {};
+    return auth ? { forgeEnv: () => auth(project.github) } : {};
   }
 
   private async runDry(projectId: string, sha?: string): Promise<DryRun> {

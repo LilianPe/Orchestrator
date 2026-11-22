@@ -6,7 +6,8 @@ import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { execCmd, mustExec } from '../adapters/exec.js';
 import type { GitHubAppForge } from '../adapters/forge/github-app.js';
-import type { GitAuth, PullRequestView } from '../adapters/forge/types.js';
+import type { CloneAuth, PullRequestView } from '../adapters/forge/types.js';
+import { originGithub, projectGithub } from '../app/project-github.js';
 import { fetchOrigin, originHeadOf } from '../adapters/workspace/git-workspaces.js';
 import { repoRoot } from '../app/root.js';
 import { homePaths, loadInstance } from '../config/instance.js';
@@ -315,9 +316,10 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
   let forge: Promise<GitHubAppForge> | undefined;
   // A private repository read with the App's token (ORC-442), as the daemon reads it: in git's environment alone. Without the App,
   // the user's own git credentials, as before: `judge` needs no App.
-  const auth: GitAuth = async (repoPath) => {
+  const auth: CloneAuth = async (repoPath) => {
     const app = await (forge ??= githubForge(home)).catch(() => undefined);
-    return app ? app.fetchEnv(repoPath) : {};
+    const github = app && (await originGithub(repoPath));
+    return github ? app.fetchEnv(github) : {};
   };
   try {
     let user = 'cli';
@@ -334,7 +336,7 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
         const said = await store.getMeta(SANDBOXES_META);
         return said === undefined ? undefined : said === '1';
       },
-      humanPr: async (repoPath, number) => (await (forge ??= githubForge(home))).pullRequest(repoPath, number),
+      humanPr: async (repoPath, number) => (await (forge ??= githubForge(home))).pullRequest(await projectGithub({ repoPath }), number),
       // The merge commit fetched from origin, with its history: the start is one of its ancestors.
       humanDiff: async (repoPath, { start, mergeSha }) => {
         await fetchOrigin(execCmd, repoPath, { refspecs: [mergeSha], auth });

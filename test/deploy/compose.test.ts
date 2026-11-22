@@ -314,6 +314,7 @@ describe('the workflows doctor reads on the pilot repository (ORC-475)', () => {
     const lines: string[] = [];
     const code = await runDoctor({
       repoPath: root,
+      github: 'acme/app',
       api: {
         // Every file, as GitHub lists them: a third workflow is judged too.
         listWorkflows: async () =>

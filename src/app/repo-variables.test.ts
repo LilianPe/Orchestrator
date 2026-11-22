@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { TIMED_OUT, type Exec, type ExecOpts } from '../adapters/exec.js';
 import { parseRepoConfig, RepoConfigError } from '../config/repo-config.js';
 import { NO_REPO_VARIABLES } from '../config/repo-variables.js';
@@ -28,6 +28,7 @@ function git(o: { origin?: string; head?: string; config?: string; mode?: string
   };
   return { exec, calls };
 }
+
 
 const PROJECT = { id: 'p', repoPath: '/repo', teamKey: 'REL' };
 
@@ -222,65 +223,42 @@ describe('makeRepoConfig (ORC-209 C)', () => {
 });
 
 describe('makeRepoVariables (ORC-211)', () => {
-  it('takes the declaration it is given, and reads nothing of the repository but its origin', async () => {
-    const { exec, calls } = git({ head: 'origin/trunk' });
-    const vars = await makeRepoVariables({ yml: YML, exec, log: () => {} })(PROJECT, DECLARED);
-    expect(vars).toEqual({ env: { NODE_ENV: 'test' }, setupSecrets: { REGISTRY_TOKEN: { source: 'env', path: 'ORG_REGISTRY_TOKEN' } }, missing: [] });
-    expect(calls.every((c) => c.includes('get-url'))).toBe(true);
+  const RUNTIME = { id: 'p', github: 'org/app', teamKey: 'REL' };
+
+  it("takes the entry of the project's team that names its repository, whatever the case, and the declaration it is given", async () => {
+    for (const github of ['org/app', 'ORG/App']) {
+      const vars = await makeRepoVariables({ yml: YML, log: () => {} })({ ...RUNTIME, github }, DECLARED);
+      expect(vars).toEqual({ env: { NODE_ENV: 'test' }, setupSecrets: { REGISTRY_TOKEN: { source: 'env', path: 'ORG_REGISTRY_TOKEN' } }, missing: [] });
+    }
   });
 
-  it.each(['git@github.com:Org/App.git', 'https://x-access-token:t@github.com/org/app', 'ssh://git@github.com/ORG/app.git/'])('finds the entry of the repository from its origin %s', async (origin) => {
-    const vars = await makeRepoVariables({ yml: YML, exec: git({ origin }).exec, log: () => {} })(PROJECT, DECLARED);
-    expect(vars.setupSecrets).toEqual({ REGISTRY_TOKEN: { source: 'env', path: 'ORG_REGISTRY_TOKEN' } });
-  });
-
-  it('gives nothing to a remote of the same path on another host', async () => {
-    const { exec } = git({ origin: 'https://gitlab.exemple.com/org/app.git' });
-    expect(await makeRepoVariables({ yml: YML, exec, log: () => {} })(PROJECT, DECLARED)).toEqual(NO_REPO_VARIABLES);
-  });
-
-  it('gives nothing to a project of another team, whatever its origin says', async () => {
-    const { exec, calls } = git();
-    expect(await makeRepoVariables({ yml: YML, exec, log: () => {} })({ ...PROJECT, teamKey: 'OTHER' }, DECLARED)).toEqual(NO_REPO_VARIABLES);
-    expect(calls).toEqual([]);
+  it('gives nothing to a project of another team, though its repository has an entry', async () => {
+    expect(await makeRepoVariables({ yml: YML, log: () => {} })({ ...RUNTIME, teamKey: 'OTHER' }, DECLARED)).toEqual(NO_REPO_VARIABLES);
   });
 
   it('gives nothing to a repository with no entry in factory.yml', async () => {
-    const { exec } = git({ origin: 'https://github.com/org/other.git' });
-    expect(await makeRepoVariables({ yml: YML, exec, log: () => {} })(PROJECT, DECLARED)).toEqual(NO_REPO_VARIABLES);
+    expect(await makeRepoVariables({ yml: YML, log: () => {} })({ ...RUNTIME, github: 'org/other' }, DECLARED)).toEqual(NO_REPO_VARIABLES);
   });
 
   it('gives nothing without factory.yml', async () => {
-    const { exec, calls } = git();
-    expect(await makeRepoVariables({ yml: undefined, exec, log: () => {} })(PROJECT, DECLARED)).toEqual(NO_REPO_VARIABLES);
-    expect(calls).toEqual([]);
+    expect(await makeRepoVariables({ yml: undefined, log: () => {} })(RUNTIME, DECLARED)).toEqual(NO_REPO_VARIABLES);
   });
 
   it('gives nothing when the repository declares nothing', async () => {
-    const vars = await makeRepoVariables({ yml: YML, exec: git().exec, log: () => {} })(PROJECT, parseRepoConfig(undefined));
+    const vars = await makeRepoVariables({ yml: YML, log: () => {} })(RUNTIME, parseRepoConfig(undefined));
     expect(vars).toEqual({ env: {}, setupSecrets: {}, missing: [] });
   });
 
   it('logs by name what the repository declares and the server does not give', async () => {
     const log: string[] = [];
-    await makeRepoVariables({ yml: YML, exec: git().exec, log: (m) => log.push(m) })(PROJECT, parseRepoConfig('env: [NODE_ENV, API_URL]\n'));
+    await makeRepoVariables({ yml: YML, log: (m) => log.push(m) })(RUNTIME, parseRepoConfig('env: [NODE_ENV, API_URL]\n'));
     expect(log.join()).toContain('API_URL');
-  });
-
-  it('rejects when git fails, for the caller to log', async () => {
-    const exec: Exec = async () => Promise.reject(new Error('no git'));
-    await expect(makeRepoVariables({ yml: YML, exec, log: () => {} })(PROJECT, DECLARED)).rejects.toThrow('no git');
   });
 });
 
-describe('makeOriginUrl (ORC-151)', () => {
-  it('reads the URL once by process: what changes in the repository config afterwards changes nothing', async () => {
-    const urls = ['https://forge/real.git', 'https://evil/forged.git'];
-    const exec = vi.fn(async () => ({ stdout: `${urls.shift()}\n`, stderr: '', code: 0 }));
-    const url = makeOriginUrl({ exec });
-    expect(await url({ repoPath: '/r' })).toBe('https://forge/real.git');
-    expect(await url({ repoPath: '/r' })).toBe('https://forge/real.git');
-    expect(exec).toHaveBeenCalledTimes(1);
+describe('makeOriginUrl (ORC-151, ORC-478)', () => {
+  it('gives the URL of the repository on GitHub the start resolved, whatever a clone says', async () => {
+    expect(await makeOriginUrl()({ github: 'Org/App' })).toBe('https://github.com/Org/App');
   });
 });
 

@@ -93,7 +93,7 @@ export abstract class DaemonEffects extends DaemonChecks {
     if (!contents) return { unhosted: "a capture is no longer kept on the factory's disk." };
     const files = shots.map((s, i) => ({ path: `${t.ticketId}/${s.side}-${s.width}-${s.sha256.slice(0, 16)}.png`, content: contents[i]! }));
     try {
-      const urls = await this.d.captureHost.hostArtifacts(project.repoPath, files);
+      const urls = await this.d.captureHost.hostArtifacts(project.github, files);
       return { captures: shots.map((s, i) => ({ width: s.width, caption: captureName(s), url: urls[i]! })) };
     } catch (err) {
       if (err instanceof ArtifactsRefused) return { unhosted: err.message };
@@ -110,9 +110,9 @@ export abstract class DaemonEffects extends DaemonChecks {
     const host = this.d.captureHost;
     if (!host) return [];
     const byRepo = new Map<string, string[]>();
-    for (const p of this.d.projects) if (!this.noEffect(p.id)) byRepo.set(p.repoPath, [...(byRepo.get(p.repoPath) ?? []), p.id]);
+    for (const p of this.d.projects) if (!this.noEffect(p.id)) byRepo.set(p.github, [...(byRepo.get(p.github) ?? []), p.id]);
     const removed: string[] = [];
-    for (const [repoPath, projectIds] of byRepo) {
+    for (const [github, projectIds] of byRepo) {
       const expired = async (ticketId: string) => {
         for (const projectId of projectIds) {
           const t = await this.d.store.getTicket(projectId, ticketId);
@@ -126,8 +126,8 @@ export abstract class DaemonEffects extends DaemonChecks {
         return false;
       };
       // One repository the forge refuses keeps none of the others from their cleanup.
-      const folders = await host.pruneArtifacts(repoPath, expired).catch((err: Error) => (this.log('warn', `captures of ${repoPath} not pruned: ${err.message}`), []));
-      for (const folder of folders) removed.push(`${repoPath}: ${folder}`);
+      const folders = await host.pruneArtifacts(github, expired).catch((err: Error) => (this.log('warn', `captures of ${github} not pruned: ${err.message}`), []));
+      for (const folder of folders) removed.push(`${github}: ${folder}`);
     }
     return removed;
   }
@@ -546,7 +546,7 @@ export abstract class DaemonEffects extends DaemonChecks {
   private async headShown(project: ProjectRuntime, t: TicketState): Promise<string | undefined> {
     if (!t.branch || !t.worktreePath) return undefined;
     try {
-      const [pr, local] = await Promise.all([this.d.forge.findPr(project.repoPath, t.branch), this.d.workspaces.head(t.worktreePath)]);
+      const [pr, local] = await Promise.all([this.d.forge.findPr(project.github, t.branch), this.d.workspaces.head(t.worktreePath)]);
       if (pr?.state !== 'OPEN' || !pr.headSha) return undefined;
       if (pr.headSha === local) return pr.headSha;
       this.log('warn', `head of ${t.ticketId}'s PR (${pr.headSha}) is not the commit its run ended on (${local ?? 'unread'}): no reviewed commit`);
@@ -563,7 +563,7 @@ export abstract class DaemonEffects extends DaemonChecks {
    */
   private async prReady(project: ProjectRuntime, t: TicketState): Promise<void> {
     if (t.prNumber === undefined || t.prState !== 'OPEN' || !this.d.forgeWriter) return;
-    await this.d.forgeWriter.markPrReady(project.repoPath, t.prNumber).catch((err: Error) => this.log('warn', `PR #${t.prNumber} of ${t.ticketId} still a draft: ${err.message}`));
+    await this.d.forgeWriter.markPrReady(project.github, t.prNumber).catch((err: Error) => this.log('warn', `PR #${t.prNumber} of ${t.ticketId} still a draft: ${err.message}`));
   }
 
   /**
@@ -577,7 +577,7 @@ export abstract class DaemonEffects extends DaemonChecks {
     try {
       const blocking = sha ? blockingFindings(await this.d.store.findingsOf(project.id, t.ticketId, sha)).length : 0;
       const label = reviewLabel({ diffClass: sha === t.verifiedSha ? t.diffClass?.class : undefined, blocking, ticketId: t.ticketId });
-      await this.d.forgeWriter.setExclusiveLabel(project.repoPath, t.prNumber, label, REVIEW_LABELS);
+      await this.d.forgeWriter.setExclusiveLabel(project.github, t.prNumber, label, REVIEW_LABELS);
     } catch (err) {
       this.log('warn', `review label of PR #${t.prNumber} of ${t.ticketId} not set: ${(err as Error).message}`);
     }
@@ -619,7 +619,7 @@ export abstract class DaemonEffects extends DaemonChecks {
         const open = t.prNumber !== undefined && t.prState === 'OPEN';
         const described = describePr(c.output, { ...publishFacts(t, c), ...(open ? {} : await this.hostCaptures(project, t, c)) });
         const text = await this.policy.pr(open ? { title: described.title, body: `Ticket: ${t.ticketId}` } : described);
-        const pr = await publisher.publish({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: c.runId, worktree: t.worktreePath, branch: t.branch, sha: c.sha, ...untrusted, ...(rewrites ? { rewrites } : {}), ...text });
+        const pr = await publisher.publish({ projectId: project.id, github: project.github, ticketId: t.ticketId, runId: c.runId, worktree: t.worktreePath, branch: t.branch, sha: c.sha, ...untrusted, ...(rewrites ? { rewrites } : {}), ...text });
         if (pr.before) await this.d.store.setMeta(beforeMark, pr.before);
         const before = pr.before ?? (key.replay ? await this.d.store.getMeta(beforeMark) : undefined);
         await this.accept({ ...base, id: prEventId(t.ticketId, pr.prNumber, 'opened'), type: 'pr.opened', at: this.d.clock.now(), payload: { number: pr.prNumber, url: pr.url, branch: t.branch } });
@@ -718,7 +718,7 @@ export abstract class DaemonEffects extends DaemonChecks {
     else if (!t.branch) reason = `no branch for ${t.ticketId}.`;
     else {
       try {
-        const pushed = await publisher.publishBundle({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: bundleKey(project.id, t.ticketId), branch: t.branch, bundle: c.file });
+        const pushed = await publisher.publishBundle({ projectId: project.id, github: project.github, ticketId: t.ticketId, runId: bundleKey(project.id, t.ticketId), branch: t.branch, bundle: c.file });
         await this.closeTakeOver(project.id, t.ticketId);
         const payload = { branch: t.branch, sha: pushed.sha, author: c.by, ...(pushed.before ? { before: pushed.before } : {}) };
         await this.accept({ schemaVersion: SCHEMA_VERSION, taint: 'untrusted', projectId: project.id, ticketId: t.ticketId, id: pushEventId(t.ticketId, pushed.sha), type: 'push.human', at: this.d.clock.now(), payload });
@@ -759,7 +759,7 @@ export abstract class DaemonEffects extends DaemonChecks {
     ] as const;
     await Promise.all(
       checks.map(({ name, conclusion, summary }) =>
-        writer.upsertCheckRun(project.repoPath, { sha, name, externalId: `${name}@${sha}`, status: 'completed', conclusion, summary }).catch((err: Error & { status?: number }) => {
+        writer.upsertCheckRun(project.github, { sha, name, externalId: `${name}@${sha}`, status: 'completed', conclusion, summary }).catch((err: Error & { status?: number }) => {
           const hint = checksPermission(err);
           this.log('warn', `check ${name} of ${t.ticketId} not published on ${sha.slice(0, 12)}${hint}: ${err.message}`);
         }),
@@ -787,14 +787,14 @@ export abstract class DaemonEffects extends DaemonChecks {
     const placed = findings.filter(onItsLine);
     const verdict = reviewVerdict(findings);
     const [body, summary, ...texts] = await this.policy.comments([reviewBody(c.sha, findings, { inline: true }), `${verdict.summary}.`, ...placed.map(inlineComment)]);
-    const post = (review: { body: string; comments: { path: string; line: number; body: string }[] }) => writer.postReview(project.repoPath, t.prNumber!, { sha: c.sha, ...review, externalId: `review:${key.id}` });
+    const post = (review: { body: string; comments: { path: string; line: number; body: string }[] }) => writer.postReview(project.github, t.prNumber!, { sha: c.sha, ...review, externalId: `review:${key.id}` });
     const posted = await post({ body: body!, comments: placed.map((f, i) => ({ path: f.file, line: f.line, body: texts[i]! })) }).catch(async (err: unknown) => {
       if (!(err instanceof ReviewLinesRefused)) throw err;
       this.log('info', `AI review of ${t.ticketId}: a finding is on a line the PR does not show, all listed in the review's text`);
       return post({ body: await this.policy.comment(reviewBody(c.sha, findings, { inline: false })), comments: [] });
     });
     await writer
-      .upsertCheckRun(project.repoPath, { sha: c.sha, name: REVIEW_CHECK, externalId: `${REVIEW_CHECK}@${c.sha}`, status: 'completed', conclusion: verdict.conclusion, title: verdict.summary, summary: summary! })
+      .upsertCheckRun(project.github, { sha: c.sha, name: REVIEW_CHECK, externalId: `${REVIEW_CHECK}@${c.sha}`, status: 'completed', conclusion: verdict.conclusion, title: verdict.summary, summary: summary! })
       .catch((err: Error & { status?: number }) => {
         err.message += checksPermission(err);
         throw err;
@@ -815,7 +815,7 @@ export abstract class DaemonEffects extends DaemonChecks {
     const saved = key.replay ? await this.d.store.getMeta(mark) : undefined;
     if (saved) return this.refuseMerge(project, t, key, upcastMergeRefusal(saved));
     const writer = this.d.forgeWriter;
-    const pr = t.branch ? await this.d.forge.findPr(project.repoPath, t.branch) : undefined;
+    const pr = t.branch ? await this.d.forge.findPr(project.github, t.branch) : undefined;
     let reason: string;
     // Said by the forge (`head_moved`) or seen here, never read back from the sentence (ORC-345).
     let headMoved = false;
@@ -841,8 +841,8 @@ export abstract class DaemonEffects extends DaemonChecks {
     else {
       // No check at all: the forge merges only in a repository with no CI (`mergePr`, `unchecked`).
       // GitHub merges no draft: a Done is a merge decision, whatever became of the move's best effort (`prReady`).
-      await writer.markPrReady(project.repoPath, t.prNumber);
-      const res: MergeResult = await writer.mergePr(project.repoPath, t.prNumber, sha, pr.checks === 'none' ? { unchecked: true } : undefined);
+      await writer.markPrReady(project.github, t.prNumber);
+      const res: MergeResult = await writer.mergePr(project.github, t.prNumber, sha, pr.checks === 'none' ? { unchecked: true } : undefined);
       if (res.merged) return res.deduplicated ? { deduplicated: true } : undefined;
       headMoved = res.reason === 'head_moved';
       reason = res.reason === 'head_moved'

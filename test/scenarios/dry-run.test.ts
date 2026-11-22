@@ -34,9 +34,9 @@ describe('the dry run of a project', () => {
       asked.push(req);
       return { id: req.runId, projectId: req.projectId, sha: 'c'.repeat(40), target: 'main', ok: true, fingerprint: FINGERPRINT, breaks: [], commands: [], startedAt: 0, endedAt: 0 };
     };
-    const gitAuth = vi.fn(async (repoPath: string) => ({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader', GIT_CONFIG_VALUE_0: `for ${repoPath}` }));
+    const gitAuth = vi.fn(async (github: string) => ({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader', GIT_CONFIG_VALUE_0: `for ${github}` }));
     await createHarness({ sandboxed: true, dryRunner, gitAuth }).orch.dryRun('p');
-    expect(await asked[0]!.forgeEnv!()).toMatchObject({ GIT_CONFIG_VALUE_0: 'for /repo' });
+    expect(await asked[0]!.forgeEnv!()).toMatchObject({ GIT_CONFIG_VALUE_0: 'for acme/app' });
     await createHarness({ sandboxed: true, dryRunner }).orch.dryRun('p');
     expect(asked[1]).not.toHaveProperty('forgeEnv');
   });

@@ -3,7 +3,8 @@ import type { UntrustedMark } from '../../core/clean-verify.js';
 /** The factory pushes the verified sha and opens or finds the branch's PR (ORC-125). */
 export interface PublishRequest {
   projectId: string;
-  repoPath: string;
+  /** The repository on GitHub (ORC-478): the PR's and the push's. */
+  github: string;
   ticketId: string;
   /** The attempt that wrote the work: its sandboxes are `<runId>-publish`, so `recover()` finds them among the dead. */
   runId: string;
@@ -25,7 +26,8 @@ export interface PublishRequest {
 /** A bundle a human hands back after a take-over (ORC-234), which the factory checks and pushes. */
 export interface BundleRequest {
   projectId: string;
-  repoPath: string;
+  /** The repository on GitHub (ORC-478). */
+  github: string;
   ticketId: string;
   /** The take-over's key: where its work goes on the host (`<runsDir>/<runId>`), and its sandboxes (`<runId>-publish-secrets`). */
   runId: string;

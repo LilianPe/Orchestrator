@@ -92,7 +92,7 @@ function setup(o: { exec?: Exec; gitleaks?: boolean; package?: string; config?: 
   };
   const publisher = new GitPublisher({ sandboxes, forge, runsDir: join(base, 'runs'), gitleaks: o.gitleaks ?? false, log: (m) => logs.push(m), exec });
   const request = (over: Partial<PublishRequest> = {}): PublishRequest => ({
-    projectId: 'p', repoPath: repo, ticketId: 'ORC-1', runId: 'r1', worktree: repo, branch: BRANCH, sha: git(repo, 'rev-parse', 'HEAD'), title: 'ORC-1 x', body: 'b', ...over,
+    projectId: 'p', github: 'acme/app', ticketId: 'ORC-1', runId: 'r1', worktree: repo, branch: BRANCH, sha: git(repo, 'rev-parse', 'HEAD'), title: 'ORC-1 x', body: 'b', ...over,
   });
   const onForge = (branch = BRANCH) => git(remote, 'for-each-ref', '--format=%(objectname)', `refs/heads/${branch}`);
   return { base, remote, seed, repo, sha, forge, sandboxes, logs, pushes, publisher, request, onForge };
@@ -564,7 +564,7 @@ describe('GitPublisher, on the repository the agent really has (ORC-317)', () =>
       return execCmd(cmd, args, opts);
     };
     const publisher = new GitPublisher({ sandboxes, forge, runsDir: join(base, 'runs'), gitleaks: false, log: () => {}, exec });
-    const request = (over: Partial<PublishRequest> = {}): PublishRequest => ({ projectId: 'p', repoPath, ticketId: 'ORC-1', runId: 'r1', worktree: work, branch, sha, title: 'ORC-1 x', body: 'b', ...over });
+    const request = (over: Partial<PublishRequest> = {}): PublishRequest => ({ projectId: 'p', github: 'acme/app', ticketId: 'ORC-1', runId: 'r1', worktree: work, branch, sha, title: 'ORC-1 x', body: 'b', ...over });
     const onForge = () => git(remote, 'for-each-ref', '--format=%(objectname)', `refs/heads/${branch}`);
     return { base, remote, repoPath, work, branch, sha, forge, sandboxes, hostGit, publisher, request, onForge };
   }
@@ -634,7 +634,7 @@ describe('GitPublisher.publishBundle: a bundle a human hands back after a take-o
     git(s.repo, 'bundle', 'create', '-q', bundle, BRANCH);
     return bundle;
   };
-  const request = (s: ReturnType<typeof setup>, bundle: string): BundleRequest => ({ projectId: 'p', repoPath: s.repo, ticketId: 'ORC-1', runId: 'bundle-p-ORC-1', branch: BRANCH, bundle });
+  const request = (s: ReturnType<typeof setup>, bundle: string): BundleRequest => ({ projectId: 'p', github: 'acme/app', ticketId: 'ORC-1', runId: 'bundle-p-ORC-1', branch: BRANCH, bundle });
   const refusedPush = async (s: ReturnType<typeof setup>, code: string, summary: RegExp) => {
     const r = await refusal(s.publisher.publishBundle(request(s, handBack(s))));
     expect(r.code).toBe(code);

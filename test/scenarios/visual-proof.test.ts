@@ -173,13 +173,13 @@ describe('the captures in the PR (ORC-407)', () => {
     const mergedAt = h.clock.now();
     await h.send('pr.merged', { number: pr.number, url: 'https://github.test/pr/1', branch: pr.branch, mergedAt });
     expect(await h.orch.pruneCaptures(mergedAt + CAPTURES_KEPT_MS - 1)).toEqual([]);
-    expect(await h.orch.pruneCaptures(mergedAt + CAPTURES_KEPT_MS)).toEqual(['/repo: REL-1']);
+    expect(await h.orch.pruneCaptures(mergedAt + CAPTURES_KEPT_MS)).toEqual(['acme/app: REL-1']);
     // A ticket the factory does not know keeps its folder.
     expect([...h.forge.artifacts.keys()]).toEqual(['REL-404/after-375-0000000000000000.png']);
     // A repository the forge refuses is logged, never a failure of the whole purge.
     h.forge.artifactsRefusal = 'GitHub refuses to write factory/artifacts: 403';
     expect(await h.orch.pruneCaptures(mergedAt + CAPTURES_KEPT_MS)).toEqual([]);
-    expect(h.logs.some((l) => l.level === 'warn' && l.message.includes('captures of /repo not pruned'))).toBe(true);
+    expect(h.logs.some((l) => l.level === 'warn' && l.message.includes('captures of acme/app not pruned'))).toBe(true);
   });
 
   it("a capture gone from the factory's disk: the PR says so, without the server's path", async () => {

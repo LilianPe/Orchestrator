@@ -105,6 +105,7 @@ async function doctor(
   const lines: string[] = [];
   const code = await runDoctor({
     repoPath: options.repoPath ?? '/repo',
+    github: 'acme/app',
     api,
     host: options.host ?? goodHost,
     out: (line) => lines.push(line),
@@ -460,7 +461,7 @@ jobs:
   it('puts whether the visual proof can be taken on this instance in the JSON report, whatever the verdict, a failure included (ORC-404)', async () => {
     const report = async (api: FakeApi, visualProof: { image?: string; detail: string }) => {
       const json: string[] = [];
-      const code = await runDoctor({ repoPath: '/repo', api, host: goodHost, out: (l) => json.push(l), json: true, visualProof });
+      const code = await runDoctor({ repoPath: '/repo', github: 'acme/app', api, host: goodHost, out: (l) => json.push(l), json: true, visualProof });
       return { code, report: JSON.parse(json.join('\n')) as unknown };
     };
     expect(await report(new FakeApi([]), { image: 'b:1', detail: 'the captures run in b:1' })).toEqual({
@@ -531,7 +532,7 @@ jobs:
       if (cmd === 'docker') return engine(DOCKER_INFO).exec(cmd, args);
       expect(cmd).toBe('git');
       gitCalls.push(args);
-      if (args[0] === 'remote') return { stdout: 'git@github.com:acme/app.git\n', stderr: '', code: 0 };
+      if (args.includes('get-url')) return { stdout: 'git@github.com:acme/app.git\n', stderr: '', code: 0 };
       // The repository's branch naming, on its default branch as the clone last fetched it: no `.factory`, the convention.
       if (args.includes('symbolic-ref')) return { stdout: 'refs/remotes/origin/main\n', stderr: '', code: 0 };
       if (args.includes('ls-tree')) return { stdout: '', stderr: '', code: 0 };
@@ -561,6 +562,28 @@ jobs:
       'Server secrets:',
       "  github.private_key (env:GH_APP_KEY): in clear — warning: in clear in the daemon's environment: a sealed source (systemd-creds) keeps it off the disk",
     ]);
+  });
+
+  it('refuses a repository whose origin is not on GitHub, as the start refuses it, before any call to GitHub (ORC-478)', async () => {
+    const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const home = tempHome();
+    const pemPath = join(home, 'github-app.pem');
+    writeFileSync(pemPath, privateKey.export({ type: 'pkcs8', format: 'pem' }).toString());
+    writeFileSync(join(home, 'factory.yml'), 'github:\n  app_id: "123"\n  private_key: env:GH_APP_KEY\n  installation_id: "42"\n');
+    const asked: string[] = [];
+    const http: HttpClient = async (url) => {
+      asked.push(url);
+      throw new Error('no call expected');
+    };
+    const exec: Exec = async (cmd, args) => {
+      if (cmd === 'docker') return engine(DOCKER_INFO).exec(cmd, args);
+      return args.includes('get-url') ? { stdout: 'https://gitlab.example.com/acme/app.git\n', stderr: '', code: 0 } : { stdout: '', stderr: 'fatal', code: 128 };
+    };
+    const lines: string[] = [];
+    const code = await runDoctorCommand({ repoPath: '/repo', home, env: { FACTORY_CONTAINER_CLI: 'docker', ...RUNNER, GH_APP_KEY: pemPath }, out: (line) => lines.push(line), http, exec });
+    expect(code).toBe(1);
+    expect(lines.at(-1)).toMatch(/^the origin remote of \/repo is not a GitHub repository: set it to https:\/\/github\.com/);
+    expect(asked).toEqual([]);
   });
 
   describe("the factory's real branch names (ORC-353)", () => {
@@ -905,7 +928,7 @@ jobs:
     it('lists them in the JSON report, whatever the verdict, and only when there is one', async () => {
       const report = async (api: FakeApi, validatorWarnings?: string[]) => {
         const json: string[] = [];
-        await runDoctor({ repoPath: '/repo', api, host: goodHost, json: true, out: (line) => json.push(line), ...(validatorWarnings ? { validatorWarnings } : {}) });
+        await runDoctor({ repoPath: '/repo', github: 'acme/app', api, host: goodHost, json: true, out: (line) => json.push(line), ...(validatorWarnings ? { validatorWarnings } : {}) });
         return JSON.parse(json.join('\n')) as unknown;
       };
       expect(await report(new FakeApi([]), ['Warning: app: x'])).toMatchObject({ accepted: true, validatorWarnings: ['Warning: app: x'] });
@@ -954,7 +977,7 @@ jobs:
     it('lists the warning in the JSON report, and only when there is one', async () => {
       const report = async (startWarnings?: string[]) => {
         const json: string[] = [];
-        await runDoctor({ repoPath: '/repo', api: new FakeApi([]), host: goodHost, json: true, out: (line) => json.push(line), ...(startWarnings ? { startWarnings } : {}) });
+        await runDoctor({ repoPath: '/repo', github: 'acme/app', api: new FakeApi([]), host: goodHost, json: true, out: (line) => json.push(line), ...(startWarnings ? { startWarnings } : {}) });
         return JSON.parse(json.join('\n')) as unknown;
       };
       expect(await report(['Warning: relay: x'])).toMatchObject({ accepted: true, startWarnings: ['Warning: relay: x'] });

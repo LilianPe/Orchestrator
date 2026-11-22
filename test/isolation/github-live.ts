@@ -1,4 +1,4 @@
-import { GitHubAppForge, parseGitHubRemote, type GitHubAppForgeOptions, type GitHubRepoRef } from '../../src/adapters/forge/github-app.js';
+import { GitHubAppForge, type GitHubAppForgeOptions } from '../../src/adapters/forge/github-app.js';
 import { readPrivateKey } from '../../src/config/github-app.js';
 
 /**
@@ -17,27 +17,20 @@ export function gate(title: string, names: string[]): { skip: boolean; title: st
   return { skip: unset.length > 0, title: unset.length ? `${title} (skipped: ${unset.join(', ')} not set)` : title };
 }
 
-function repoRef(value: string): GitHubRepoRef {
-  const ref = parseGitHubRemote(`github.com/${value}`);
-  if (!ref || value.endsWith('.git')) throw new Error(`a repository as owner/name expected, got "${value}"`);
-  return ref;
-}
-
-/** The App's settings from the variables; a repository path is its `owner/name`. */
+/** The App's settings from the variables; the forge names a repository by its `owner/name` (ORC-478). */
 export function appOptions(): GitHubAppForgeOptions {
   const installationId = process.env['FACTORY_ISO_GH_INSTALLATION_ID']?.trim();
   return {
     appId: process.env['FACTORY_ISO_GH_APP_ID']!.trim(),
     privateKey: readPrivateKey(process.env['FACTORY_ISO_GH_APP_KEY']!),
     ...(installationId ? { installationId } : {}),
-    resolveRepo: async (path) => repoRef(path),
   };
 }
 
 /** The factory's forge on the test App, and the token it holds for a repository: the run's token. */
 export class LiveForge extends GitHubAppForge {
-  async token(repoPath: string): Promise<string> {
-    return this.installationToken(await this.repo(repoPath));
+  async token(github: string): Promise<string> {
+    return this.installationToken(this.repo(github));
   }
 }
 

@@ -1,5 +1,4 @@
 import { createPrivateKey, createSign } from 'node:crypto';
-import { execCmd, mustExec, type Exec } from '../exec.js';
 import type { MergedPr } from '../../core/baseline.js';
 import type { FeedbackItem } from '../../core/types.js';
 import { MAX_LOGS, type CiFailureReport, type FailedCheck } from '../../core/ci-failures.js';
@@ -127,13 +126,10 @@ export interface GitHubAppForgeOptions {
   apiBase?: string;
   /**
    * Where the repositories are served over HTTPS, the scope of the git token (`gitAccess`); `https://github.com` by default. Another
-   * value is for tests, with `resolveRepo`: an origin elsewhere is not parsed (`parseGitHubRemote`), GitHub Enterprise is not supported.
+   * value is for tests: GitHub Enterprise is not supported.
    */
   webBase?: string;
   http?: HttpClient;
-  exec?: Exec;
-  /** Overrides `git remote get-url origin` (tests). */
-  resolveRepo?: (repoPath: string) => Promise<GitHubRepoRef>;
   now?: () => number;
   log?: (message: string) => void;
 }
@@ -171,6 +167,13 @@ export function parseGitHubRemote(remote: string): GitHubRepoRef | undefined {
   const [owner, rawName] = parts;
   const name = rawName?.replace(/\.git$/, '');
   return owner && name ? { owner, name } : undefined;
+}
+
+/** `owner/name` (a project's `github`, ORC-478) as the API names it; anything else throws: no call goes out to a repository half named. */
+export function repoRef(github: string): GitHubRepoRef {
+  const [owner, name, ...rest] = github.split('/');
+  if (!owner || !name || rest.length) throw new Error(`not a GitHub repository, \`owner/name\` expected: ${github}`);
+  return { owner, name };
 }
 
 /**
@@ -332,15 +335,6 @@ function unreadable(method: string, path: string, what: string, data: unknown, s
 /** The repository's page: the root of a link to one of its files (ORC-407), and of its git URL. */
 const repoWebUrl = (repo: GitHubRepoRef, base = 'https://github.com'): string => `${base}/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`;
 
-/** Whether `url` is served by `base` (scheme, host and port), its userinfo aside; false for an scp-like `git@host:path` or a path. */
-function sameOrigin(url: string, base: string): boolean {
-  try {
-    return new URL(url).origin === new URL(base).origin;
-  } catch {
-    return false;
-  }
-}
-
 /** `/repos/{owner}/{name}`, encoded. */
 export function repoApi(repo: GitHubRepoRef): string {
   return `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`;
@@ -413,8 +407,6 @@ export class GitHubAppAuth {
   protected readonly apiBase: string;
   protected readonly webBase: string;
   protected readonly http: HttpClient;
-  protected readonly exec: Exec;
-  protected readonly resolveRepoFn: ((repoPath: string) => Promise<GitHubRepoRef>) | undefined;
   protected readonly now: () => number;
   protected readonly log: ((message: string) => void) | undefined;
   readonly #tokens = new Map<string, { token: string; expiresAt: number }>();
@@ -427,8 +419,6 @@ export class GitHubAppAuth {
     this.apiBase = (options.apiBase ?? 'https://api.github.com').replace(/\/+$/, '');
     this.webBase = (options.webBase ?? 'https://github.com').replace(/\/+$/, '');
     this.http = options.http ?? fetchHttp;
-    this.exec = options.exec ?? execCmd;
-    this.resolveRepoFn = options.resolveRepo;
     this.now = options.now ?? (() => Date.now());
     this.log = options.log;
     try {
@@ -438,12 +428,9 @@ export class GitHubAppAuth {
     }
   }
 
-  protected async repo(repoPath: string): Promise<GitHubRepoRef> {
-    if (this.resolveRepoFn) return this.resolveRepoFn(repoPath);
-    const remote = await mustExec(this.exec, 'git', ['remote', 'get-url', 'origin'], { cwd: repoPath });
-    const repo = parseGitHubRemote(remote);
-    if (!repo) throw new Error(`the origin remote of ${repoPath} is not a GitHub repository`);
-    return repo;
+  /** The repository a call names, `owner/name` as the project's `github` (ORC-478): never read from a clone. */
+  protected repo(github: string): GitHubRepoRef {
+    return repoRef(github);
   }
 
   protected async installationToken(repo: GitHubRepoRef): Promise<string> {
@@ -594,8 +581,8 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
    * means a login GitHub does not know, which gets `none`. Any other failure throws, a 404 on the
    * repo or the installation included (an app not installed is a configuration error, not a refusal).
    */
-  async repoPermission(repoPath: string, login: string): Promise<RepoPermission> {
-    const repo = await this.repo(repoPath);
+  async repoPermission(github: string, login: string): Promise<RepoPermission> {
+    const repo = this.repo(github);
     const token = await this.installationToken(repo);
     try {
       return toRepoPermission(
@@ -607,8 +594,8 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     }
   }
 
-  async findPr(repoPath: string, branch: string): Promise<PrInfo | undefined> {
-    const repo = await this.repo(repoPath);
+  async findPr(github: string, branch: string): Promise<PrInfo | undefined> {
+    const repo = this.repo(github);
     const token = await this.installationToken(repo);
     const query = new URLSearchParams({ head: `${repo.owner}:${branch}`, state: 'all', per_page: '1' });
     const [pr] = await this.read('GET', `${repoApi(repo)}/pulls?${query}`, token, isPulls, 'a list of pull requests');
@@ -626,8 +613,8 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
    * description. Only the first `MAX_LOGS` logs are read, each as soon as the check runs are. A log that cannot be read (expired,
    * a permission, the network) is said, not thrown: the names still go to the agent.
    */
-  async ciFailures(repoPath: string, number: number): Promise<CiFailureReport> {
-    const repo = await this.repo(repoPath);
+  async ciFailures(github: string, number: number): Promise<CiFailureReport> {
+    const repo = this.repo(github);
     const token = await this.installationToken(repo);
     const pr = await this.read('GET', `${repoApi(repo)}/pulls/${number}`, token, isBasedPull, 'a pull request with its base');
     const head = `${repoApi(repo)}/commits/${encodeURIComponent(pr.head.sha)}`;
@@ -667,8 +654,8 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     }
   }
 
-  async mergePr(repoPath: string, number: number, sha: string, opts: { unchecked?: boolean } = {}): Promise<MergeResult> {
-    const repo = await this.repo(repoPath);
+  async mergePr(github: string, number: number, sha: string, opts: { unchecked?: boolean } = {}): Promise<MergeResult> {
+    const repo = this.repo(github);
     const token = await this.installationToken(repo);
     const url = `${repoApi(repo)}/pulls/${number}`;
     // A replay: the first call merged it on that head. Merged on another head is not ours to call merged.
@@ -697,8 +684,8 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
    * (a concurrent replay), GitHub answers 422: the open PR is read again and returned. A 422 with no
    * open PR behind it (another validation error) is thrown as is.
    */
-  async ensurePr(repoPath: string, req: PrRequest): Promise<{ number: number; url: string; deduplicated: boolean }> {
-    const repo = await this.repo(repoPath);
+  async ensurePr(github: string, req: PrRequest): Promise<{ number: number; url: string; deduplicated: boolean }> {
+    const repo = this.repo(github);
     const token = await this.installationToken(repo);
     const base = `${repoApi(repo)}/pulls`;
     const openPr = async () => {
@@ -716,7 +703,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
         // A plan without drafts: the PR is what the ticket needs, and no human is asked to review it before Human Review.
         if (req.draft && /draft pull requests are not supported/i.test(err.message)) {
           const { draft: _, ...plain } = req;
-          return this.ensurePr(repoPath, plain);
+          return this.ensurePr(github, plain);
         }
         const raced = await openPr();
         if (raced) return raced;
@@ -727,8 +714,8 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
   }
 
   /** The REST API cannot do it: only this GraphQL mutation takes a PR out of draft. Read first: a PR already out writes nothing. */
-  async markPrReady(repoPath: string, number: number): Promise<void> {
-    const repo = await this.repo(repoPath);
+  async markPrReady(github: string, number: number): Promise<void> {
+    const repo = this.repo(github);
     const token = await this.installationToken(repo);
     const pr = await this.read('GET', `${repoApi(repo)}/pulls/${number}`, token, isDraftState, 'a pull request with its draft state');
     if (!pr.draft) return;
@@ -740,8 +727,8 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
   }
 
   /** In the environment: a command line is visible to every process of the host, and git quotes it in its errors. */
-  async gitAccess(repoPath: string): Promise<GitAccess> {
-    const repo = await this.repo(repoPath);
+  async gitAccess(github: string): Promise<GitAccess> {
+    const repo = this.repo(github);
     return { url: `${repoWebUrl(repo, this.webBase)}.git`, env: this.tokenEnv(await this.installationToken(repo)) };
   }
 
@@ -752,26 +739,24 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
   }
 
   /**
-   * The env of the daemon's own git that reads the repository (ORC-442): a fetch, the knowledge base's pull and push. The
-   * installation token as `gitAccess` gives it, for an origin served over HTTPS by the App's forge. Empty for any other origin
-   * (ssh, a path, another host), and when GitHub refuses the App a token for the repository (a 4xx: not installed there, not in
-   * its installation), said once per `NO_TOKEN_MS`: the machine's own git credentials serve then, as on a workstation. Any other
-   * failure (a 5xx, a rate limit, the network) rejects: the read fails with it, a transient one retried, never read without the
-   * token it needs.
+   * The env of the daemon's own git that reads the repository `github` (ORC-442, ORC-478): a fetch, the knowledge base's pull and
+   * push. The installation token as `gitAccess` gives it, in a header git sends to the App's forge alone (`http.<webBase>/`): a
+   * remote elsewhere (ssh, a path, another host) never gets it. Empty when GitHub refuses the App a token for the repository (a
+   * 4xx: not installed there, not in its installation), said once per `NO_TOKEN_MS`: the machine's own git credentials serve then,
+   * as on a workstation. Any other failure (a 5xx, a rate limit, the network) rejects: the read fails with it, a transient one
+   * retried, never read without the token it needs.
    */
-  async fetchEnv(repoPath: string): Promise<Record<string, string>> {
-    const origin = await this.exec('git', ['remote', 'get-url', 'origin'], { cwd: repoPath });
-    const url = origin.stdout.trim();
-    if (origin.code !== 0 || !sameOrigin(url, this.webBase)) return {};
-    const repo = this.resolveRepoFn ? await this.resolveRepoFn(repoPath) : parseGitHubRemote(url);
-    const refused = this.#noToken.get(repoPath);
-    if (!repo || (refused !== undefined && refused > this.now())) return {};
+  async fetchEnv(github: string): Promise<Record<string, string>> {
+    const repo = this.repo(github);
+    const key = `${repo.owner}/${repo.name}`.toLowerCase();
+    const refused = this.#noToken.get(key);
+    if (refused !== undefined && refused > this.now()) return {};
     try {
       return this.tokenEnv(await this.installationToken(repo));
     } catch (err) {
       if (!(err instanceof GitHubApiError) || err.retryable || err.status < 400) throw err;
-      this.#noToken.set(repoPath, this.now() + NO_TOKEN_MS);
-      this.log?.(`GitHub App: no installation token to read ${repoPath}, read with the machine's git credentials: ${err.message}`);
+      this.#noToken.set(key, this.now() + NO_TOKEN_MS);
+      this.log?.(`GitHub App: no installation token to read ${key}, read with the machine's git credentials: ${err.message}`);
       return {};
     }
   }
@@ -785,8 +770,8 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
    * them, `filter=all`, not only the latest, every page) and matched here. An unreadable list rejects: read as
    * empty, it would create a second run for the same external id (ORC-273).
    */
-  async upsertCheckRun(repoPath: string, req: CheckRunRequest): Promise<{ id: number; deduplicated: boolean }> {
-    const repo = await this.repo(repoPath);
+  async upsertCheckRun(github: string, req: CheckRunRequest): Promise<{ id: number; deduplicated: boolean }> {
+    const repo = this.repo(github);
     const token = await this.installationToken(repo);
     const base = repoApi(repo);
     const query = new URLSearchParams({ check_name: req.name, app_id: this.appId, filter: 'all' });
@@ -811,8 +796,8 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
    * Lists the PR's reviews first (every page, as `upsertCheckRun` lists its runs): one whose text carries the mark of
    * `externalId` is the replay's. An unreadable list rejects. A 422 on a review with comments is a line GitHub cannot place.
    */
-  async postReview(repoPath: string, number: number, req: ReviewRequest): Promise<{ id: number; deduplicated: boolean }> {
-    const repo = await this.repo(repoPath);
+  async postReview(github: string, number: number, req: ReviewRequest): Promise<{ id: number; deduplicated: boolean }> {
+    const repo = this.repo(github);
     const token = await this.installationToken(repo);
     const path = `${repoApi(repo)}/pulls/${number}/reviews`;
     const mark = reviewMark(req.externalId);
@@ -839,8 +824,8 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
   }
 
   /** Its labels read first, every page: a label of the group in place, alone, writes nothing; one already gone (404) is no failure. */
-  async setExclusiveLabel(repoPath: string, number: number, label: string, group: readonly string[]): Promise<void> {
-    const repo = await this.repo(repoPath);
+  async setExclusiveLabel(github: string, number: number, label: string, group: readonly string[]): Promise<void> {
+    const repo = this.repo(github);
     const token = await this.installationToken(repo);
     const path = `${repoApi(repo)}/issues/${number}/labels`;
     const names: string[] = [];
@@ -859,30 +844,30 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     }
   }
 
-  async unresolvedReviewComments(repoPath: string, prNumber: number): Promise<FeedbackItem[]> {
-    const { owner, name, gql } = await this.graphQl(repoPath);
+  async unresolvedReviewComments(github: string, prNumber: number): Promise<FeedbackItem[]> {
+    const { owner, name, gql } = await this.graphQl(github);
     // Every page of threads and of their comments (ORC-347).
     return unresolvedReviewFeedback(gql, owner, name, prNumber);
   }
 
-  async openPrs(repoPath: string): Promise<OpenPr[]> {
-    const { owner, name, gql } = await this.graphQl(repoPath);
+  async openPrs(github: string): Promise<OpenPr[]> {
+    const { owner, name, gql } = await this.graphQl(github);
     return openPullRequests(gql, owner, name);
   }
 
-  async branches(repoPath: string, prefix: string): Promise<ForgeBranch[]> {
-    const { owner, name, gql } = await this.graphQl(repoPath);
+  async branches(github: string, prefix: string): Promise<ForgeBranch[]> {
+    const { owner, name, gql } = await this.graphQl(github);
     return repoBranches(gql, owner, name, prefix);
   }
 
-  async recentBranches(repoPath: string): Promise<ForgeBranch[]> {
-    const { owner, name, gql } = await this.graphQl(repoPath);
+  async recentBranches(github: string): Promise<ForgeBranch[]> {
+    const { owner, name, gql } = await this.graphQl(github);
     return recentRepoBranches(gql, owner, name);
   }
 
   /** The repository's PRs merged in `[since, until)` (ORC-230), for `factory baseline`: not part of the `Forge` port the factory runs on. */
-  async mergedPrs(repoPath: string, since: number, until: number): Promise<MergedPr[]> {
-    const { owner, name, gql } = await this.graphQl(repoPath);
+  async mergedPrs(github: string, since: number, until: number): Promise<MergedPr[]> {
+    const { owner, name, gql } = await this.graphQl(github);
     return mergedPullRequests(gql, owner, name, since, until);
   }
 
@@ -890,8 +875,8 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
    * A PR by its number, as `factory ghost start` compares with it (ORC-181, in place of `gh pr view`): its author, its merge
    * commit when it is merged (never the test merge GitHub names for an open one), its commits' headlines oldest first.
    */
-  async pullRequest(repoPath: string, number: number): Promise<PullRequestView> {
-    const repo = await this.repo(repoPath);
+  async pullRequest(github: string, number: number): Promise<PullRequestView> {
+    const repo = this.repo(github);
     const token = await this.installationToken(repo);
     const path = `${repoApi(repo)}/pulls/${number}`;
     const [pr, commits] = await Promise.all([
@@ -910,8 +895,8 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
   }
 
   /** GraphQL with the installation token, each answer checked before it is read (ORC-273). */
-  private async graphQl(repoPath: string): Promise<{ owner: string; name: string; gql: GraphQl }> {
-    const repo = await this.repo(repoPath);
+  private async graphQl(github: string): Promise<{ owner: string; name: string; gql: GraphQl }> {
+    const repo = this.repo(github);
     const token = await this.installationToken(repo);
     const gql: GraphQl = async <T>(query: string, variables: Record<string, unknown>, isData: (d: unknown) => d is T, what: string) => {
       // With errors, `data` is not read.
@@ -948,10 +933,10 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
    * ORC-407, through the Git Data API: the blobs, one tree on the tip's, one commit on the tip, then the ref moved forward. An
    * unchanged tree (a replay) writes no commit: the links name the tip, which holds the files.
    */
-  async hostArtifacts(repoPath: string, files: readonly HostedFile[]): Promise<string[]> {
+  async hostArtifacts(github: string, files: readonly HostedFile[]): Promise<string[]> {
     // No retry would make it one: an answer, as a refusal.
     for (const f of files) if (!ARTIFACT_PATH.test(f.path)) throw new ArtifactsRefused(`not a path on ${ARTIFACTS_BRANCH}: ${f.path}`);
-    const repo = await this.repo(repoPath);
+    const repo = this.repo(github);
     // Uploaded once, whatever the attempts: a blob does not depend on the tip.
     let blobs: Promise<TreeEntry[]> | undefined;
     const { commit } = await this.onArtifacts(repo, `Host ${files.length} visual-proof capture(s) [skip ci]`, (_tip, token, api) =>
@@ -966,11 +951,11 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
   }
 
   /** ORC-407: the tip's top-level folders, each asked of `expired` once; those it says yes to removed in one commit. */
-  async pruneArtifacts(repoPath: string, expired: (folder: string) => Promise<boolean>): Promise<string[]> {
+  async pruneArtifacts(github: string, expired: (folder: string) => Promise<boolean>): Promise<string[]> {
     // An attempt after a race asks again only of a folder it has not seen.
     const verdicts = new Map<string, Promise<boolean>>();
     const ask = (folder: string) => verdicts.get(folder) ?? verdicts.set(folder, expired(folder)).get(folder)!;
-    const { entries } = await this.onArtifacts(await this.repo(repoPath), 'Remove the captures of PRs closed 30 days ago [skip ci]', async (tip, token, api) => {
+    const { entries } = await this.onArtifacts(this.repo(github), 'Remove the captures of PRs closed 30 days ago [skip ci]', async (tip, token, api) => {
       if (!tip) return [];
       const tree = await this.read('GET', `${api}/git/trees/${encodeURIComponent(tip.tree)}`, token, isTree, 'a git tree');
       if (tree.truncated) throw new Error(`the tree of ${ARTIFACTS_BRANCH} is too large for GitHub to list in full`);

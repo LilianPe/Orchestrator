@@ -74,10 +74,10 @@ export function pickupFailures(checks: PickupCheck[], issue: TrackerIssue, ownWo
  */
 export async function searchDuplicates(
   issue: TrackerIssue,
-  repoPath: string,
+  github: string,
   d: { forge: Pick<Forge, 'openPrs' | 'recentBranches'>; tracker: Pick<Tracker, 'search'> },
   naming?: BranchNaming,
 ): Promise<{ prs: OpenPr[]; activeWork: string }> {
-  const [prs, branches, tickets] = await Promise.all([d.forge.openPrs(repoPath), d.forge.recentBranches(repoPath), d.tracker.search(issue.title, issue.teamKey)]);
+  const [prs, branches, tickets] = await Promise.all([d.forge.openPrs(github), d.forge.recentBranches(github), d.tracker.search(issue.title, issue.teamKey)]);
   return { prs, activeWork: formatActiveWork(issue.identifier, { prs, branches, tickets }, naming) };
 }

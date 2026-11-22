@@ -18,6 +18,7 @@ import { defaultWorkflow, missingStatusWarning } from '../presets/workflow.js';
 import { activeClaudeAccount, claudeAccountReader, stepSettings } from '../config/factory-yml.js';
 import { startRefusals } from '../config/start-refusals.js';
 import { cliLinearTracker } from './linear.js';
+import { projectGithub } from '../app/project-github.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
 import { browserImage, sandboxConfig, sandboxLimits, visualProofLine } from '../app/sandbox-wiring.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning, testCommandWarnings, type RepoConfig } from '../config/repo-config.js';
@@ -50,11 +51,12 @@ function factoryBranches(naming: BranchNaming): FactoryBranches {
   return { probes, spaces: [...branchSpaces(naming), LEGACY_BRANCHES] };
 }
 
+/** Each read names the repository on GitHub, `owner/name` (ORC-478). */
 export interface DoctorApi {
-  listWorkflows(repoPath: string): Promise<WorkflowSource[]>;
-  listEnvironments(repoPath: string): Promise<EnvironmentProtection[]>;
-  branchProtection(repoPath: string): Promise<BranchProtection>;
-  installationPermissions(repoPath: string): Promise<Record<string, string>>;
+  listWorkflows(github: string): Promise<WorkflowSource[]>;
+  listEnvironments(github: string): Promise<EnvironmentProtection[]>;
+  branchProtection(github: string): Promise<BranchProtection>;
+  installationPermissions(github: string): Promise<Record<string, string>>;
 }
 
 type Verdict = 'accepted' | 'refused';
@@ -221,6 +223,8 @@ function judgeProtection(protection: BranchProtection): BranchProtectionReport {
 
 export interface DoctorOptions {
   repoPath: string;
+  /** Its repository on GitHub, `owner/name`, as the daemon resolves it at its start (`projectGithub`, ORC-478). */
+  github: string;
   api: DoctorApi;
   /** The host the daemon runs on (`checkHost`). */
   host: HostReport;
@@ -811,31 +815,31 @@ function errorMessage(error: unknown): string {
 }
 
 export async function runDoctor(options: DoctorOptions): Promise<number> {
-  const { repoPath, api, out } = options;
+  const { repoPath, github, api, out } = options;
   // A workflow file an older factory read (ORC-388): named whatever the verdict, never read.
   const ignored = ignoredWorkflowFiles(repoPath);
   // Neither is part of the verdict: said whatever it is.
   const warnings = testCommandWarnings(options.commands);
   if (!options.json) for (const line of [...ignored.map(ignoredWorkflowWarning), ...warnings]) out(line);
   // Read beside the workflows; an unreadable protection is a refusal with its reason, the other verdicts still told.
-  const protectionRead = api.branchProtection(repoPath).then(judgeProtection, (error: unknown): BranchProtectionReport => ({
+  const protectionRead = api.branchProtection(github).then(judgeProtection, (error: unknown): BranchProtectionReport => ({
     verdict: 'refused',
     reasons: [`Cannot read the protection of the default branch: ${errorMessage(error)}`],
   }));
-  const installationRead = api.installationPermissions(repoPath).then(judgeInstallation, unreadInstallation);
+  const installationRead = api.installationPermissions(github).then(judgeInstallation, unreadInstallation);
   // Unreadable workflows or environments still tell the host's, the protection's and the installation's verdicts.
   const failure = async (message: string) =>
     doctorFailure(options, message, ignored, warnings, { host: options.host, branchProtection: await protectionRead, installation: await installationRead });
   let workflows: WorkflowSource[];
   try {
-    workflows = await api.listWorkflows(repoPath);
+    workflows = await api.listWorkflows(github);
   } catch (error) {
     return failure(`Cannot read the workflows: ${errorMessage(error)}`);
   }
   let environments: EnvironmentProtection[] = [];
   if (workflows.length > 0) {
     try {
-      environments = await api.listEnvironments(repoPath);
+      environments = await api.listEnvironments(github);
     } catch (error) {
       return failure(`Cannot read the environments: ${errorMessage(error)}`);
     }
@@ -1015,6 +1019,7 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   const reportOf = () => ({ repoPath: options.repoPath, out, visualProof, validatorWarnings: validators, startWarnings, ...(serverSecrets ? { serverSecrets } : {}), ...(options.json ? { json: true } : {}) });
   let projects;
   let states;
+  let repos;
   try {
     const { yml, sealed } = await loadSealedFactoryYml(options.home, env, { only: GITHUB_APP_SECRETS });
     // Each refusal of the daemon's start, in its order and by the function it calls, with its message (ORC-448): the exposed
@@ -1023,6 +1028,7 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     startWarnings = startRefusals(options.home, instance, yml, env).warnings;
     if (!options.json) for (const line of startWarnings) out(line);
     projects = instance.projects.filter((p) => samePath(p.repoPath, options.repoPath));
+    repos = yml?.repos;
     // The project of this repository whose spec gate no validator can pass (ORC-421): a warning, never the verdict.
     validators = validatorWarnings(projects);
     if (!options.json) for (const line of validators) out(line);
@@ -1047,10 +1053,16 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
         'to read the workflows and the environments.',
     );
   }
+  // The repository on GitHub as the daemon resolves it at its start, refused alike when its origin is not on GitHub (ORC-478).
+  let github: string;
+  try {
+    github = await projectGithub({ repoPath: options.repoPath, teamKey: projects[0]?.linearTeamKey, repos, ...(options.exec ? { exec: options.exec } : {}) });
+  } catch (error) {
+    return doctorFailure(report, errorMessage(error));
+  }
   const api = new GitHubAppApi({
     ...githubApp,
     ...(options.http ? { http: options.http } : {}),
-    ...(options.exec ? { exec: options.exec } : {}),
     ...(options.now ? { now: options.now } : {}),
   });
   let config: RepoConfig;
@@ -1059,5 +1071,5 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   } catch (error) {
     return doctorFailure(report, `Cannot read the repository's branch naming: ${errorMessage(error)}`);
   }
-  return runDoctor({ ...report, api, host: await checkHost(env, options.exec), naming: config.branches, commands: config.commands });
+  return runDoctor({ ...report, github, api, host: await checkHost(env, options.exec), naming: config.branches, commands: config.commands });
 }

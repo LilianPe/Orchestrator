@@ -2,7 +2,7 @@ import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { newTicketState, SCHEMA_VERSION, type FactoryEvent, type TicketState } from '../../core/types.js';
 import { BRANCH, checkRunBody, defaultPushBody, githubDelivery, pullRequestBody, pushBody, sha, workflowRunBody } from '../../../test/helpers/github-webhook.js';
-import { createGithubIngest, githubRepoOf } from './github-ingest.js';
+import { createGithubIngest, githubMapContext } from './github-ingest.js';
 import { checksEventId, mapGithubWebhook, verifyGithubSignature, type GithubMapContext } from './github-webhook.js';
 import type { PrInfo } from './types.js';
 
@@ -321,20 +321,14 @@ describe('mapGithubWebhook', () => {
   });
 });
 
-describe('githubRepoOf', () => {
-  it('reads owner/name of origin once per checkout, and again after a failed read', async () => {
-    const calls: string[] = [];
-    let fail = true;
-    const repoOf = githubRepoOf(async (_cmd, _args, opts) => {
-      calls.push(opts?.cwd ?? '');
-      if (fail) return { code: 1, stdout: '', stderr: 'no remote' };
-      return { code: 0, stdout: 'git@github.com:Acme/app.git\n', stderr: '' };
-    });
-    await expect(repoOf('/repo')).rejects.toThrow();
-    fail = false;
-    expect(await repoOf('/repo')).toBe('Acme/app');
-    expect(await repoOf('/repo')).toBe('Acme/app');
-    expect(calls).toEqual(['/repo', '/repo']);
+describe('githubMapContext (ORC-478)', () => {
+  it("finds a ticket in the project whose github names the webhook's repository, whatever its case, and in no other", async () => {
+    const ticket = tracked({ prNumber: 7 });
+    const store = { listTickets: async () => [ticket], getTicket: async () => undefined, mergedPrOf: async () => undefined };
+    const context = githubMapContext({ store, forge: { findPr: async () => undefined }, projects: [{ id: 'p', github: 'Acme/App' }], now: () => 1 });
+    expect(await context.ticketForBranch('acme/app', BRANCH)).toBe(ticket);
+    expect(await context.ticketForPr('ACME/APP', 7)).toBe(ticket);
+    expect(await context.ticketForBranch('acme/other', BRANCH)).toBeUndefined();
   });
 });
 

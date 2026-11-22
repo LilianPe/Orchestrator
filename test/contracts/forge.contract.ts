@@ -6,7 +6,7 @@ import { describeContract, resolved, subjectWith, type ContractOptions } from '.
 /** What the implementation under test arranged for the suite. Docs: docs/ports/forge.md. */
 export interface ForgeSubject {
   forge: Forge;
-  repoPath: string;
+  github: string;
   /** A branch that never had a PR. */
   missingBranch: string;
   /** A branch with a PR, and that PR's number; absent, the PR cases are skipped. */
@@ -32,12 +32,12 @@ export function describeForgeContract(name: string, make: () => ForgeSubject | P
 
     it('findPr answers undefined for a branch without a PR', async () => {
       const s = await make();
-      expect(await resolved(s.forge.findPr(s.repoPath, s.missingBranch))).toBeUndefined();
+      expect(await resolved(s.forge.findPr(s.github, s.missingBranch))).toBeUndefined();
     });
 
     it('findPr returns the branch PR, its checks consistent with the failed ones', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'pr');
-      const pr = await s.forge.findPr(s.repoPath, s.pr.branch);
+      const pr = await s.forge.findPr(s.github, s.pr.branch);
       expect(pr).toMatchObject({ number: s.pr.number, branch: s.pr.branch });
       expect(pr!.url).toMatch(/^https:\/\//);
       expect(['OPEN', 'MERGED', 'CLOSED']).toContain(pr!.state);
@@ -49,27 +49,27 @@ export function describeForgeContract(name: string, make: () => ForgeSubject | P
 
     it('findPr is a read: asking twice gives the same answer', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'pr');
-      const [a, b] = await Promise.all([s.forge.findPr(s.repoPath, s.pr.branch), s.forge.findPr(s.repoPath, s.pr.branch)]);
+      const [a, b] = await Promise.all([s.forge.findPr(s.github, s.pr.branch), s.forge.findPr(s.github, s.pr.branch)]);
       expect(a).toEqual(b);
     });
 
     it('findPr and unresolvedReviewComments return snapshots the caller may mutate', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'pr');
-      const pr = (await s.forge.findPr(s.repoPath, s.pr.branch))!;
+      const pr = (await s.forge.findPr(s.github, s.pr.branch))!;
       const before = structuredClone(pr);
       pr.number = -1;
       pr.failedChecks.push('mutated-by-caller');
-      expect(await s.forge.findPr(s.repoPath, s.pr.branch)).toEqual(before);
-      const items = await s.forge.unresolvedReviewComments(s.repoPath, s.pr.number);
+      expect(await s.forge.findPr(s.github, s.pr.branch)).toEqual(before);
+      const items = await s.forge.unresolvedReviewComments(s.github, s.pr.number);
       const listed = structuredClone(items);
       if (items[0]) items[0].body = 'mutated-by-caller';
       items.push({ author: 'x', body: 'x', at: 0, source: 'review' });
-      expect(await s.forge.unresolvedReviewComments(s.repoPath, s.pr.number)).toEqual(listed);
+      expect(await s.forge.unresolvedReviewComments(s.github, s.pr.number)).toEqual(listed);
     });
 
     it('unresolvedReviewComments lists the unresolved review threads as review feedback', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'pr');
-      const items = await s.forge.unresolvedReviewComments(s.repoPath, s.pr.number);
+      const items = await s.forge.unresolvedReviewComments(s.github, s.pr.number);
       if (s.unresolved) expect(items).toEqual(s.unresolved);
       for (const item of items) {
         expect(item.source).toBe('review');
@@ -81,15 +81,15 @@ export function describeForgeContract(name: string, make: () => ForgeSubject | P
 
     it('findPr and unresolvedReviewComments reject when the forge does not answer', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'unreachable');
-      await expect(s.unreachable.findPr(s.repoPath, s.pr?.branch ?? s.missingBranch)).rejects.toThrow();
-      await expect(s.unreachable.unresolvedReviewComments(s.repoPath, s.pr?.number ?? 1)).rejects.toThrow();
+      await expect(s.unreachable.findPr(s.github, s.pr?.branch ?? s.missingBranch)).rejects.toThrow();
+      await expect(s.unreachable.unresolvedReviewComments(s.github, s.pr?.number ?? 1)).rejects.toThrow();
     });
 
     it('ciFailures names the failed checks findPr counts, each with its conclusion, and the CI of the base branch (ORC-459)', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'pr');
-      const pr = (await s.forge.findPr(s.repoPath, s.pr.branch))!;
+      const pr = (await s.forge.findPr(s.github, s.pr.branch))!;
       if (pr.state !== 'OPEN') return ctx.skip();
-      const report = await resolved(s.forge.ciFailures(s.repoPath, s.pr.number));
+      const report = await resolved(s.forge.ciFailures(s.github, s.pr.number));
       expect(report.failed.map((c) => c.name).sort()).toEqual([...pr.failedChecks].sort());
       for (const check of report.failed) expect(check.conclusion).not.toBe('');
       if (pr.headSha) expect(report.head).toBe(pr.headSha);
@@ -100,29 +100,29 @@ export function describeForgeContract(name: string, make: () => ForgeSubject | P
 
     it('ciFailures rejects when the forge does not answer', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'unreachable');
-      await expect(s.unreachable.ciFailures(s.repoPath, s.pr?.number ?? 1)).rejects.toThrow();
+      await expect(s.unreachable.ciFailures(s.github, s.pr?.number ?? 1)).rejects.toThrow();
     });
 
     it('findPr rejects for checks it cannot read', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'unreadableChecks');
-      await expect(s.forge.findPr(s.repoPath, s.unreadableChecks)).rejects.toThrow();
+      await expect(s.forge.findPr(s.github, s.unreadableChecks)).rejects.toThrow();
     });
 
     it('findPr gives none for an open PR without any check', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'noChecks');
-      expect(await resolved(s.forge.findPr(s.repoPath, s.noChecks))).toMatchObject({
+      expect(await resolved(s.forge.findPr(s.github, s.noChecks))).toMatchObject({
         branch: s.noChecks, state: 'OPEN', checks: 'none', failedChecks: [],
       });
     });
 
     it('findPr rejects when the forge answers the PR but not its checks', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'checksDown');
-      await expect(s.forge.findPr(s.repoPath, s.checksDown)).rejects.toThrow();
+      await expect(s.forge.findPr(s.github, s.checksDown)).rejects.toThrow();
     });
 
     it('findPr gives neither pass nor none for checks with a state it does not know', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'unknownBucket');
-      const pr = await resolved(s.forge.findPr(s.repoPath, s.unknownBucket));
+      const pr = await resolved(s.forge.findPr(s.github, s.unknownBucket));
       expect(pr).toMatchObject({ branch: s.unknownBucket, state: 'OPEN' });
       expect(['pending', 'fail']).toContain(pr!.checks);
       expect(pr!.failedChecks.length > 0).toBe(pr!.checks === 'fail');
@@ -130,12 +130,12 @@ export function describeForgeContract(name: string, make: () => ForgeSubject | P
 
     it('findPr names each check whose state it does not know', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'unknownBucket', 'unknownChecks');
-      const pr = await resolved(s.forge.findPr(s.repoPath, s.unknownBucket));
+      const pr = await resolved(s.forge.findPr(s.github, s.unknownBucket));
       expect([...(pr!.unknownChecks ?? [])].sort()).toEqual([...s.unknownChecks].sort());
       // A snapshot the caller may mutate, as `failedChecks`.
       const before = structuredClone(pr);
       pr!.unknownChecks?.push('mutated-by-caller');
-      expect(await s.forge.findPr(s.repoPath, s.unknownBucket)).toEqual(before);
+      expect(await s.forge.findPr(s.github, s.unknownBucket)).toEqual(before);
     });
 
   });

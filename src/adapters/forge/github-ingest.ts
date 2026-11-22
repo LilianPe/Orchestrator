@@ -1,59 +1,35 @@
 import type { FactoryEvent } from '../../core/types.js';
 import type { Store } from '../../store/types.js';
-import { execCmd, mustExec, type Exec } from '../exec.js';
-import { parseGitHubRemote } from './github-app.js';
 import { mapGithubWebhook, verifyGithubSignature, type GithubMapContext } from './github-webhook.js';
 import type { Forge } from './types.js';
 
-/** `owner/name` of a checkout's `origin` on GitHub, read once per checkout; undefined when it is not on GitHub. */
-export function githubRepoOf(exec: Exec = execCmd): (repoPath: string) => Promise<string | undefined> {
-  const known = new Map<string, Promise<string | undefined>>();
-  return (repoPath) => {
-    let repo = known.get(repoPath);
-    if (!repo) {
-      repo = mustExec(exec, 'git', ['remote', 'get-url', 'origin'], { cwd: repoPath }).then((remote) => {
-        const r = parseGitHubRemote(remote);
-        return r && `${r.owner}/${r.name}`;
-      });
-      // A failed read is tried again at the next webhook.
-      repo.catch(() => known.delete(repoPath));
-      known.set(repoPath, repo);
-    }
-    return repo;
-  };
-}
-
 /**
  * The daemon's mapping context: a ticket is the one whose branch (or PR, or journaled merge commit, for
- * a push on the default branch) the webhook names, in the project whose repository (`repoOf`,
- * `owner/name`) sent it; a project whose repository is unknown matches nothing.
+ * a push on the default branch) the webhook names, in the project whose repository (its `github`,
+ * `owner/name`, ORC-478) sent it.
  */
 export function githubMapContext(d: {
   store: Pick<Store, 'listTickets' | 'getTicket' | 'mergedPrOf'>;
   forge: Pick<Forge, 'findPr'>;
-  projects: readonly { id: string; repoPath: string }[];
-  repoOf: (repoPath: string) => Promise<string | undefined>;
+  projects: readonly { id: string; github: string }[];
   now: () => number;
   /** The factory's GitHub App id (ORC-353), when it has one. */
   factoryAppId?: string;
 }): GithubMapContext {
   const projectOf = (id: string) => d.projects.find((p) => p.id === id);
-  const sameRepo = async (projectId: string, repo: string) => {
-    const project = projectOf(projectId);
-    return !!project && (await d.repoOf(project.repoPath))?.toLowerCase() === repo.toLowerCase();
-  };
+  const sameRepo = (projectId: string, repo: string) => projectOf(projectId)?.github.toLowerCase() === repo.toLowerCase();
   return {
     ticketForBranch: async (repo, branch) => {
-      for (const t of await d.store.listTickets()) if (t.branch === branch && (await sameRepo(t.projectId, repo))) return t;
+      for (const t of await d.store.listTickets()) if (t.branch === branch && sameRepo(t.projectId, repo)) return t;
       return undefined;
     },
     ticketForPr: async (repo, number) => {
-      for (const t of await d.store.listTickets()) if (t.prNumber === number && (await sameRepo(t.projectId, repo))) return t;
+      for (const t of await d.store.listTickets()) if (t.prNumber === number && sameRepo(t.projectId, repo)) return t;
       return undefined;
     },
     mergedPrOf: async (repo, sha) => {
       for (const project of d.projects) {
-        if (!(await sameRepo(project.id, repo))) continue;
+        if (!sameRepo(project.id, repo)) continue;
         const found = await d.store.mergedPrOf(project.id, sha);
         const ticket = found && (await d.store.getTicket(project.id, found.ticketId));
         if (found && ticket) return { ticket, number: found.number };
@@ -62,7 +38,7 @@ export function githubMapContext(d: {
     },
     findPr: async (t) => {
       const project = projectOf(t.projectId);
-      return project && t.branch ? d.forge.findPr(project.repoPath, t.branch) : undefined;
+      return project && t.branch ? d.forge.findPr(project.github, t.branch) : undefined;
     },
     now: d.now,
     factoryAppId: d.factoryAppId,
