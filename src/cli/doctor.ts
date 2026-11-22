@@ -568,24 +568,51 @@ function pushReachesFactory(filters: TriggerFilters, factory: FactoryBranches): 
   return true;
 }
 
+/** The triggers judged by their branch filters. */
+const BRANCH_FILTERED_TRIGGERS = new Set(['push', 'workflow_run']);
+
 function triggerLabel(name: string, filters: TriggerFilters): string {
   if (filters.branches !== undefined) return `${name} (branches: ${filters.branches.join(', ')})`;
   if (filters.branchesIgnore !== undefined) return `${name} (branches-ignore: ${filters.branchesIgnore.join(', ')})`;
   if (filters.tags !== undefined) return `${name} (tags only)`;
   if (filters.tagsIgnore !== undefined) return `${name} (tags-ignore: ${filters.tagsIgnore.join(', ')})`;
-  if (name === 'push' || name === 'workflow_run') return `${name} (all branches)`;
+  if (BRANCH_FILTERED_TRIGGERS.has(name)) return `${name} (all branches)`;
   return name;
 }
+
+/**
+ * The triggers that never run a factory branch's code: GitHub runs them on the last commit of the default branch, from a
+ * workflow file on it, and their event names no factory commit nor pull request to check out, unlike `pull_request_target`
+ * or `workflow_run`. `workflow_dispatch` runs on the ref a human picks (the App may not dispatch, ORC-443); `workflow_call`
+ * gets only the secrets its caller hands it, and doctor judges the caller. Every other trigger, an unknown one included,
+ * counts as reaching the factory's branches (ORC-476).
+ */
+const DEFAULT_BRANCH_TRIGGERS = new Set([
+  'schedule',
+  'workflow_dispatch',
+  'workflow_call',
+  'issues',
+  'label',
+  'milestone',
+  'discussion',
+  'discussion_comment',
+  'gollum',
+  'page_build',
+  'watch',
+  'fork',
+  'public',
+  'branch_protection_rule',
+  'delete',
+]);
 
 /** Why a workflow with secrets can run on a factory branch; empty when no trigger does. */
 function exposureReasons(triggers: Map<string, TriggerFilters>, factory: FactoryBranches): string[] {
   const reasons: string[] = [];
   for (const [name, filters] of triggers) {
-    if (name === 'pull_request' || name === 'pull_request_target') {
-      reasons.push(`${name} can run the CI on the factory's branches`);
-    } else if ((name === 'push' || name === 'workflow_run') && pushReachesFactory(filters, factory)) {
-      reasons.push(`${triggerLabel(name, filters)} can run the CI on the factory's branches`);
-    }
+    if (DEFAULT_BRANCH_TRIGGERS.has(name)) continue;
+    const filtered = BRANCH_FILTERED_TRIGGERS.has(name);
+    if (filtered && !pushReachesFactory(filters, factory)) continue;
+    reasons.push(`${filtered ? triggerLabel(name, filters) : name} can run the CI on the factory's branches`);
   }
   return reasons;
 }
