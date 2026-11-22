@@ -275,9 +275,12 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     // Each mirror made or fetched in the background: a first clone can take minutes, and the server, its webhooks and /health do not
     // wait for it. A launch that comes meanwhile waits for it (`RepoMirrors.fetch`, one git at a time); a failure is logged and left to
     // the launches, which fetch it again.
+    // Once per repository: two projects of one repository share its mirror.
+    const readies = new Map<string, Promise<unknown>>();
     void Promise.all(projects.map(async (p) => {
+      const ready = readies.get(p.mirror) ?? readies.set(p.mirror, mirrors.ready(p.github)).get(p.mirror)!;
       try {
-        await mirrors.ready(p.github);
+        await ready;
       } catch (err) {
         log(`Warning: ${p.id}: the mirror of ${p.github} could not be fetched, its launches fetch it again: ${(err as Error).message}`);
       }

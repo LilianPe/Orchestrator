@@ -18,8 +18,8 @@ function assertSafe(id: string): void {
 
 /** A Git LFS filter the host's config installs, off for the checkout that makes an agent's repository: the files stay its pointers. */
 const NO_LFS = ['filter.lfs.smudge=', 'filter.lfs.process=', 'filter.lfs.required=false'].flatMap((c) => ['-c', c]);
-/** What the agent's repository fetches from its `origin`, as a clone's: every branch of the forge, as remote-tracking refs. */
-const ORIGIN_FETCH = '+refs/heads/*:refs/remotes/origin/*';
+/** What a daemon's mirror and an agent's repository fetch from their `origin`, as a clone's: every branch of the forge, as remote-tracking refs. */
+export const ORIGIN_REFSPEC = '+refs/heads/*:refs/remotes/origin/*';
 /** A commit's full id, SHA-1 or SHA-256. */
 export const SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
 const MAX_REFS_BYTES = 16 * 1024 * 1024;
@@ -261,7 +261,7 @@ export class GitWorkspaces implements WorkspaceManager {
       const origin = (await this.exec('git', ['-C', repo, 'config', '--get', 'remote.origin.url'])).stdout.trim();
       const config: [string, string][] = [
         ...Object.entries(FACTORY_GIT_IDENTITY),
-        ...(origin ? ([['remote.origin.url', withoutUserinfo(origin)], ['remote.origin.fetch', ORIGIN_FETCH]] as [string, string][]) : []),
+        ...(origin ? ([['remote.origin.url', withoutUserinfo(origin)], ['remote.origin.fetch', ORIGIN_REFSPEC]] as [string, string][]) : []),
       ];
       for (const [key, value] of config) await here(['-C', making, 'config', key, value]);
       // Resolved: it is read from `making`, and the mirror's root can be relative.

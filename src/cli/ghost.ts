@@ -324,23 +324,17 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
       return app ? app.fetchEnv(github) : {};
     },
   });
-  /** `read` of `key` once, for every ticket after; a failure is not kept, the next ticket reads again. */
-  const once = <T>(cache: Map<string, Promise<T>>, key: string, read: () => Promise<T>): Promise<T> => {
-    const known = cache.get(key);
+  // Each project's repository on GitHub, read from its clone's origin until ORC-471 part 3, and its mirror, made if the daemon has not
+  // made it yet: once per command, for every ticket after; a failure is not kept, the next ticket tries again.
+  const repos = new Map<string, Promise<{ github: string; mirror: string }>>();
+  const repoOf = (repoPath: string) => {
+    const known = repos.get(repoPath);
     if (known) return known;
-    const reading = read().catch((err: unknown) => {
-      cache.delete(key);
-      throw err;
-    });
-    cache.set(key, reading);
+    const reading = projectGithub({ repoPath }).then(async ({ github }) => ({ github, mirror: await mirrors.ready(github) }));
+    repos.set(repoPath, reading);
+    reading.catch(() => repos.delete(repoPath));
     return reading;
   };
-  // Each project's repository on GitHub, read from its clone's origin until ORC-471 part 3; its git is the daemon's mirror's.
-  const origins = new Map<string, Promise<string>>();
-  const githubOf = (repoPath: string) => once(origins, repoPath, () => projectGithub({ repoPath }).then((o) => o.github));
-  // The mirror, made if the daemon has not made it yet, fetched once per command.
-  const fetched = new Map<string, Promise<string>>();
-  const mirrorOf = (repoPath: string) => once(fetched, repoPath, () => githubOf(repoPath).then((github) => mirrors.ready(github)));
   try {
     let user = 'cli';
     try {
@@ -356,16 +350,16 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
         const said = await store.getMeta(SANDBOXES_META);
         return said === undefined ? undefined : said === '1';
       },
-      humanPr: async (repoPath, number) => (await (forge ??= githubForge(home))).pullRequest(await githubOf(repoPath), number),
+      humanPr: async (repoPath, number) => (await (forge ??= githubForge(home))).pullRequest((await repoOf(repoPath)).github, number),
       // The merge commit fetched from the forge into the mirror, with its history: the start is one of its ancestors.
       humanDiff: async (repoPath, { start, mergeSha }) => {
-        const mirror = await mirrorOf(repoPath);
+        const { mirror } = await repoOf(repoPath);
         await mirrors.fetch(mirror, { refspecs: [mergeSha] });
         // The format of the factory's side whatever the user's git config, which would tell the sides apart on a blind screen.
         return mustExec(execCmd, 'git', ['-C', mirror, 'diff', '--no-color', '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/', start, mergeSha]);
       },
       environment: async ({ repoPath, mergeSha, prCommits, dir, memory }) => {
-        const [github, mirror] = await Promise.all([githubOf(repoPath), mirrorOf(repoPath)]);
+        const { github, mirror } = await repoOf(repoPath);
         const repo = join(dir, 'repo');
         // From the forge, as the mirror names it: never a URL read from a clone.
         const start = await cloneAtStart({ remote: mirrors.url(github), mergeSha, prCommits, dir: repo, env: await mirrors.auth(mirror) });

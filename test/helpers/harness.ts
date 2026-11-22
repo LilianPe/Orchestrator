@@ -306,6 +306,8 @@ export function createHarness(
   const forge = new FakeForge();
   const runner = new FakeRunner(clock);
   const workspaces = new FakeWorkspaces();
+  /** What the daemon prepares worktrees with: the fake, or a test's real git (`git`). */
+  const workspacesInUse: WorkspaceManager = opts.git?.workspaces ?? workspaces;
   const checks = new FakeCheckRunner(opts.verify);
   const sandboxes = new FakeSandboxProvider();
   const secrets = new SecretReader({ ...openSecretSources(undefined, SECRET_SOURCE_KINDS, opts.secretEnv ?? {}), ...opts.secretSources });
@@ -336,12 +338,12 @@ export function createHarness(
       // The visual proof's captures, on the fake forge's `factory/artifacts` (ORC-407).
       captureHost: life.gate(forge),
       ...(opts.noPublisher ? {} : { publisher: life.gate(publisher) }),
-      workspaces: life.gate(opts.git?.workspaces ?? workspaces),
+      workspaces: life.gate(workspacesInUse),
       ...(opts.hostChecks === false ? {} : { verify: life.gate(checks.run) }),
       originUrl: async () => '/origin',
       // The clean check is proved by itself (clean-verify.test.ts, the isolation suite): a scenario decides its verdict through the same fake.
       // A human's push (ORC-159) is checked on the commit pushed, not on the worktree.
-      cleanVerify: opts.cleanVerify ?? (async (req: CleanVerifyRequest) => ({ ...(req.commands.length ? await life.gate(checks.run)(req.worktree, [...req.commands], undefined, {}) : { ok: true, failures: [] }), sha: req.head ?? (await (opts.git?.workspaces ?? workspaces).head(req.worktree)) ?? 'head', tree: 'clean-tree' })),
+      cleanVerify: opts.cleanVerify ?? (async (req: CleanVerifyRequest) => ({ ...(req.commands.length ? await life.gate(checks.run)(req.worktree, [...req.commands], undefined, {}) : { ok: true, failures: [] }), sha: req.head ?? (await workspacesInUse.head(req.worktree)) ?? 'head', tree: 'clean-tree' })),
       // The proxy's journal of a run (ORC-296) beside its refusals log: a test writes both.
       ...(sessionsDir ? { sandboxes: life.gate(sandboxes), sessionsDir, runsDir, runnerImage: 'factory/runner:test', egressJournal: (id: string) => join(runsDir!, id, 'egress.jsonl') } : {}),
       ...(opts.dryRunner ? { dryRunner: opts.dryRunner } : {}),

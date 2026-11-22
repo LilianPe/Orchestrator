@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { execCmd, type Exec } from '../exec.js';
-import { GitWorkspaces } from './git-workspaces.js';
-import { MIRROR_REFSPEC, RepoMirrors } from './repo-mirrors.js';
+import { GitWorkspaces, ORIGIN_REFSPEC } from './git-workspaces.js';
+import { RepoMirrors } from './repo-mirrors.js';
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 
@@ -35,7 +35,7 @@ describe('RepoMirrors (ORC-479)', () => {
     expect(mirror).toBe(join(f.root, 'acme', 'app'));
     expect(git(mirror, 'rev-parse', '--is-bare-repository')).toBe('true');
     expect(git(mirror, 'config', 'remote.origin.url')).toBe(f.url('Acme/App'));
-    expect(git(mirror, 'config', 'remote.origin.fetch')).toBe(MIRROR_REFSPEC);
+    expect(git(mirror, 'config', 'remote.origin.fetch')).toBe(ORIGIN_REFSPEC);
     expect(git(mirror, 'symbolic-ref', 'refs/remotes/origin/HEAD')).toBe('refs/remotes/origin/main');
     expect(git(mirror, 'for-each-ref', '--format=%(refname)', 'refs/heads')).toBe('');
     expect(git(mirror, 'rev-parse', 'refs/remotes/origin/main')).toBe(git(f.work, 'rev-parse', 'HEAD'));

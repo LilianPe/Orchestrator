@@ -23,18 +23,18 @@ import { isTable, parseToml, type TomlTable, type TomlValue } from '../checks/to
 export function makeRepoConfig(o: { exec?: Exec; fetchDeadlineMs?: number; log?: (message: string) => void; fetch?: FetchOrigin } = {}): (project: { mirror: string }, read?: RepoConfigRead) => Promise<RepoConfig> {
   const exec = o.exec ?? execCmd;
   const fetchMirror: FetchOrigin = o.fetch ?? ((repo, f) => fetchOrigin(exec, repo, f));
-  return async ({ mirror: repoPath }, { fetch = true } = {}) => {
+  return async ({ mirror }, { fetch = true } = {}) => {
     // A failure's message reaches the ticket (Linear): never the server's path nor the command, which go to the daemon's log.
     const git = async (args: string[], failure: () => string): Promise<string> => {
-      const r = await exec('git', ['-C', repoPath, ...args]);
+      const r = await exec('git', ['-C', mirror, ...args]);
       if (r.code === 0) return r.stdout;
-      o.log?.(`${REPO_CONFIG_PATH}: ${execFailure('git', ['-C', repoPath, ...args], r).message}`);
+      o.log?.(`${REPO_CONFIG_PATH}: ${execFailure('git', ['-C', mirror, ...args], r).message}`);
       throw new Error(failure());
     };
     // A worktree that already exists is prepared without a fetch: what was merged since applies all the same.
     // A forge that does not answer refuses the launch, which never waits for it forever.
-    if (fetch) await fetchMirror(repoPath, { deadlineMs: o.fetchDeadlineMs, log: (m) => o.log?.(`${REPO_CONFIG_PATH}: ${m}`) });
-    const { ref, name, set } = await originHeadOf(exec, repoPath);
+    if (fetch) await fetchMirror(mirror, { deadlineMs: o.fetchDeadlineMs, log: (m) => o.log?.(`${REPO_CONFIG_PATH}: ${m}`) });
+    const { ref, name, set } = await originHeadOf(exec, mirror);
     // The hint only when `origin/HEAD` is missing: `origin/main` is then a guess, perhaps not the default branch.
     const unreadable = `unreadable default branch (${name})${set ? '' : `: origin/HEAD is not set; the factory's mirror sets it at a fetch once the repository has a default branch, a clone by \`git remote set-head origin --auto\``}`;
     // `ls-tree` tells a file absent from a branch it could not read, which `git show` answers alike.
@@ -62,11 +62,11 @@ export function makeRepoConfig(o: { exec?: Exec; fetchDeadlineMs?: number; log?:
  */
 export function makeStartFingerprint(o: { exec?: Exec; log?: (message: string) => void } = {}): (project: { mirror: string }) => Promise<string | undefined> {
   const exec = o.exec ?? execCmd;
-  return async ({ mirror: repoPath }) => {
-    const { ref } = await originHeadOf(exec, repoPath);
-    const tree = await exec('git', ['-C', repoPath, '--literal-pathspecs', 'ls-tree', '-z', ref, '--', ...START_FILES]);
+  return async ({ mirror }) => {
+    const { ref } = await originHeadOf(exec, mirror);
+    const tree = await exec('git', ['-C', mirror, '--literal-pathspecs', 'ls-tree', '-z', ref, '--', ...START_FILES]);
     if (tree.code !== 0) {
-      o.log?.(`start fingerprint: ${execFailure('git', ['-C', repoPath, 'ls-tree', ref], tree).message}`);
+      o.log?.(`start fingerprint: ${execFailure('git', ['-C', mirror, 'ls-tree', ref], tree).message}`);
       return undefined;
     }
     const entries = zFields(tree.stdout).flatMap((entry) => {
@@ -78,7 +78,7 @@ export function makeStartFingerprint(o: { exec?: Exec; log?: (message: string) =
       entries.map(async ({ blob, path }) => {
         const part = START_PART[path];
         if (!part) return `${path}\0${blob}`;
-        const args = ['-C', repoPath, 'cat-file', 'blob', blob];
+        const args = ['-C', mirror, 'cat-file', 'blob', blob];
         const r = await exec('git', args);
         if (r.code !== 0) {
           o.log?.(`start fingerprint: ${execFailure('git', args, r).message}`);
@@ -98,13 +98,13 @@ export function makeStartFingerprint(o: { exec?: Exec; log?: (message: string) =
  */
 export function makeDryRunFiles(o: { exec?: Exec; log?: (message: string) => void } = {}): (project: { mirror: string }) => Promise<FingerprintFiles & { sha: string }> {
   const exec = o.exec ?? execCmd;
-  return async ({ mirror: repoPath }) => {
-    const { ref, name } = await originHeadOf(exec, repoPath);
+  return async ({ mirror }) => {
+    const { ref, name } = await originHeadOf(exec, mirror);
     // A failure's message reaches the ticket (Linear): never the server's path nor the command, which go to the daemon's log.
     const git = async (...args: string[]): Promise<string> => {
-      const r = await exec('git', ['-C', repoPath, ...args]);
+      const r = await exec('git', ['-C', mirror, ...args]);
       if (r.code === 0) return r.stdout;
-      o.log?.(`dry run fingerprint: ${execFailure('git', ['-C', repoPath, ...args], r).message}`);
+      o.log?.(`dry run fingerprint: ${execFailure('git', ['-C', mirror, ...args], r).message}`);
       throw new Error(`the dry run's fingerprint: unreadable default branch (${name})`);
     };
     const [sha, files] = await Promise.all([git('rev-parse', '--verify', `${ref}^{commit}`), fingerprintFiles((...args) => git('ls-tree', ...args), ref)]);

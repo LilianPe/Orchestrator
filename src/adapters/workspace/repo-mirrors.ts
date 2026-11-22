@@ -3,10 +3,9 @@ import { rm } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { execCmd, mustExec, type Exec } from '../exec.js';
 import type { CloneAuth, GitAuth } from '../forge/types.js';
-import { fetchOrigin, originHeadOf, remoteGitEnv, type FetchOrigin } from './git-workspaces.js';
+import { repoRef } from '../forge/github-app.js';
+import { fetchOrigin, ORIGIN_REFSPEC, originHeadOf, remoteGitEnv, type FetchOrigin } from './git-workspaces.js';
 
-/** What a mirror fetches: every branch of the forge, as the remote-tracking refs the daemon reads (`origin/HEAD`, `origin/<branch>`). No local branch. */
-export const MIRROR_REFSPEC = '+refs/heads/*:refs/remotes/origin/*';
 /**
  * The first fetch of a mirror brings the whole history: longer than a launch's (`FETCH_DEADLINE_MS`). A transfer that stalls is
  * still aborted at once (`STALLED`): only one that moves goes on this long.
@@ -31,6 +30,8 @@ export class RepoMirrors {
   private readonly repos = new Map<string, string>();
   /** The repositories whose mirror has no `origin/HEAD` yet, said once. */
   private readonly headless = new Set<string>();
+  /** The mirrors whose `origin/HEAD` is set: never read again, as it never changes once set. */
+  private readonly headed = new Set<string>();
   /** The last fetch of each mirror, which the next one waits for. */
   private readonly turns = new Map<string, Promise<unknown>>();
 
@@ -49,8 +50,8 @@ export class RepoMirrors {
 
   /** Where the mirror of `github` (`owner/name`) is, whether it exists yet or not. Anything else throws. */
   path(github: string): string {
-    const [owner, name, ...rest] = github.split('/');
-    if (!owner || !name || rest.length || !SEGMENT.test(owner) || !SEGMENT.test(name)) throw new Error(`not a GitHub repository, \`owner/name\` expected: ${github}`);
+    const { owner, name } = repoRef(github);
+    if (!SEGMENT.test(owner) || !SEGMENT.test(name)) throw new Error(`not a GitHub repository, \`owner/name\` expected: ${github}`);
     const path = resolve(this.o.root, owner.toLowerCase(), name.toLowerCase());
     this.repos.set(path, github);
     return path;
@@ -75,7 +76,7 @@ export class RepoMirrors {
         if (!o.refspecs?.length) return;
       }
       await fetchOrigin(this.exec, repo, { ...o, auth: this.auth });
-      if (github) await this.setHead(repo, o.deadlineMs);
+      if (github) await this.setHead(github, repo, o.deadlineMs);
     });
 
   /** The mirror of `github`, made if missing, fetched otherwise: at the start, so that its first read finds it. */
@@ -105,33 +106,41 @@ export class RepoMirrors {
     try {
       await mustExec(this.exec, 'git', ['init', '--quiet', '--bare', '--template=', making]);
       await git('config', 'remote.origin.url', this.url(github));
-      await git('config', 'remote.origin.fetch', MIRROR_REFSPEC);
+      await git('config', 'remote.origin.fetch', ORIGIN_REFSPEC);
       // Its whole history: the agents' repositories, the diffs and the fingerprints are read from it.
-      this.repos.set(resolve(making), github);
-      await fetchOrigin(this.exec, making, { deadlineMs: MIRROR_CLONE_DEADLINE_MS, auth: this.auth, ...(log ? { log } : {}) });
-      await this.setHead(making);
+      await fetchOrigin(this.exec, making, { deadlineMs: MIRROR_CLONE_DEADLINE_MS, auth: this.tokenOf(github), ...(log ? { log } : {}) });
+      await this.setHead(github, making);
       if (existsSync(path)) await rm(making, { recursive: true, force: true });
       else renameSync(making, path);
     } catch (err) {
       await rm(making, { recursive: true, force: true });
       throw err;
-    } finally {
-      this.repos.delete(resolve(making));
     }
+  }
+
+  /** The `CloneAuth` of `github`'s mirror at whatever path it is (`make`'s, aside). */
+  private tokenOf(github: string): CloneAuth {
+    return async () => (this.o.auth ? this.o.auth(github) : {});
   }
 
   /**
    * `origin/HEAD` from the forge's default branch while the mirror has none (a repository empty when it was made): never changed
    * once set, as a clone's. `branchReader` reads the forge's own `HEAD` where it matters (ORC-358).
    */
-  private async setHead(repo: string, deadlineMs = MIRROR_CLONE_DEADLINE_MS): Promise<void> {
-    if ((await originHeadOf(this.exec, repo)).set) return;
-    const env = await remoteGitEnv(this.auth, repo, deadlineMs);
-    const r = await this.exec('git', ['-C', repo, 'remote', 'set-head', 'origin', '--auto'], { env, timeoutMs: deadlineMs });
-    // An empty repository has no default branch yet: `origin/main` is assumed until it has one, said once.
-    const github = this.repos.get(resolve(repo)) ?? repo;
-    if (r.code === 0 || this.headless.has(github)) return;
+  private async setHead(github: string, repo: string, deadlineMs = MIRROR_CLONE_DEADLINE_MS): Promise<void> {
+    if (this.headed.has(github)) return;
+    if (!(await originHeadOf(this.exec, repo)).set) {
+      const env = await remoteGitEnv(this.tokenOf(github), repo, deadlineMs);
+      const r = await this.exec('git', ['-C', repo, 'remote', 'set-head', 'origin', '--auto'], { env, timeoutMs: deadlineMs });
+      if (r.code !== 0) return this.sayHeadless(github, r.stderr);
+    }
+    this.headed.add(github);
+  }
+
+  /** An empty repository has no default branch yet: `origin/main` is assumed until it has one, said once. */
+  private sayHeadless(github: string, stderr: string): void {
+    if (this.headless.has(github)) return;
     this.headless.add(github);
-    this.o.log?.(`mirror of ${github}: origin/HEAD not set, set at a next fetch once the repository has a default branch: ${r.stderr.trim().split('\n')[0] ?? ''}`);
+    this.o.log?.(`mirror of ${github}: origin/HEAD not set, set at a next fetch once the repository has a default branch: ${stderr.trim().split('\n')[0] ?? ''}`);
   }
 }
