@@ -568,12 +568,15 @@ function pushReachesFactory(filters: TriggerFilters, factory: FactoryBranches): 
   return true;
 }
 
+/** The triggers judged by their branch filters. */
+const BRANCH_FILTERED_TRIGGERS = new Set(['push', 'workflow_run']);
+
 function triggerLabel(name: string, filters: TriggerFilters): string {
   if (filters.branches !== undefined) return `${name} (branches: ${filters.branches.join(', ')})`;
   if (filters.branchesIgnore !== undefined) return `${name} (branches-ignore: ${filters.branchesIgnore.join(', ')})`;
   if (filters.tags !== undefined) return `${name} (tags only)`;
   if (filters.tagsIgnore !== undefined) return `${name} (tags-ignore: ${filters.tagsIgnore.join(', ')})`;
-  if (name === 'push' || name === 'workflow_run') return `${name} (all branches)`;
+  if (BRANCH_FILTERED_TRIGGERS.has(name)) return `${name} (all branches)`;
   return name;
 }
 
@@ -607,11 +610,9 @@ function exposureReasons(triggers: Map<string, TriggerFilters>, factory: Factory
   const reasons: string[] = [];
   for (const [name, filters] of triggers) {
     if (DEFAULT_BRANCH_TRIGGERS.has(name)) continue;
-    if (name === 'push' || name === 'workflow_run') {
-      if (pushReachesFactory(filters, factory)) reasons.push(`${triggerLabel(name, filters)} can run the CI on the factory's branches`);
-    } else {
-      reasons.push(`${name} can run the CI on the factory's branches`);
-    }
+    const filtered = BRANCH_FILTERED_TRIGGERS.has(name);
+    if (filtered && !pushReachesFactory(filters, factory)) continue;
+    reasons.push(`${filtered ? triggerLabel(name, filters) : name} can run the CI on the factory's branches`);
   }
   return reasons;
 }
