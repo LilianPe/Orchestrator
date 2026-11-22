@@ -286,7 +286,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       }
       // Said at each start, not only by `factory doctor`: on the default branch the runs start from, not in a working tree.
       for (const file of await ignoredWorkflowFilesOn(p.mirror)) log(`${p.id}: ${ignoredWorkflowWarning(file)}`);
-    }));
+    })).catch((err: Error) => log(`Warning: the mirrors' start: ${err.message}`));
     const workspaces = new GitWorkspaces({ root: paths.workspaces, log, auth: mirrors.auth, fetch: mirrors.fetch });
     const forge = appForge ?? new NoForge();
     if (githubApp) {

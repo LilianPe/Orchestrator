@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, renameSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, renameSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { execCmd, mustExec, type Exec } from '../exec.js';
 import type { CloneAuth, GitAuth } from '../forge/types.js';
 import { repoRef } from '../forge/github-app.js';
@@ -95,13 +95,14 @@ export class RepoMirrors {
 
   /**
    * A bare repository, its `origin` the forge and what it fetches every branch, fetched whole, `origin/HEAD` set from the forge.
-   * Made aside, at a path of its own that the next making removes first, then renamed: a daemon killed halfway leaves neither a
-   * mirror half fetched nor a copy that would stay on the disk. Another process that made it meanwhile (`factory ghost`) wins.
+   * Made aside, at a path of this process's own (`<path>.new-<pid>`), then renamed: a daemon killed halfway leaves no mirror half
+   * fetched, and the copy of a process no longer alive is removed by the next making. Another process (`factory ghost`) making it
+   * at the same time keeps its own copy; the first renamed wins, the other's copy goes.
    */
   private async make(github: string, path: string, log?: (message: string) => void): Promise<void> {
-    const making = `${path}.new`;
-    await rm(making, { recursive: true, force: true });
+    const making = `${path}.new-${process.pid}`;
     mkdirSync(dirname(path), { recursive: true });
+    await removeDeadCopies(path);
     const git = (...args: string[]) => mustExec(this.exec, 'git', ['-C', making, ...args]);
     try {
       await mustExec(this.exec, 'git', ['init', '--quiet', '--bare', '--template=', making]);
@@ -110,8 +111,11 @@ export class RepoMirrors {
       // Its whole history: the agents' repositories, the diffs and the fingerprints are read from it.
       await fetchOrigin(this.exec, making, { deadlineMs: MIRROR_CLONE_DEADLINE_MS, auth: this.tokenOf(github), ...(log ? { log } : {}) });
       await this.setHead(github, making);
-      if (existsSync(path)) await rm(making, { recursive: true, force: true });
-      else renameSync(making, path);
+      if (!renamed(making, path)) {
+        // Another process's mirror is the one: its `origin/HEAD` is read again, not taken from this copy.
+        this.headed.delete(github);
+        await rm(making, { recursive: true, force: true });
+      }
     } catch (err) {
       await rm(making, { recursive: true, force: true });
       throw err;
@@ -144,3 +148,33 @@ export class RepoMirrors {
     this.o.log?.(`mirror of ${github}: origin/HEAD not set, set at a next fetch once the repository has a default branch: ${stderr.trim().split('\n')[0] ?? ''}`);
   }
 }
+
+/** `from` renamed to `to`; false when `to` exists already (another process made it first). */
+function renamed(from: string, to: string): boolean {
+  if (existsSync(to)) return false;
+  try {
+    renameSync(from, to);
+    return true;
+  } catch (err) {
+    if (['ENOTEMPTY', 'EEXIST'].includes((err as NodeJS.ErrnoException).code ?? '')) return false;
+    throw err;
+  }
+}
+
+/** The copies `<path>.new-<pid>` of processes no longer alive, killed while they made the mirror, and this process's own left before. */
+async function removeDeadCopies(path: string): Promise<void> {
+  const prefix = `${basename(path)}.new-`;
+  for (const name of readdirSync(dirname(path))) {
+    const pid = name.startsWith(prefix) ? Number(name.slice(prefix.length)) : NaN;
+    if (Number.isInteger(pid) && pid > 0 && (pid === process.pid || !alive(pid))) await rm(join(dirname(path), name), { recursive: true, force: true });
+  }
+}
+
+const alive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+};

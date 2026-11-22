@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { execCmd, execFailure, type Exec } from '../adapters/exec.js';
 import { fetchOrigin, originHeadOf, type FetchOrigin } from '../adapters/workspace/git-workspaces.js';
@@ -33,7 +34,8 @@ export function makeRepoConfig(o: { exec?: Exec; fetchDeadlineMs?: number; log?:
     };
     // A worktree that already exists is prepared without a fetch: what was merged since applies all the same.
     // A forge that does not answer refuses the launch, which never waits for it forever.
-    if (fetch) await fetchMirror(mirror, { deadlineMs: o.fetchDeadlineMs, log: (m) => o.log?.(`${REPO_CONFIG_PATH}: ${m}`) });
+    // A daemon's mirror the start has not made yet (made in the background, or the forge down then) is made now, whatever `fetch` says.
+    if (fetch || (o.fetch && !existsSync(mirror))) await fetchMirror(mirror, { deadlineMs: o.fetchDeadlineMs, log: (m) => o.log?.(`${REPO_CONFIG_PATH}: ${m}`) });
     const { ref, name, set } = await originHeadOf(exec, mirror);
     // The hint only when `origin/HEAD` is missing: `origin/main` is then a guess, perhaps not the default branch.
     const unreadable = `unreadable default branch (${name})${set ? '' : `: origin/HEAD is not set; the factory's mirror sets it at a fetch once the repository has a default branch, a clone by \`git remote set-head origin --auto\``}`;

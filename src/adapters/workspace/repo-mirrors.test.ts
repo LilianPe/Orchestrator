@@ -1,8 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { makeRepoConfig } from '../../app/repo-variables.js';
+import { parseRepoConfig } from '../../config/repo-config.js';
 import { execCmd, type Exec } from '../exec.js';
 import { GitWorkspaces, ORIGIN_REFSPEC } from './git-workspaces.js';
 import { RepoMirrors } from './repo-mirrors.js';
@@ -111,9 +113,11 @@ describe('RepoMirrors (ORC-479)', () => {
   it('removes what a daemon killed while making a mirror left aside, and takes the mirror another process made meanwhile', async () => {
     const f = forge();
     const mirror = join(f.root, 'acme', 'app');
-    // Left by a kill halfway: a partial copy at the making's own path.
-    git(f.base, 'init', '--quiet', '--bare', `${mirror}.new`);
-    writeFileSync(join(`${mirror}.new`, 'partial'), '');
+    // Left by a process killed halfway, no longer alive: a partial copy. One of a process still alive (pid 1) is its own, kept.
+    mkdirSync(join(f.root, 'acme'), { recursive: true });
+    git(f.base, 'init', '--quiet', '--bare', `${mirror}.new-999999999`);
+    writeFileSync(join(`${mirror}.new-999999999`, 'partial'), '');
+    mkdirSync(`${mirror}.new-1`);
     // `factory ghost` makes it while this one fetches: the first one renamed wins, the other's copy goes.
     const exec: Exec = async (cmd, args, opts) => {
       const r = await execCmd(cmd, args, opts);
@@ -121,8 +125,16 @@ describe('RepoMirrors (ORC-479)', () => {
       return r;
     };
     await new RepoMirrors({ root: f.root, url: f.url, exec }).ready('acme/app');
-    expect(readdirSync(join(f.root, 'acme'))).toEqual(['app']);
+    expect(readdirSync(join(f.root, 'acme')).sort()).toEqual(['app', 'app.new-1']);
     expect(existsSync(join(mirror, 'partial'))).toBe(false);
+  });
+
+  it("makes a missing mirror for a read of the repository's config that does not fetch: an intake that comes before the start made it", async () => {
+    const f = forge();
+    const mirrors = new RepoMirrors({ root: f.root, url: f.url });
+    const config = await makeRepoConfig({ fetch: mirrors.fetch })({ mirror: mirrors.path('acme/app') }, { fetch: false });
+    expect(config).toEqual(parseRepoConfig(undefined, { defaultBranch: 'main' }));
+    expect(existsSync(mirrors.path('acme/app'))).toBe(true);
   });
 
   it("sets origin/HEAD once the forge has a default branch, a repository empty when it was made", async () => {
