@@ -352,7 +352,8 @@ function parseOn(value: unknown): Map<string, TriggerFilters> | string {
   for (const [rawName, rawFilters] of Object.entries(value)) {
     const name = rawName.trim();
     if (!name || name.includes('${{')) return 'dynamic or empty `on` trigger';
-    const filters = parseTriggerFilters(rawFilters);
+    // A list of crons, without branch filter: it runs on the default branch only, never a factory branch (ORC-473).
+    const filters = name === 'schedule' && Array.isArray(rawFilters) ? {} : parseTriggerFilters(rawFilters);
     if (!filters) return `ambiguous filters for the \`${name}\` trigger`;
     triggers.set(name, filters);
   }
