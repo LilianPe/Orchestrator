@@ -587,7 +587,8 @@ function triggerLabel(name: string, filters: TriggerFilters): string {
 /**
  * The triggers that never run a factory branch's code: GitHub runs them on the last commit of the default branch, from a
  * workflow file on it, and their event names no factory commit nor pull request to check out, unlike `pull_request_target`
- * or `workflow_run`. `workflow_dispatch` runs on the ref a human picks (the App may not dispatch, ORC-443); `workflow_call`
+ * or `workflow_run`. `workflow_dispatch` runs on the ref a human picks (the App may not dispatch, ORC-443, unless its
+ * installation went unread: `exposureReasons`, ORC-482); `workflow_call`
  * gets only the secrets its caller hands it, and doctor judges the caller. Every other trigger, an unknown one included,
  * counts as reaching the factory's branches (ORC-476).
  */
@@ -609,10 +610,22 @@ const DEFAULT_BRANCH_TRIGGERS = new Set([
   'delete',
 ]);
 
-/** Why a workflow with secrets can run on a factory branch; empty when no trigger does. */
-function exposureReasons(triggers: Map<string, TriggerFilters>, factory: FactoryBranches): string[] {
+/** Why `workflow_dispatch` reaches the factory's branches when the installation's permissions went unread (ORC-482). */
+const UNREAD_DISPATCH_REASON =
+  "workflow_dispatch can run the CI on the factory's branches: the App's installation permissions were not read, so nothing shows " +
+  'the App cannot dispatch it with Actions (write) (ORC-443); make the installation readable (see its verdict) and run doctor again';
+
+/**
+ * Why a workflow with secrets can run on a factory branch; empty when no trigger does. `installationRead`: whether doctor read
+ * the installation's permissions, which alone show the App cannot dispatch a workflow (ORC-482).
+ */
+function exposureReasons(triggers: Map<string, TriggerFilters>, factory: FactoryBranches, installationRead: boolean): string[] {
   const reasons: string[] = [];
   for (const [name, filters] of triggers) {
+    if (name === 'workflow_dispatch' && !installationRead) {
+      reasons.push(UNREAD_DISPATCH_REASON);
+      continue;
+    }
     if (DEFAULT_BRANCH_TRIGGERS.has(name)) continue;
     const filtered = BRANCH_FILTERED_TRIGGERS.has(name);
     if (filtered && !pushReachesFactory(filters, factory)) continue;
@@ -626,7 +639,12 @@ function protectedByEnvironment(jobId: string, workflow: ParsedWorkflow, environ
   return name !== undefined && environments.get(name)?.requiredReviewers === true;
 }
 
-function analyzeWorkflow(source: WorkflowSource, environments: Map<string, EnvironmentProtection>, factory: FactoryBranches): WorkflowReport {
+function analyzeWorkflow(
+  source: WorkflowSource,
+  environments: Map<string, EnvironmentProtection>,
+  factory: FactoryBranches,
+  installationRead: boolean,
+): WorkflowReport {
   const parsed = parseWorkflow(source.content);
   if (!parsed.ok) {
     return {
@@ -647,7 +665,7 @@ function analyzeWorkflow(source: WorkflowSource, environments: Map<string, Envir
     name,
     requiredReviewers: environments.get(name)?.requiredReviewers === true,
   }));
-  const exposure = exposureReasons(workflow.triggers, factory);
+  const exposure = exposureReasons(workflow.triggers, factory, installationRead);
   const { sensitiveJobs } = workflow;
   const unprotectedJobs = sensitiveJobs.filter((jobId) => !protectedByEnvironment(jobId, workflow, environments));
   const what = [...(workflow.hasSecrets ? ['secrets'] : []), ...(workflow.tokenWrites.size > 0 ? ['a writable GITHUB_TOKEN'] : [])].join(' and ');
@@ -718,7 +736,7 @@ const FORBIDDEN: Forbidden[] = [
   },
   { name: 'Workflows', settings: { workflows: 'Repository permissions → Workflows' }, risk: "the daemon could push a workflow that exposes the repository's secrets, after doctor read the workflows (ORC-441)" },
   {
-    // `workflow_dispatch` is not among the triggers `exposureReasons` counts as reaching a factory branch.
+    // `workflow_dispatch` is not among the triggers `exposureReasons` counts as reaching a factory branch, once the installation is read.
     name: 'Actions (write)',
     settings: { actions: 'Repository permissions → Actions' },
     risk: "the daemon could dispatch a workflow on a factory branch, running that branch's code with the workflow's secrets, and re-run, cancel or delete runs and their logs (ORC-443)",
@@ -851,7 +869,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   const { host } = options;
   const environmentMap = new Map(environments.map((environment) => [environment.name, environment] as const));
   const factory = factoryBranches(options.naming ?? DEFAULT_BRANCH_NAMING);
-  const reports = workflows.map((workflow) => analyzeWorkflow(workflow, environmentMap, factory));
+  const reports = workflows.map((workflow) => analyzeWorkflow(workflow, environmentMap, factory, installation.permissions !== undefined));
   const refused = reports.filter((report) => report.verdict === 'refused').length;
   const branch = protection.branch ? ` ${protection.branch}` : '';
   const refusals = [

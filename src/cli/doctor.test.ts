@@ -363,6 +363,25 @@ jobs:
     }
   });
 
+  // Its acceptance rests on doctor refusing an App with Actions (write): unread, nothing shows the App cannot dispatch it (ORC-482).
+  it('counts workflow_dispatch as reaching the factory when the installation could not be read, and says to make it readable (ORC-482)', async () => {
+    const readable = await doctor([workflow(secretsWorkflow('  workflow_dispatch:'))]);
+    expect(readable.code).toBe(0);
+    for (const failInstallation of ['network', 'unreadable'] as const) {
+      const unread = await doctor([workflow(secretsWorkflow('  workflow_dispatch:'))], [], { json: true, fake: { failInstallation } });
+      expect(unread.code, failInstallation).toBe(1);
+      const report = (JSON.parse(unread.text) as { workflows: WorkflowReport[] }).workflows[0];
+      expect(report, failInstallation).toMatchObject({ factoryBranches: true, verdict: 'refused' });
+      expect(report?.reasons.join(' '), failInstallation).toContain(
+        "workflow_dispatch can run the CI on the factory's branches: the App's installation permissions were not read, so nothing shows the App cannot dispatch it with Actions (write) (ORC-443); make the installation readable",
+      );
+    }
+    // A workflow under a protected environment, or without secrets, stays accepted.
+    const unread = { fake: { failInstallation: 'network' as const } };
+    expect((await doctor([workflow('on: workflow_dispatch\njobs:\n  test:\n    runs-on: ubuntu-latest\n    permissions: { contents: read }\n    steps: [{ run: npm test }]\n')], [], unread)).code).toBe(0);
+    expect((await doctor([workflow(secretsWorkflow('  workflow_dispatch:').replace('runs-on:', 'environment: ci-protected\n    runs-on:'))], [protectedEnvironment], unread)).code).toBe(0);
+  });
+
   it('still refuses a non-object filter on any other trigger (ORC-473)', async () => {
     const result = await doctor([workflow(secretsWorkflow('  push: [main]'))]);
     expect(result.code).toBe(1);
