@@ -1,0 +1,4 @@
+setup: npm ci
+commands:
+  lint: npm run lint
+  test: npm test
