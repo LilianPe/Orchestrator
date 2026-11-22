@@ -614,15 +614,17 @@ const DEFAULT_BRANCH_TRIGGERS = new Set([
 const UNREAD_DISPATCH_REASON =
   "workflow_dispatch can run the CI on the factory's branches: the App's installation permissions were not read, so nothing shows " +
   'the App cannot dispatch it with Actions (write) (ORC-443)';
+/** What to do about `UNREAD_DISPATCH_REASON`, a reason of its own. */
+const MAKE_INSTALLATION_READABLE = 'make the installation readable (see its verdict) and run doctor again';
 
 /**
- * Why a workflow with secrets can run on a factory branch; empty when no trigger does. `installationRead`: whether doctor read
+ * Why a workflow with secrets can run on a factory branch; empty when no trigger does. `permissionsRead`: whether doctor read
  * the installation's permissions, which alone show the App cannot dispatch a workflow (ORC-482).
  */
-function exposureReasons(triggers: Map<string, TriggerFilters>, factory: FactoryBranches, installationRead: boolean): string[] {
+function exposureReasons(triggers: Map<string, TriggerFilters>, factory: FactoryBranches, permissionsRead: boolean): string[] {
   const reasons: string[] = [];
   for (const [name, filters] of triggers) {
-    if (name === 'workflow_dispatch' && !installationRead) {
+    if (name === 'workflow_dispatch' && !permissionsRead) {
       reasons.push(UNREAD_DISPATCH_REASON);
       continue;
     }
@@ -643,7 +645,7 @@ function analyzeWorkflow(
   source: WorkflowSource,
   environments: Map<string, EnvironmentProtection>,
   factory: FactoryBranches,
-  installationRead: boolean,
+  permissionsRead: boolean,
 ): WorkflowReport {
   const parsed = parseWorkflow(source.content);
   if (!parsed.ok) {
@@ -665,7 +667,7 @@ function analyzeWorkflow(
     name,
     requiredReviewers: environments.get(name)?.requiredReviewers === true,
   }));
-  const exposure = exposureReasons(workflow.triggers, factory, installationRead);
+  const exposure = exposureReasons(workflow.triggers, factory, permissionsRead);
   const { sensitiveJobs } = workflow;
   const unprotectedJobs = sensitiveJobs.filter((jobId) => !protectedByEnvironment(jobId, workflow, environments));
   const what = [...(workflow.hasSecrets ? ['secrets'] : []), ...(workflow.tokenWrites.size > 0 ? ['a writable GITHUB_TOKEN'] : [])].join(' and ');
@@ -690,7 +692,7 @@ function analyzeWorkflow(
     for (const name of workflow.environmentNames) {
       if (!environments.has(name)) reasons.push(`environment \`${name}\` not found in the GitHub API`);
     }
-    if (exposure.includes(UNREAD_DISPATCH_REASON)) reasons.push('make the installation readable (see its verdict) and run doctor again');
+    if (!permissionsRead && workflow.triggers.has('workflow_dispatch')) reasons.push(MAKE_INSTALLATION_READABLE);
     if (unprotectedJobs.some((jobId) => workflow.tokenWrites.get(jobId) === REPOSITORY_DEFAULT)) {
       reasons.push("declare `permissions:` (read rights, such as `contents: read`) in the workflow or the job: the App cannot read the repository's default rights for the GITHUB_TOKEN");
     }
@@ -870,7 +872,8 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   const { host } = options;
   const environmentMap = new Map(environments.map((environment) => [environment.name, environment] as const));
   const factory = factoryBranches(options.naming ?? DEFAULT_BRANCH_NAMING);
-  const reports = workflows.map((workflow) => analyzeWorkflow(workflow, environmentMap, factory, installation.permissions !== undefined));
+  const permissionsRead = installation.permissions !== undefined;
+  const reports = workflows.map((workflow) => analyzeWorkflow(workflow, environmentMap, factory, permissionsRead));
   const refused = reports.filter((report) => report.verdict === 'refused').length;
   const branch = protection.branch ? ` ${protection.branch}` : '';
   const refusals = [
@@ -885,7 +888,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
     ...(refused > 0
       ? [
           `${refused} workflow(s) of ${reports.length} can expose secrets or a writable GITHUB_TOKEN to the factory's branches` +
-            (reports.some((report) => report.verdict === 'refused' && report.reasons.some((reason) => reason.includes(UNREAD_DISPATCH_REASON)))
+            (!permissionsRead && reports.some((report) => report.reasons.includes(MAKE_INSTALLATION_READABLE))
               ? ' (workflow_dispatch counted as reaching them: the installation could not be read)'
               : ''),
         ]
