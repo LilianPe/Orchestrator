@@ -37,8 +37,11 @@ factory          # prints the help, exit code 1: normal
 
 ```bash
 cd <pilot repository>
+export FACTORY_DATABASE_URL=postgres://user:password@host:5432/database   # item 10, required: a database of its own
 factory init --dev
 ```
+
+Export `FACTORY_DATABASE_URL` first, in this shell: `init` stores the maturity cards (below) in that database, and without it says `Cards not stored (FACTORY_DATABASE_URL is not set: the factory keeps its state in Postgres only. Set it to the Postgres URL.): run factory init again once the database is reachable.` `factory up` refuses to start without it (step 4).
 
 `--dev` is what a local run needs: with no `public_url` in `factory.yml`, it creates the smee.io channel that relays Linear's webhooks to your machine (item 6). Without it, `init` creates no channel, says `No public URL for Linear's webhooks: …` and skips the Linear application; with a `public_url`, `--dev` changes nothing. A channel already in `factory.yml` is kept either way.
 
@@ -122,17 +125,15 @@ claude:
 budgets:
   per_step_tokens: off
   per_ticket_tokens: 5000000
-port: 4100
-host: 127.0.0.1
 dev: true
 relay:
-  kind: smee                     # workstation only (factory init --dev)
-  url: https://smee.io/<channel> # the workstation relay's channel
+  kind: smee
+  url: https://smee.io/<channel>
 projects:
   - id: pilot
     repo_path: /home/<user>/code/pilot
     linear_team_key: PIL
-secret_sources:                  # the key --dev drew (ORC-470), never its value
+secret_sources:
   factory_home:
     kind: file
     dir: /home/<user>/.factory
@@ -167,7 +168,7 @@ export FACTORY_RUNNER_IMAGE=localhost/factory-runner
 # outside a desktop login session (a dev container, ssh), rootless Podman needs the systemd user session's:
 export XDG_RUNTIME_DIR=/run/user/$(id -u)
 export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus
-# optional: export FACTORY_DATABASE_URL=postgres://…
+export FACTORY_DATABASE_URL=postgres://user:password@host:5432/database   # required: the database init used (item 10)
 ```
 
 ## 3. Check before running
@@ -216,9 +217,10 @@ Then the verdicts. Expected:
 ```text
 Host: accepted — rootless podman on cgroup v2, limits through cpu, memory, pids
 Default branch main: accepted — …
+GitHub App installation: accepted — installed without the Administration, Workflows or Actions (write) permission
 ```
 
-then each GitHub Actions workflow with its verdict (or `No GitHub Actions workflow found.`), and `Result: accepted — …`, exit code `0`. What each refusal means:
+then each GitHub Actions workflow with its verdict (or `No GitHub Actions workflow found.`), and `Result: accepted — …`, exit code `0`. When GitHub cannot be read, the three verdicts are still told, and the output ends with the error, `Cannot read the workflows: …` (or `Cannot read the environments: …`), without a `Result:` line, exit code `1`. What each refusal means:
 
 | Output | Cause | Fix |
 |---|---|---|
@@ -235,6 +237,7 @@ then each GitHub Actions workflow with its verdict (or `No GitHub Actions workfl
 | `Host: refused — no cgroup v2: …` | the host is on cgroups v1 or the hybrid layout | boot on the unified cgroup v2 hierarchy |
 | `Host: refused — rootless podman on the cgroupfs cgroup manager ignores the limits: …` or `podman cannot limit through the … controller(s), not delegated to its user …` | no systemd user session, controllers not delegated | `sudo loginctl enable-linger <user>`, then `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` as in step 2 ([`tests.md`](tests.md)) |
 | `Default branch: refused — Cannot read the protection of the default branch: GitHub API GET /repos/<owner>/<repo>/installation: 404 Integration not found` | the App is not installed on this repository (or a wrong App ID) | item 4: install it |
+| `Default branch: refused — Cannot read the protection of the default branch: GitHub API GET /repos/<owner>/<repo>/installation: 401 A JSON web token could not be decoded`, the same 401 in the warning under `GitHub App installation` and in `Cannot read the workflows: …` | GitHub refuses the App's token: `GH_APP_ID` and `GH_APP_KEY` are not of the same App, a wrong `.pem`, or the machine's clock is off | item 4: the App ID and a private key generated on that App's page; keep the clock synchronized (NTP) |
 | `Default branch main: refused — …` | no ruleset requiring a pull request, or the App in its bypass list | item 3 |
 | `verdict: refused` under a workflow | a CI job sees a secret or a writable `GITHUB_TOKEN` on the factory's branches (`feat/*`, `fix/*`) | protect that job with an environment with required reviewers, or declare `permissions:` read only ([`github.md`](github.md#rule)) |
 
@@ -263,6 +266,7 @@ The GitHub webhooks line is expected locally: a merge or a CI verdict then reach
 
 | Output | Cause |
 |---|---|
+| `FACTORY_DATABASE_URL is not set: the factory keeps its state in Postgres only. Set it to the Postgres URL.` and exit `1` | item 10: export it in the daemon's shell, with the database `init` used (step 2) |
 | `FACTORY_CONTAINER_CLI is not set: the agents run only in a rootless container, there is no run on this machine. …` and exit `1` | items 8 and 9: install rootless Podman, build the runner image, and export `FACTORY_CONTAINER_CLI=podman` and `FACTORY_RUNNER_IMAGE`; there is no way to run on the host |
 | `Warning: no GitHub App (github.app_id and github.private_key in factory.yml, or GH_APP_ID and GH_APP_KEY): the factory reads no PR, publishes nothing and merges nothing.` | item 4: the App is not read, no PR will open |
 | `Warning: no Claude token (claude.active in factory.yml, or CLAUDE_CODE_OAUTH_TOKEN): sandboxed runs will not be able to authenticate.` | item 7 not in the daemon's environment |

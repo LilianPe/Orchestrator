@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { githubAppSteps } from './cli/init.js';
 
 // The first-run guide (ORC-429) must not drift from the CLI: every `factory` command it quotes, with its flags, is one
 // src/cli/factory.ts dispatches and src/cli/usage.ts lists in its usage.
@@ -94,5 +95,12 @@ describe('docs/first-run.md', () => {
     expect(problem('factory')).toBeUndefined();
     expect(quotedCommands('```sh\n$ factory dry-run\n```')).toEqual(['factory dry-run']);
     expect(quotedCommands('```bash\nfactory up --nope   # comment: factory nothing\n```\nand `factory stop <ID>`')).toEqual(['factory up --nope', 'factory stop <ID>']);
+  });
+
+  it("quotes the GitHub App's steps as factory init prints them, without a public URL (ORC-474)", () => {
+    // The text block of step 2 that opens on the App's steps, up to the `Wrote … factory.yml` that follows them.
+    const block = /^```text\n(GitHub App of [\s\S]*?)\n\nWrote /m.exec(guide)?.[1];
+    expect(block).toBeDefined();
+    expect(block).toBe(githubAppSteps(undefined, '/home/<user>/.factory', false).trim());
   });
 });
