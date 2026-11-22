@@ -613,7 +613,7 @@ const DEFAULT_BRANCH_TRIGGERS = new Set([
 /** Why `workflow_dispatch` reaches the factory's branches when the installation's permissions went unread (ORC-482). */
 const UNREAD_DISPATCH_REASON =
   "workflow_dispatch can run the CI on the factory's branches: the App's installation permissions were not read, so nothing shows " +
-  'the App cannot dispatch it with Actions (write) (ORC-443); make the installation readable (see its verdict) and run doctor again';
+  'the App cannot dispatch it with Actions (write) (ORC-443)';
 
 /**
  * Why a workflow with secrets can run on a factory branch; empty when no trigger does. `installationRead`: whether doctor read
@@ -690,6 +690,7 @@ function analyzeWorkflow(
     for (const name of workflow.environmentNames) {
       if (!environments.has(name)) reasons.push(`environment \`${name}\` not found in the GitHub API`);
     }
+    if (exposure.includes(UNREAD_DISPATCH_REASON)) reasons.push('make the installation readable (see its verdict) and run doctor again');
     if (unprotectedJobs.some((jobId) => workflow.tokenWrites.get(jobId) === REPOSITORY_DEFAULT)) {
       reasons.push("declare `permissions:` (read rights, such as `contents: read`) in the workflow or the job: the App cannot read the repository's default rights for the GITHUB_TOKEN");
     }
@@ -881,7 +882,14 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
     ...(installation.verdict === 'refused'
       ? [installation.permissions ? installedWith(installation.permissions) : "the GitHub App installation's permissions cannot be read"]
       : []),
-    ...(refused > 0 ? [`${refused} workflow(s) of ${reports.length} can expose secrets or a writable GITHUB_TOKEN to the factory's branches`] : []),
+    ...(refused > 0
+      ? [
+          `${refused} workflow(s) of ${reports.length} can expose secrets or a writable GITHUB_TOKEN to the factory's branches` +
+            (reports.some((report) => report.verdict === 'refused' && report.reasons.some((reason) => reason.includes(UNREAD_DISPATCH_REASON)))
+              ? ' (workflow_dispatch counted as reaching them: the installation could not be read)'
+              : ''),
+        ]
+      : []),
   ];
   const accepted = refusals.length === 0;
 

@@ -373,9 +373,12 @@ jobs:
       const report = (JSON.parse(unread.text) as { workflows: WorkflowReport[] }).workflows[0];
       expect(report, failInstallation).toMatchObject({ factoryBranches: true, verdict: 'refused' });
       expect(report?.reasons.join(' '), failInstallation).toContain(
-        "workflow_dispatch can run the CI on the factory's branches: the App's installation permissions were not read, so nothing shows the App cannot dispatch it with Actions (write) (ORC-443); make the installation readable",
+        "workflow_dispatch can run the CI on the factory's branches: the App's installation permissions were not read, so nothing shows the App cannot dispatch it with Actions (write) (ORC-443)",
       );
+      expect(report?.reasons, failInstallation).toContain('make the installation readable (see its verdict) and run doctor again');
     }
+    const text = (await doctor([workflow(secretsWorkflow('  workflow_dispatch:'))], [], { fake: { failInstallation: 'network' } })).text;
+    expect(text).toContain('(workflow_dispatch counted as reaching them: the installation could not be read)');
     // A workflow under a protected environment, or without secrets, stays accepted.
     const unread = { fake: { failInstallation: 'network' as const } };
     expect((await doctor([workflow('on: workflow_dispatch\njobs:\n  test:\n    runs-on: ubuntu-latest\n    permissions: { contents: read }\n    steps: [{ run: npm test }]\n')], [], unread)).code).toBe(0);
