@@ -363,6 +363,27 @@ jobs:
     }
   });
 
+  // Its acceptance rests on doctor refusing an App with Actions (write): unread, nothing shows the App cannot dispatch it (ORC-482).
+  it('counts workflow_dispatch as reaching the factory when the installation could not be read, and says to make it readable (ORC-482)', async () => {
+    const dispatched = workflow(secretsWorkflow('  workflow_dispatch:'));
+    expect((await doctor([dispatched])).code).toBe(0);
+    for (const failInstallation of ['network', 'unreadable'] as const) {
+      const result = await doctor([dispatched], [], { json: true, fake: { failInstallation } });
+      expect(result.code, failInstallation).toBe(1);
+      const report = (JSON.parse(result.text) as { workflows: WorkflowReport[] }).workflows[0];
+      expect(report, failInstallation).toMatchObject({ factoryBranches: true, verdict: 'refused' });
+      expect(report?.reasons.join(' '), failInstallation).toContain(
+        "workflow_dispatch can run the CI on the factory's branches: the App's installation permissions were not read, so nothing shows the App cannot dispatch it with Actions (write) (ORC-443)",
+      );
+      expect(report?.reasons, failInstallation).toContain('make the installation readable (see its verdict) and run doctor again');
+    }
+    const unread = { fake: { failInstallation: 'network' as const } };
+    expect((await doctor([dispatched], [], unread)).text).toContain('(workflow_dispatch counted as reaching them: the installation could not be read)');
+    // A workflow under a protected environment, or without secrets, stays accepted.
+    expect((await doctor([workflow('on: workflow_dispatch\njobs:\n  test:\n    runs-on: ubuntu-latest\n    permissions: { contents: read }\n    steps: [{ run: npm test }]\n')], [], unread)).code).toBe(0);
+    expect((await doctor([workflow(secretsWorkflow('  workflow_dispatch:').replace('runs-on:', 'environment: ci-protected\n    runs-on:'))], [protectedEnvironment], unread)).code).toBe(0);
+  });
+
   it('still refuses a non-object filter on any other trigger (ORC-473)', async () => {
     const result = await doctor([workflow(secretsWorkflow('  push: [main]'))]);
     expect(result.code).toBe(1);
