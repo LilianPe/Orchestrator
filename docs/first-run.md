@@ -104,7 +104,7 @@ Wrote /home/<user>/.factory/factory.yml: its secrets are references; export them
   export CLAUDE_CODE_OAUTH_TOKEN=<token of claude setup-token>
 ```
 
-It ends with `Configuration written.` and its next steps. It wrote `FACTORY_HOME/factory.yml` (its secrets as references, then the project, the relay, `dev: true`, and the reference of `secrets_key`), `FACTORY_HOME/secrets.key` and `FACTORY_HOME/secrets.json` (both mode `0600`, `secrets.json` encrypted). There is no `config.yaml` any more (ORC-199): the daemon reads `factory.yml` alone, refuses to start without it, and names a `config.yaml` left from an older install, never read, to delete.
+It ends with `Configuration written.` and its next steps. It wrote `FACTORY_HOME/factory.yml` (its secrets as references, then `dev: true`, the relay, the project, and the reference of `secrets_key`), `FACTORY_HOME/secrets.key` and `FACTORY_HOME/secrets.json` (both mode `0600`, `secrets.json` encrypted). There is no `config.yaml` any more (ORC-199): the daemon reads `factory.yml` alone, refuses to start without it, and names a `config.yaml` left from an older install, never read, to delete.
 
 Run again, `factory init` erases nothing (ORC-83): an empty answer keeps the team key and the stored Linear values (and « Connect Linear »'s tokens, as long as the client ID is the same), the project's roles stay, and of an existing `factory.yml` it writes only the projects and the webhook relay, the rest of the file and its comments kept (`… factory.yml: its projects and webhook relay written, the rest kept as it is.`). A new client ID asks for its secrets: nothing of the old application is kept.
 

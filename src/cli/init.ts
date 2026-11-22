@@ -197,7 +197,7 @@ const PERMISSION_LABELS: Record<keyof typeof GITHUB_APP_PERMISSIONS, string> = {
 
 /**
  * How to create and install the factory's GitHub App (ORC-124), by hand on GitHub's form: a server has no browser for the
- * manifest flow's callback. Its webhook only with a public URL; without one, the reconciliation reads the PRs every 5 minutes (ORC-181). `addToYml`: the file is there without the App, where to write it.
+ * manifest flow's callback. Its webhook only with a public URL; without one, the reconciliation reads the PRs every 5 minutes (ORC-185). `addToYml`: the file is there without the App, where to write it.
  */
 export function githubAppSteps(publicUrl: string | undefined, home: string, addToYml: boolean): string {
   const permissions = Object.entries(GITHUB_APP_PERMISSIONS)
