@@ -51,7 +51,7 @@ export class FakeWorkspaces implements WorkspaceManager {
   /** Each ticket worktree's diff against the trunk, by path, as a test sets it (ORC-182); none by default. */
   ticketDiffs = new Map<string, string>();
 
-  async ticketDiff(_repoPath: string, path: string): Promise<string | undefined> {
+  async ticketDiff(_mirror: string, path: string): Promise<string | undefined> {
     return this.ticketDiffs.get(path);
   }
 
@@ -61,7 +61,7 @@ export class FakeWorkspaces implements WorkspaceManager {
    */
   steps = new Map<string, { changed: StepDiff['changed']; base?: Record<string, string>; head?: Record<string, string>; uncommitted?: string[] }>();
 
-  async stepDiff(_repoPath: string, path: string, from: string): Promise<StepDiff | undefined> {
+  async stepDiff(_mirror: string, path: string, from: string): Promise<StepDiff | undefined> {
     const d = this.steps.get(`${path}@${from}`) ?? this.steps.get(path);
     if (!d) return undefined;
     const base = d.base ?? {};
@@ -87,7 +87,7 @@ export class FakeWorkspaces implements WorkspaceManager {
   /** How each branch was read: from the forge (`fetch`) or not (ORC-358). */
   branchReads: { fetch: boolean }[] = [];
 
-  async branchReader(_repoPath: string, path: string, o: { fetch: boolean }): Promise<BranchReader | undefined> {
+  async branchReader(_mirror: string, path: string, o: { fetch: boolean }): Promise<BranchReader | undefined> {
     this.branchReads.push({ fetch: o.fetch });
     if (this.gone.has(path)) return undefined;
     const b = this.branches.get(path) ?? { changed: [] };
@@ -106,7 +106,7 @@ export class FakeWorkspaces implements WorkspaceManager {
   /** Each worktree's files at its base commit, by path then file, as a test sets it (ORC-396); none by default. */
   bases = new Map<string, Record<string, string>>();
 
-  async baseReader(_repoPath: string, path: string): Promise<BranchReader['showAtFork'] | undefined> {
+  async baseReader(_mirror: string, path: string): Promise<BranchReader['showAtFork'] | undefined> {
     if (this.gone.has(path)) return undefined;
     return async (file) => this.bases.get(path)?.[file];
   }
@@ -124,7 +124,7 @@ export class FakeWorkspaces implements WorkspaceManager {
     if (this.trunks.delete(trunk)) this.released.push(trunk);
   }
 
-  async remoteBranchExists(_repoPath: string, matches: (name: string) => boolean): Promise<boolean> {
+  async remoteBranchExists(_mirror: string, matches: (name: string) => boolean): Promise<boolean> {
     return [...this.remoteBranches].some(matches);
   }
 }

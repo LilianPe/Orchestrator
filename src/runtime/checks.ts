@@ -70,7 +70,7 @@ export abstract class DaemonChecks extends DaemonBase {
       if (!command) throw new Error('`.factory/config.yml` has no `commands.test` to run the tests with');
       const base = await this.d.store.getMeta(redBaseKey(project.id, run.ticketId));
       if (!base) throw new Error('the starting commit of the step is not recorded');
-      const diff = await this.d.workspaces.stepDiff(project.repoPath, run.cwd, base);
+      const diff = await this.d.workspaces.stepDiff(project.mirror, run.cwd, base);
       if (!diff) throw new Error(`no worktree at ${run.cwd}`);
       let uncommitted: string[];
       let runTests: RedDeps['run'];
@@ -430,7 +430,7 @@ export abstract class DaemonChecks extends DaemonBase {
    */
   private async checkPathsOnHost(project: ProjectRuntime, t: TicketState, run: RunRecord): Promise<{ failures: VerifyFailure[]; diffClass: ClassifiedDiff }> {
     const untrusted = await this.untrustedMark(project, t);
-    const reader = await this.d.workspaces.branchReader(project.repoPath, run.cwd, { fetch: !!untrusted });
+    const reader = await this.d.workspaces.branchReader(project.mirror, run.cwd, { fetch: !!untrusted });
     if (!reader) throw new Error(`the forbidden paths check could not run: no worktree with a commit at ${run.cwd}`);
     const config = parseRepoConfig(await reader.baseConfig());
     // The class of the diff (ORC-198), read as the clone's.
@@ -464,7 +464,7 @@ export abstract class DaemonChecks extends DaemonBase {
   private async checkFrozen(project: ProjectRuntime, cwd: string, frozen: FrozenTests): Promise<VerifyFailure[]> {
     const fail = (output: string) => [{ command: FREEZE_CHECK, exitCode: 1, output }];
     try {
-      const diff = await this.d.workspaces.stepDiff(project.repoPath, cwd, frozen.sha);
+      const diff = await this.d.workspaces.stepDiff(project.mirror, cwd, frozen.sha);
       if (!diff) return fail(`The freeze check could not run: no worktree at ${cwd}.`);
       const r = await checkFrozen(frozen, diff);
       return r.ok ? [] : fail(r.summary);
@@ -485,7 +485,7 @@ export abstract class DaemonChecks extends DaemonBase {
     const t = await this.d.store.getTicket(event.projectId, event.ticketId);
     if (!t?.worktreePath || (!t.frozenTests && !needsRefreeze(t.diffClass?.class, factoryDefault.approvers))) return event;
     const head = await this.d.workspaces.head(t.worktreePath);
-    const diff = head ? await this.d.workspaces.stepDiff(this.project(event.projectId).repoPath, t.worktreePath, head) : undefined;
+    const diff = head ? await this.d.workspaces.stepDiff(this.project(event.projectId).mirror, t.worktreePath, head) : undefined;
     if (!diff) return event;
     return { ...event, payload: { ...event.payload, frozen: await freezeTests(Object.keys(t.frozenTests?.files ?? {}), diff) } };
   }

@@ -5,7 +5,7 @@ import type { CloneAuth } from '../adapters/forge/types.js';
 import { fetchOrigin, originHeadOf, remoteGitEnv } from '../adapters/workspace/git-workspaces.js';
 import { within } from '../core/clean-verify.js';
 import { unfenced } from '../core/prompt.js';
-import { PRODUCT_NAME } from '../product.js';
+import { FACTORY_GIT_IDENTITY } from '../product.js';
 
 export interface KbHit {
   file: string;
@@ -30,7 +30,7 @@ export const PREVIEW_DIR = 'notes/preview';
 /** What a push killed at its deadline gets to let go of its output. */
 const PUSH_GRACE_MS = 5_000;
 /** Who commits the factory's notes: the factory, never a human's identity nor the clone's. */
-const FACTORY_IDENTITY = [`user.name=${PRODUCT_NAME} factory`, 'user.email=factory@factory.invalid'];
+const FACTORY_IDENTITY = Object.entries(FACTORY_GIT_IDENTITY).map(([key, value]) => `${key}=${value}`);
 
 /** Characters of INDEX.md a session gets in its system prompt (ORC-38). Proposal: settled with the prompt budget (ORC-254). */
 export const KB_INDEX_MAX = 8000;

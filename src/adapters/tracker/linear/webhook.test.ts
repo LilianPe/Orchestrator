@@ -1075,7 +1075,7 @@ describe('ingest', () => {
     await new Promise((r) => setTimeout(r, 10));
     const workflow = defaultWorkflow();
     const reconciled = reconcileOnce({
-      tracker, store, projects: [{ id: 'p', repoPath: '/r', github: 'acme/r', teamKey: 'REL', workflow }], serial: labelsTurn,
+      tracker, store, projects: [{ id: 'p', mirror: '/r', github: 'acme/r', teamKey: 'REL', workflow }], serial: labelsTurn,
       submit: (e) => store.appendInbox(e), clock: new FakeClock(2000), log: () => {},
     });
     await new Promise((r) => setTimeout(r, 10));
@@ -1113,7 +1113,7 @@ describe('ingest', () => {
     const webhook = ingest(raw, { 'linear-signature': sig });
     await new Promise((r) => setTimeout(r, 10));
     const workflow = defaultWorkflow();
-    const projects = ['web', 'api'].map((id) => ({ id, repoPath: `/${id}`, github: `acme/${id}`, teamKey: 'REL', workflow }));
+    const projects = ['web', 'api'].map((id) => ({ id, mirror: `/${id}`, github: `acme/${id}`, teamKey: 'REL', workflow }));
     const reconciled = reconcileOnce({ tracker, store, projects, serial: labelsTurn, submit: write, clock: new FakeClock(2000), log: () => {} });
     await new Promise((r) => setTimeout(r, 10));
     release();
@@ -1145,7 +1145,7 @@ describe('ingest', () => {
     const tracker = new FakeTracker();
     tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', stateName: 'AI Review', labels: ['bug', 'agent:reprendre'], updatedAt: 20 });
     const workflow = defaultWorkflow();
-    await reconcileOnce({ tracker, store, projects: [{ id: 'p', repoPath: '/r', github: 'acme/r', teamKey: 'REL', workflow }], submit: (e) => store.appendInbox(e), clock: new FakeClock(2000), log: () => {} });
+    await reconcileOnce({ tracker, store, projects: [{ id: 'p', mirror: '/r', github: 'acme/r', teamKey: 'REL', workflow }], submit: (e) => store.appendInbox(e), clock: new FakeClock(2000), log: () => {} });
     expect((await ids()).filter((id) => id.startsWith('reconcile:label'))).toEqual([]);
   });
 
@@ -1177,7 +1177,7 @@ describe('ingest', () => {
     const tracker = new FakeTracker();
     tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', stateName: 'AI Review', labels: ['bug'], updatedAt: 20 });
     const workflow = defaultWorkflow();
-    await reconcileOnce({ tracker, store: passStore, projects: [{ id: 'p', repoPath: '/r', github: 'acme/r', teamKey: 'REL', workflow }], serial: labelsTurn, submit: (e) => store.appendInbox(e), clock: new FakeClock(2000), log: () => {} });
+    await reconcileOnce({ tracker, store: passStore, projects: [{ id: 'p', mirror: '/r', github: 'acme/r', teamKey: 'REL', workflow }], serial: labelsTurn, submit: (e) => store.appendInbox(e), clock: new FakeClock(2000), log: () => {} });
     await webhook;
     expect(await knownLabels(store, 'p', 'REL-1')).toEqual({ labels: ['agent:reprendre', 'bug'], at: 30 });
   });

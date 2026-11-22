@@ -1067,7 +1067,8 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   });
   let config: RepoConfig;
   try {
-    config = await makeRepoConfig(options.exec ? { exec: options.exec } : {})({ repoPath: options.repoPath }, { fetch: false });
+    // The checkout it runs in stands for the daemon's mirror (ORC-479): its `origin/HEAD`, never fetched.
+    config = await makeRepoConfig(options.exec ? { exec: options.exec } : {})({ mirror: options.repoPath }, { fetch: false });
   } catch (error) {
     return doctorFailure(report, `Cannot read the repository's branch naming: ${errorMessage(error)}`);
   }

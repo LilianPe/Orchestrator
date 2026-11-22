@@ -8,6 +8,7 @@ import { readConventions } from '../../core/prompt.js';
 import { parseRepoConfig } from '../../config/repo-config.js';
 import { declaredReads } from '../../network/reads.js';
 import { execCmd } from '../exec.js';
+import { FACTORY_GIT_IDENTITY } from '../../product.js';
 import { GitWorkspaces, withoutUserinfo } from './git-workspaces.js';
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
@@ -39,7 +40,7 @@ function tokenRemote(base: string, repo: string, url = TOKEN_URL) {
 const agentConfig = (path: string) => readFileSync(join(path, '.git', 'config'), 'utf8');
 
 const req = (repo: string, patch: object = {}) => ({
-  projectId: 'p', repoPath: repo, ticketId: 'REL-1', title: 'Export CSV', kind: 'worktree' as const, runId: 'abcdef123456', ...patch,
+  projectId: 'p', mirror: repo, ticketId: 'REL-1', title: 'Export CSV', kind: 'worktree' as const, runId: 'abcdef123456', ...patch,
 });
 
 describe('GitWorkspaces', () => {
@@ -118,20 +119,18 @@ describe('GitWorkspaces', () => {
       expect(git(w.path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('fix/rel-1-export-csv');
     });
 
-    for (const where of ['forge', 'repository'] as const) {
-      it(`keeps the legacy factory/ branch a ticket already has on the ${where}, never a second branch beside it`, async () => {
-        const { repo, root } = fixtureRepo();
-        git(repo, 'checkout', '-q', '-b', 'factory/rel-1-export-csv');
-        git(repo, 'commit', '--allow-empty', '-m', 'the PR already open');
-        if (where === 'forge') git(repo, 'push', '-q', 'origin', 'factory/rel-1-export-csv');
-        git(repo, 'checkout', '-q', 'main');
-        if (where === 'forge') git(repo, 'branch', '-q', '-D', 'factory/rel-1-export-csv');
-        const ws = new GitWorkspaces({ root });
-        const w = await ws.prepare(req(repo, { branch: 'feat/rel-1-export-csv' }));
-        expect(w).toMatchObject({ branch: 'factory/rel-1-export-csv', fresh: true, ahead: true });
-        expect(git(w.path, 'log', '-1', '--format=%s')).toBe('the PR already open');
-      });
-    }
+    it('keeps the legacy factory/ branch a ticket already has on the forge, never a second branch beside it', async () => {
+      const { repo, root } = fixtureRepo();
+      git(repo, 'checkout', '-q', '-b', 'factory/rel-1-export-csv');
+      git(repo, 'commit', '--allow-empty', '-m', 'the PR already open');
+      git(repo, 'push', '-q', 'origin', 'factory/rel-1-export-csv');
+      git(repo, 'checkout', '-q', 'main');
+      git(repo, 'branch', '-q', '-D', 'factory/rel-1-export-csv');
+      const ws = new GitWorkspaces({ root });
+      const w = await ws.prepare(req(repo, { branch: 'feat/rel-1-export-csv' }));
+      expect(w).toMatchObject({ branch: 'factory/rel-1-export-csv', fresh: true, ahead: true });
+      expect(git(w.path, 'log', '-1', '--format=%s')).toBe('the PR already open');
+    });
 
     it('prefers the name it is given when that branch exists too', async () => {
       const { repo, root } = fixtureRepo();
@@ -527,7 +526,7 @@ describe('GitWorkspaces', () => {
     expect(realpathSync(git(w.path, 'rev-parse', '--path-format=absolute', '--git-common-dir'))).toBe(realpathSync(join(w.path, '.git')));
     expect(git(w.path, 'config', 'remote.origin.url')).toBe(git(repo, 'config', 'remote.origin.url'));
     expect(git(w.path, 'config', 'remote.origin.fetch')).toBe(git(repo, 'config', 'remote.origin.fetch'));
-    expect(git(w.path, 'config', 'user.name')).toBe('t');
+    expect(git(w.path, 'config', 'user.name')).toBe(FACTORY_GIT_IDENTITY['user.name']);
     expect(git(w.path, 'symbolic-ref', 'refs/remotes/origin/HEAD')).toBe('refs/remotes/origin/main');
     expect(git(w.path, 'tag')).toBe('v1');
     expect(git(w.path, 'branch', '--format=%(refname:short)')).toBe('feat/rel-1-export-csv');
@@ -583,14 +582,11 @@ describe('GitWorkspaces', () => {
     expect(withoutUserinfo(url)).toBe(bare);
   });
 
-  it("lets a run commit as the repository's identity, with its line endings and its LFS filter, and nothing else of the host's (ORC-341)", async () => {
+  it("lets a run commit as the factory, with nothing of the repository's config: neither its identity, its line endings nor its LFS filter (ORC-479)", async () => {
     const { base, repo, root } = fixtureRepo();
     git(repo, 'config', 'user.name', 'The Operator');
     git(repo, 'config', 'user.email', 'op@example.com');
     git(repo, 'config', 'core.autocrlf', 'input');
-    git(repo, 'config', 'core.eol', 'lf');
-    git(repo, 'config', 'filter.lfs.clean', 'git-lfs clean -- %f');
-    git(repo, 'config', 'filter.lfs.smudge', 'git-lfs smudge -- %f');
     git(repo, 'config', 'filter.lfs.process', 'git-lfs filter-process');
     git(repo, 'config', 'filter.lfs.required', 'true');
     const w = await new GitWorkspaces({ root }).prepare(req(repo));
@@ -603,49 +599,37 @@ describe('GitWorkspaces', () => {
     writeFileSync(join(w.path, 'out.txt'), 'one\r\ntwo\r\n');
     agent('add', 'out.txt');
     agent('commit', '-q', '-m', 'the agent');
-    expect(agent('log', '-1', '--format=%an <%ae> / %cn <%ce>')).toBe('The Operator <op@example.com> / The Operator <op@example.com>');
-    expect(agent('cat-file', '-p', 'HEAD:out.txt')).toBe('one\ntwo');
-    expect(agent('config', '--get-regexp', '^filter\\.lfs\\.').split('\n')).toEqual([
-      'filter.lfs.clean git-lfs clean -- %f',
-      'filter.lfs.smudge git-lfs smudge -- %f',
-      'filter.lfs.process git-lfs filter-process',
-      'filter.lfs.required true',
-    ]);
+    const factory = `${FACTORY_GIT_IDENTITY['user.name']} <${FACTORY_GIT_IDENTITY['user.email']}>`;
+    expect(agent('log', '-1', '--format=%an <%ae> / %cn <%ce>')).toBe(`${factory} / ${factory}`);
+    expect(agent('cat-file', '-p', 'HEAD:out.txt')).toBe('one\r\ntwo');
+    // Only what the factory writes: a filter would name a command the runner's image does not have.
+    expect(agent('config', '--local', '--name-only', '--list').split('\n').filter((k) => !/^(core|extensions)\./.test(k)).sort()).toEqual(['remote.origin.fetch', 'remote.origin.url', 'user.email', 'user.name']);
   });
 
-  it("checks the agent's files out through the LFS filter as the repository reaches the forge, its credentials left out of the agent's config (ORC-341)", async () => {
-    // Neither the machine's global nor its system config: where git-lfs is installed, its `filter.lfs.process` is there,
-    // and git runs it instead of the fake below, at the commit and at the checkout (as on GitHub's runners).
-    const none = join(mkdtempSync(join(tmpdir(), 'factory-git-')), 'none');
-    vi.stubEnv('GIT_CONFIG_GLOBAL', none);
+  it("checks the agent's files out through a Git LFS of the host's with the forge's token in that checkout's environment alone (ORC-479)", async () => {
+    // As git-lfs's smudge, in the host's own config: what it reads of git's config to reach the forge.
+    const dir = mkdtempSync(join(tmpdir(), 'factory-git-'));
+    const seen = join(dir, 'seen');
+    const global = join(dir, 'gitconfig');
+    git(dir, 'config', '--file', global, 'filter.lfs.smudge', `sh -c 'git config http.https://github.com/.extraheader >> "${seen}"; cat'`);
+    git(dir, 'config', '--file', global, 'filter.lfs.clean', 'cat');
+    vi.stubEnv('GIT_CONFIG_GLOBAL', global);
     vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
     onTestFinished(() => {
       vi.unstubAllEnvs();
     });
-    const { base, repo, root } = fixtureRepo();
-    const seen = join(base, 'seen');
-    // As git-lfs's smudge: what it reads of the config to reach the forge.
-    git(repo, 'config', 'filter.lfs.smudge', `sh -c 'git config remote.origin.url >> "${seen}"; git config http.https://github.com/.extraheader >> "${seen}"; cat'`);
-    git(repo, 'config', 'filter.lfs.clean', 'cat');
+    const { repo, root } = fixtureRepo();
     writeFileSync(join(repo, '.gitattributes'), '*.bin filter=lfs\n');
     writeFileSync(join(repo, 'big.bin'), 'data\n');
     git(repo, 'add', '.');
     git(repo, 'commit', '-qm', 'lfs');
     git(repo, 'push', '-q', 'origin', 'main');
-    tokenRemote(base, repo);
-    git(repo, 'config', 'http.https://github.com/.extraheader', 'AUTHORIZATION: basic SECRET-341');
-    const w = await new GitWorkspaces({ root }).prepare(req(repo));
+    const auth = async () => ({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader', GIT_CONFIG_VALUE_0: 'AUTHORIZATION: basic SECRET-479' });
+    const w = await new GitWorkspaces({ root, auth }).prepare(req(repo));
     expect(readFileSync(join(w.path, 'big.bin'), 'utf8')).toBe('data\n');
-    expect(existsSync(seen), 'the checkout ran the fake smudge').toBe(true);
-    expect(readFileSync(seen, 'utf8').split('\n')).toEqual(expect.arrayContaining([TOKEN_URL, 'AUTHORIZATION: basic SECRET-341']));
-    expect(agentConfig(w.path)).not.toContain('SECRET-341');
-  });
-
-  it('takes a boolean the repository wrote without a value as true (ORC-341)', async () => {
-    const { repo, root } = fixtureRepo();
-    writeFileSync(join(repo, '.git', 'config'), `${readFileSync(join(repo, '.git', 'config'), 'utf8')}[core]\n\tautocrlf\n`);
-    const w = await new GitWorkspaces({ root }).prepare(req(repo));
-    expect(git(w.path, 'config', 'core.autocrlf')).toBe('true');
+    expect(readFileSync(seen, 'utf8').trim()).toBe('AUTHORIZATION: basic SECRET-479');
+    expect(agentConfig(w.path)).not.toContain('SECRET-479');
+    expect(agentConfig(w.path)).not.toContain('lfs');
   });
 
   it('reads the head of a repository whose refs git packed, on a branch or detached', async () => {
@@ -692,20 +676,20 @@ describe('GitWorkspaces', () => {
     expect(await ws.head(w.path)).toBe(git(repo, 'rev-parse', 'HEAD'));
   });
 
-  it("starts from a branch only the repository has, and the agent's unpushed commits go with its worktree", async () => {
+  it("starts from the forge alone: a local branch of the repository it reads is not the ticket's, and the agent's unpushed commits go with its worktree (ORC-479)", async () => {
     const { repo, root } = fixtureRepo();
     const ws = new GitWorkspaces({ root });
-    git(repo, 'branch', 'factory/rel-1-export-csv');
-    git(repo, 'checkout', '-q', 'factory/rel-1-export-csv');
-    git(repo, 'commit', '--allow-empty', '-m', 'human, local only');
+    git(repo, 'branch', 'feat/rel-1-export-csv');
+    git(repo, 'checkout', '-q', 'feat/rel-1-export-csv');
+    git(repo, 'commit', '--allow-empty', '-m', 'local only');
     git(repo, 'checkout', '-q', 'main');
     const w = await ws.prepare(req(repo));
-    expect(git(w.path, 'log', '-1', '--format=%s')).toBe('human, local only');
-    expect(w.ahead).toBe(true);
+    expect(git(w.path, 'log', '-1', '--format=%s')).toBe('init');
+    expect(w.ahead).toBeUndefined();
     git(w.path, 'commit', '--allow-empty', '-m', 'the agent, unpushed');
     await ws.cleanup('p', 'REL-1');
     const w2 = await ws.prepare(req(repo));
-    expect(git(w2.path, 'log', '-1', '--format=%s')).toBe('human, local only');
+    expect(git(w2.path, 'log', '-1', '--format=%s')).toBe('init');
   });
 
   it('cleanup of one ticket leaves another untouched', async () => {

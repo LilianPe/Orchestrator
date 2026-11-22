@@ -549,7 +549,7 @@ describe('GitPublisher, on the repository the agent really has (ORC-317)', () =>
     commit(repoPath, 'base');
     git(repoPath, 'push', '-q', '-u', 'origin', 'main');
     git(repoPath, 'remote', 'set-head', 'origin', 'main');
-    const ws = await new GitWorkspaces({ root: join(base, 'ws') }).prepare({ projectId: 'p', repoPath, ticketId: 'ORC-1', title: 'x', kind: 'worktree', slot: 0, portBase: 4200, runId: 'r0' } as never);
+    const ws = await new GitWorkspaces({ root: join(base, 'ws') }).prepare({ projectId: 'p', mirror: repoPath, ticketId: 'ORC-1', title: 'x', kind: 'worktree', slot: 0, portBase: 4200, runId: 'r0' } as never);
     const work = ws.path;
     const branch = ws.branch!;
     write(work, 'a.txt', 'one\n');

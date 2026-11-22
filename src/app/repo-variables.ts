@@ -1,10 +1,9 @@
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { execCmd, execFailure, type Exec } from '../adapters/exec.js';
-import type { CloneAuth } from '../adapters/forge/types.js';
-import { fetchOrigin, originHeadOf } from '../adapters/workspace/git-workspaces.js';
+import { fetchOrigin, originHeadOf, type FetchOrigin } from '../adapters/workspace/git-workspaces.js';
 import type { FactoryYml } from '../config/factory-yml.js';
-import { parseRepoConfig, REPO_CONFIG_DIR, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
+import { IGNORED_WORKFLOW_FILES, parseRepoConfig, REPO_CONFIG_DIR, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
 import { NO_REPO_VARIABLES, repoVariables, type RepoVariables } from '../config/repo-variables.js';
 import { zFields } from '../core/clean-verify.js';
 import { fingerprintFiles, type FingerprintFiles } from '../core/dry-run.js';
@@ -15,13 +14,16 @@ import { isTable, parseToml, type TomlTable, type TomlValue } from '../checks/to
 
 /**
  * `.factory/config.yml` of a project's repository, read once at each launch (ORC-209 C): on its default branch as
- * the factory's repository has it (`originHead`), never in a worktree the agent writes nor on its branch. The agent
+ * the factory's mirror has it (`originHead`, ORC-479), never in a worktree the agent writes nor on its branch. The agent
  * has neither `origin` nor `origin/HEAD` of this repository to write: its git dir is its own (ORC-317). No file: the
- * socle. An invalid file, or a default branch git cannot read, rejects: no run starts on a config half read.
+ * socle. An invalid file, or a default branch git cannot read, rejects: no run starts on a config half read. `fetch`: what
+ * fetches the mirror (`RepoMirrors.fetch`); a plain `fetchOrigin` for `factory doctor` and `factory init`, which read the checkout
+ * they run in, with `fetch: false`.
  */
-export function makeRepoConfig(o: { exec?: Exec; fetchDeadlineMs?: number; log?: (message: string) => void; auth?: CloneAuth } = {}): (project: { repoPath: string }, read?: RepoConfigRead) => Promise<RepoConfig> {
+export function makeRepoConfig(o: { exec?: Exec; fetchDeadlineMs?: number; log?: (message: string) => void; fetch?: FetchOrigin } = {}): (project: { mirror: string }, read?: RepoConfigRead) => Promise<RepoConfig> {
   const exec = o.exec ?? execCmd;
-  return async ({ repoPath }, { fetch = true } = {}) => {
+  const fetchMirror: FetchOrigin = o.fetch ?? ((repo, f) => fetchOrigin(exec, repo, f));
+  return async ({ mirror: repoPath }, { fetch = true } = {}) => {
     // A failure's message reaches the ticket (Linear): never the server's path nor the command, which go to the daemon's log.
     const git = async (args: string[], failure: () => string): Promise<string> => {
       const r = await exec('git', ['-C', repoPath, ...args]);
@@ -31,7 +33,7 @@ export function makeRepoConfig(o: { exec?: Exec; fetchDeadlineMs?: number; log?:
     };
     // A worktree that already exists is prepared without a fetch: what was merged since applies all the same.
     // A forge that does not answer refuses the launch, which never waits for it forever.
-    if (fetch) await fetchOrigin(exec, repoPath, { deadlineMs: o.fetchDeadlineMs, auth: o.auth, log: (m) => o.log?.(`${REPO_CONFIG_PATH}: ${m}`) });
+    if (fetch) await fetchMirror(repoPath, { deadlineMs: o.fetchDeadlineMs, log: (m) => o.log?.(`${REPO_CONFIG_PATH}: ${m}`) });
     const { ref, name, set } = await originHeadOf(exec, repoPath);
     // The hint only when `origin/HEAD` is missing: `origin/main` is then a guess, perhaps not the default branch.
     const unreadable = `unreadable default branch (${name})${set ? '' : `: origin/HEAD is not set on the factory's repository; if ${name} is not the default branch, run \`git remote set-head origin --auto\` on this repository`}`;
@@ -58,9 +60,9 @@ export function makeRepoConfig(o: { exec?: Exec; fetchDeadlineMs?: number; log?:
  * `makeRepoConfig` reads it, with no fetch of its own: each file by its blob, package.json and pyproject.toml by what in them says
  * how it starts (`START_PART`). Undefined, logged, where git cannot read the branch.
  */
-export function makeStartFingerprint(o: { exec?: Exec; log?: (message: string) => void } = {}): (project: { repoPath: string }) => Promise<string | undefined> {
+export function makeStartFingerprint(o: { exec?: Exec; log?: (message: string) => void } = {}): (project: { mirror: string }) => Promise<string | undefined> {
   const exec = o.exec ?? execCmd;
-  return async ({ repoPath }) => {
+  return async ({ mirror: repoPath }) => {
     const { ref } = await originHeadOf(exec, repoPath);
     const tree = await exec('git', ['-C', repoPath, '--literal-pathspecs', 'ls-tree', '-z', ref, '--', ...START_FILES]);
     if (tree.code !== 0) {
@@ -94,9 +96,9 @@ export function makeStartFingerprint(o: { exec?: Exec; log?: (message: string) =
  * The default branch's head and the files of the dry run's fingerprint there (ORC-409), as `makeRepoConfig` reads the branch, with
  * no fetch of its own: a delegated ticket's launch fetched it just before. A branch git cannot read rejects, as the config's read.
  */
-export function makeDryRunFiles(o: { exec?: Exec; log?: (message: string) => void } = {}): (project: { repoPath: string }) => Promise<FingerprintFiles & { sha: string }> {
+export function makeDryRunFiles(o: { exec?: Exec; log?: (message: string) => void } = {}): (project: { mirror: string }) => Promise<FingerprintFiles & { sha: string }> {
   const exec = o.exec ?? execCmd;
-  return async ({ repoPath }) => {
+  return async ({ mirror: repoPath }) => {
     const { ref, name } = await originHeadOf(exec, repoPath);
     // A failure's message reaches the ticket (Linear): never the server's path nor the command, which go to the daemon's log.
     const git = async (...args: string[]): Promise<string> => {
@@ -159,8 +161,18 @@ const START_PART: Partial<Record<string, (text: string) => string>> = { 'package
  * resolved it (`projectGithub`, ORC-478), never what a clone's config or an agent says. A replayed ticket's (ORC-376) is its clone at
  * the start, which stands for the repository: never the forge's default branch, which holds the human's PR and all that came after.
  */
-export function makeOriginUrl(): (project: { github: string; repoPath: string; replayed?: unknown }) => Promise<string> {
-  return async ({ github, repoPath, replayed }) => (replayed ? pathToFileURL(repoPath).href : `https://github.com/${github}`);
+export function makeOriginUrl(): (project: { github: string; mirror: string; replayed?: unknown }) => Promise<string> {
+  return async ({ github, mirror, replayed }) => (replayed ? pathToFileURL(mirror).href : `https://github.com/${github}`);
+}
+
+/**
+ * The workflow files an older factory read (ORC-388) on the default branch of a project's mirror (ORC-479), as `makeRepoConfig`
+ * reads it: said at the daemon's start. None where git cannot read the branch (a mirror not made yet), which the launch says.
+ */
+export async function ignoredWorkflowFilesOn(mirror: string, exec: Exec = execCmd): Promise<string[]> {
+  const { ref } = await originHeadOf(exec, mirror);
+  const r = await exec('git', ['-C', mirror, '--literal-pathspecs', 'ls-tree', '-z', '--name-only', ref, '--', ...IGNORED_WORKFLOW_FILES]);
+  return r.code === 0 ? zFields(r.stdout) : [];
 }
 
 /**

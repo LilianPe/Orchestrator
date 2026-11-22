@@ -203,7 +203,7 @@ export abstract class DaemonEffects extends DaemonChecks {
     const refusal = this.publishRefusal(project, t, c.sha);
     if (refusal) return refuse(refusal);
     if (!t.branch || !t.worktreePath) return refuse(`no branch or no worktree for ${t.ticketId}.`);
-    const diff = await this.d.workspaces.ticketDiff(project.repoPath, t.worktreePath);
+    const diff = await this.d.workspaces.ticketDiff(project.mirror, t.worktreePath);
     // A run that committed nothing has nothing to show: it ends as it would have, without a PR. An unreadable diff says nothing of it.
     const nothing = diff !== undefined && (!diff.trim() || diff === NO_CHANGE);
     if (diff === undefined || nothing) return done(nothing);
