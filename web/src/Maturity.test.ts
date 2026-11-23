@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { Maturity } from './Maturity.js';
+import { approvalNotice, Maturity } from './Maturity.js';
 import type { MaturityCardView } from './types.js';
 import { MAIN_UNCHECKED } from '../../src/core/maturity.js';
 
@@ -33,5 +33,12 @@ describe('the maturity cards page (ORC-410)', () => {
     const html = render([card({ key: 'main', title: 'main green or red', value: MAIN_UNCHECKED })]);
     expect(html).not.toContain('>Approve<');
     expect(html).toContain('factory dry-run p');
+  });
+
+  it('says, after an approval, that the card was approved already, by whom and when: that first approval stands (ORC-454)', () => {
+    const notice = approvalNotice({ already: true, card: card({ approvedBy: 'github:armand', approvedAt: Date.UTC(2026, 10, 2, 9) }) }, card());
+    expect(notice).toMatch(/^Stack was already approved by github:armand on .*2026.*: that approval stands\.$/);
+    expect(approvalNotice({ card: card({ approvedBy: 'dashboard:local', approvedAt: 5 }) }, card())).toBe('Stack approved.');
+    expect(approvalNotice({}, card())).toBe('Stack approved.');
   });
 });

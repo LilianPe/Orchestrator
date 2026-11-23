@@ -85,6 +85,8 @@ export interface ServerDeps {
   secrets?: () => string[];
   /** The dry run of a project's default branch (ORC-409), run and recorded, which `factory dry-run` asks for. Absent: none. */
   dryRun?: (projectId: string) => Promise<DryRun>;
+  /** The projects of the configuration as it is now (ORC-454): the maturity cards of another, removed since init, are neither listed nor approved. Absent: every project's. */
+  projects?: () => readonly string[];
   /** `audit.serious_defect` of factory.yml (ORC-153): absent, the defects of the audit sheets are kept, never counted (ORC-229). */
   seriousDefect?: string;
 }
@@ -514,18 +516,29 @@ export function createApp(d: ServerDeps): Hono {
     return c.json({ ok: true, defect });
   });
 
-  // The maturity cards `factory init` stored (ORC-410), every project's, and the approval of one by an operator, of the value
+  // The maturity cards `factory init` stored (ORC-410), those of the configuration's projects (ORC-454), and the approval of one by an operator, of the value
   // it was shown at: a detection that changes the value drops it, and an approval of a value no longer stored is refused.
   const approvalLimit = bodyLimit({ maxSize: 64 * 1024, onError: (c) => c.json({ error: 'approval over 64 KB' }, 413) });
-  app.get('/api/maturity', async (c) => c.json({ cards: await d.store.maturityCards() }));
+  // factory.yml read once per request (ORC-454): every card of a response judged against one version of the file.
+  const configured = () => {
+    const ids = d.projects?.();
+    return (projectId: string) => ids === undefined || ids.includes(projectId);
+  };
+  app.get('/api/maturity', async (c) => {
+    const inConfig = configured();
+    return c.json({ cards: (await d.store.maturityCards()).filter((card) => inConfig(card.projectId)) });
+  });
   app.post('/api/maturity/:projectId/:key/approve', approvalLimit, async (c) => {
+    if (!configured()(c.req.param('projectId'))) return c.json({ error: `no project ${c.req.param('projectId')} in the configuration` }, 404);
     const parsed = approvalEntry.safeParse(await c.req.json().catch(() => undefined));
     if (!parsed.success) return c.json({ error: 'expected { value }: the value approved' }, 400);
     const { value } = parsed.data;
-    const card = await d.store.approveMaturityCard(c.req.param('projectId'), c.req.param('key'), value, operator(c).actor!, d.clock.now());
+    const at = d.clock.now();
+    const card = await d.store.approveMaturityCard(c.req.param('projectId'), c.req.param('key'), value, operator(c).actor!, at);
     if (card === 'changed') return c.json({ error: 'the card changed since it was shown: read it again' }, 409);
     if (card === 'unchecked') return c.json({ error: `main is not checked yet: run factory dry-run ${c.req.param('projectId')}, then approve its result` }, 409);
-    return card ? c.json({ ok: true, card }) : c.json({ error: 'no such card' }, 404);
+    // A card approved already keeps its first approval (ORC-454): `already` lets the page say whose it is.
+    return card ? c.json({ ok: true, ...(card.approvedAt === at && card.approvedBy === operator(c).actor ? {} : { already: true }), card }) : c.json({ error: 'no such card' }, 404);
   });
 
   // The security log (ORC-300), read-only, from the logs the factory read off the proxy and the hook (ORC-296): hosts,
