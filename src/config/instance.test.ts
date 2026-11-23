@@ -64,9 +64,9 @@ describe('instance config', () => {
     expect(() => saveInstance(home, { port: 4100, host: 'h', relay: { kind: 'none' }, projects: [project] })).toThrow(/repos\[0\]\.authz\.maintainers\[0\]/);
   });
 
-  it("writes each repository's entry with the env and secrets the file holds, as references, never a value read from them (ORC-480)", () => {
+  it("writes each repository's entry with the env and secrets the file holds, as written, comments included, never a value read from them (ORC-480)", () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-home-'));
-    const env = '    env:\n      NODE_ENV: test\n      API_URL: env:ORG_API_URL\n    secrets:\n      NPM_TOKEN: env:ORG_NPM_TOKEN\n';
+    const env = '    env:\n      NODE_ENV: test\n      API_URL: env:ORG_API_URL\n    secrets:\n      NPM_TOKEN: env:ORG_NPM_TOKEN # rotated each quarter\n';
     writeFileSync(join(home, 'factory.yml'), `repos:\n  - id: app\n    github: org/app\n    linear_team: REL\n${env}`);
     const yml = loadFactoryYml(home, { ORG_API_URL: 'https://api', ORG_NPM_TOKEN: 'npm-secret-value' })!;
     // What the daemon resolved, handed back as init would: none of its values is written.
@@ -82,6 +82,10 @@ describe('instance config', () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-home-'));
     writeFileSync(join(home, 'factory.yml'), 'projects:\n  - { id: perso, repo_path: /code/perso, linear_team_key: REL }\n');
     expect(() => loadInstance(home)).toThrow(/projects: replaced by repos \(ORC-480\)/);
+    // A bare `projects:` too: `repos` would be read as the old list's otherwise.
+    writeFileSync(join(home, 'factory.yml'), 'projects:\nrepos:\n  - { id: app, github: org/app, linear_team: REL }\n');
+    expect(() => loadInstance(home)).toThrow(/projects: replaced by repos/);
+    expect(() => parseFactoryYml('projects:\nrepos:\n  - { id: app, github: org/app, linear_team: REL }\n', {})).toThrow(/projects: replaced by repos/);
     expect(() => saveInstance(home, { port: 4100, host: 'h', relay: { kind: 'none' }, projects: [] })).toThrow(/projects: replaced by repos/);
   });
 

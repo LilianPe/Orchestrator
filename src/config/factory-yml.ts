@@ -247,12 +247,13 @@ const isEntry = (v: unknown): v is Record<string, unknown> => !!v && typeof v ==
  */
 export function oldRepoKeys(r: Record<string, unknown>): string[] {
   const found: string[] = [];
-  if (r['projects'] != null) {
+  // Even empty: a bare `projects:` would leave `repos` unread as the old list's.
+  if ('projects' in r) {
     found.push(
       'projects: replaced by repos (ORC-480), one entry per repository: `{ id, github, linear_team, authz, preset, effects, env, secrets }`. ' +
         'Move each project into repos: keep its id, authz, preset and effects, rename linear_team_key to linear_team, replace repo_path by github: ' +
-        "<owner>/<name> (the GitHub repository of that clone's origin), and move in the env and secrets of the repos entry of its team and repository, " +
-        'then delete projects and the old repos entries',
+        "<owner>/<name> (the GitHub repository of that clone's origin), and copy in the env and secrets of the repos entry of its team and repository " +
+        '(into each project of that team and repository, a factory/fantome one included), then delete projects and the old repos entries',
     );
   }
   const repos = r['repos'];

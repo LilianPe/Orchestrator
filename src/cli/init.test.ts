@@ -559,6 +559,17 @@ describe('factory init: the GitHub App and factory.yml (ORC-411)', () => {
     expect(loadInstance(home).projects).toEqual([ghost, { id: 'a', github: 'acme/pilot', linearTeamKey: 'REL', authz }, other]);
   });
 
+  it("gives a new repository an id no entry holds, its folder's taken by another repository or its own replay (ORC-480)", async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+    const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
+    const id = slugify(basename(repo), 30);
+    const ghost = { id, github: 'acme/pilot', linearTeamKey: 'OLD', preset: 'factory/fantome' as const };
+    const other = { id: `${id}-2`, github: 'acme/other', linearTeamKey: 'OLD' };
+    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [ghost, other] });
+    await initOnce({ home, repo });
+    expect(loadInstance(home).projects).toEqual([ghost, other, { id: `${id}-3`, github: 'acme/pilot', linearTeamKey: 'REL' }]);
+  });
+
   it('leaves the GitHub App of factory.yml in place, and prints no App steps for it', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
     writeFileSync(join(home, 'factory.yml'), '# my App\ngithub: { app_id: "7", private_key: env:MY_KEY }\n');

@@ -321,6 +321,14 @@ async function askLinear(io: InitIO, home: string, secrets: ReturnType<typeof lo
   saveSecrets(home, { ...secrets, linear: { ...stored, clientId, clientSecret, webhookSecret } }, key);
 }
 
+/** `base`, or `base-2`, `base-3`…: the first id no entry of `projects` holds, within the 30 characters of a slug. */
+function freeId(base: string, projects: readonly { id: string }[]): string {
+  const taken = new Set(projects.map((p) => p.id));
+  let id = base;
+  for (let n = 2; taken.has(id); n++) id = `${base.slice(0, 30 - String(n).length - 1)}-${n}`;
+  return id;
+}
+
 export async function runInit(d: InitDeps): Promise<void> {
   const { io } = d;
   const top = await d.exec('git', ['rev-parse', '--show-toplevel'], { cwd: d.cwd });
@@ -350,8 +358,9 @@ export async function runInit(d: InitDeps): Promise<void> {
   // An empty answer keeps what is there (ORC-83): the project's team key, the stored Linear values.
   const teamKey = (await io.ask('Linear team key (e.g. REL)', previous?.linearTeamKey)).toUpperCase();
 
-  // The project's other fields (its id, its roles, written by hand) stay.
-  const entry = { ...previous, id: previous?.id ?? slugify(basename(repoPath), 30), github: previous?.github ?? github, linearTeamKey: teamKey };
+  // The project's other fields (its id, its roles, written by hand) stay. A new one's id is its folder's, made unique: the key of
+  // its tickets and labels, which another repository of the same folder name already holds.
+  const entry = { ...previous, id: previous?.id ?? freeId(slugify(basename(repoPath), 30), cfg.projects), github: previous?.github ?? github, linearTeamKey: teamKey };
   const { id } = entry;
   cfg.projects = previous ? cfg.projects.map((p) => (p === previous ? entry : p)) : [...cfg.projects, entry];
   // Smee only on demand (ORC-411): a public channel, for a workstation; a server has its public URL, and --dev changes nothing
