@@ -25,6 +25,17 @@ describe('secrets.json at rest (ORC-398)', () => {
     expect(() => openSecretsFile(altered, KEY)).toThrow('secrets.json could not be decrypted');
   });
 
+  it('refuses a sealed file cut short, naming it and what it lacks, before any key is derived (ORC-494)', () => {
+    const file = JSON.parse(sealSecretsFile(PLAIN, KEY)) as Record<string, unknown>;
+    const incomplete = (what: string) => `secrets.json is encrypted at rest but incomplete: ${what} is missing`;
+    expect(() => openSecretsFile(JSON.stringify({ ...file, salt: undefined }), KEY)).toThrow(incomplete('its salt'));
+    expect(() => openSecretsFile(JSON.stringify({ ...file, key: undefined }), KEY)).toThrow(incomplete('its key'));
+    expect(() => openSecretsFile(JSON.stringify({ ...file, key: 'not a box' }), KEY)).toThrow(incomplete('its key'));
+    expect(() => openSecretsFile(JSON.stringify({ ...file, key: { ...(file['key'] as object), tag: undefined } }), KEY)).toThrow(incomplete('its key'));
+    expect(() => openSecretsFile(JSON.stringify({ ...file, data: undefined }), KEY)).toThrow(incomplete('its data'));
+    expect(() => openSecretsFile(JSON.stringify({ ...file, salt: undefined }), 'short')).toThrow(incomplete('its salt'));
+  });
+
   it('refuses a key too short to derive one from', () => {
     expect(() => sealSecretsFile(PLAIN, 'short-key')).toThrow(`secrets_key: at least ${MIN_SECRETS_KEY_LENGTH} characters expected`);
   });
