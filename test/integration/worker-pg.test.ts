@@ -193,6 +193,9 @@ describe.skipIf(!PG_URL)('worker on PgStore', () => {
     const h = createHarness({ store: inner, workflow: COMMENTS });
     for (const t of ['REL-1', 'REL-2']) h.tracker.addIssue({ identifier: t, title: t });
     const journaled = async (t: string) => (await pool.query(`select 1 from journal where ticket_id = $1`, [t])).rowCount;
+    // Its delegation's row only: the comment it decides comes back as an `effect.done`, journaled under
+    // the same ticket as soon as the executor ran it, maybe between two reads (ORC-492).
+    const decided = async (t: string) => (await pool.query(`select 1 from journal where event_id = $1`, [`d:${t}`])).rowCount;
     // A suite running beside this one in the same database (ORC-334), blocked on the same key.
     const otherSuite = new Client({ connectionString: PG_URL });
     otherSuite.on('error', () => undefined);
@@ -207,18 +210,18 @@ describe.skipIf(!PG_URL)('worker on PgStore', () => {
       for (let i = 0; i < 500 && !(await otherBlocked()); i++) await new Promise((r) => setTimeout(r, 10));
       expect(await otherBlocked()).toBe(1);
       await h.orch.replayInbox();
-      for (let i = 0; i < 500 && !(await journaled('REL-2')); i++) await new Promise((r) => setTimeout(r, 10));
-      expect(await journaled('REL-2')).toBe(1);
+      for (let i = 0; i < 500 && !(await decided('REL-2')); i++) await new Promise((r) => setTimeout(r, 10));
+      expect(await decided('REL-2')).toBe(1);
       // REL-1's transaction waits on the lock: nothing of it read or written.
       // Only this suite's connections, on REL-1's key: the run's suites share one database (ORC-334), so a
-      // connection of this suite can also wait on a key that another suite holds.
-      const waiting = await pool.query(
-        `select 1 from pg_locks l join pg_stat_activity a on a.pid = l.pid
-          where l.locktype = 'advisory' and not l.granted and a.application_name = $1
-            and (l.classid::bigint << 32 | l.objid::bigint) = hashtext('REL-1')::bigint`,
-        [db.name],
-      );
-      expect(waiting.rowCount).toBe(1);
+      // connection of this suite can also wait on a key that another suite holds. REL-1's task runs beside
+      // REL-2's, on its own connection: REL-2 decided says nothing of when REL-1's transaction reached the lock.
+      const waitingOnRel1 = `select 1 from pg_locks l join pg_stat_activity a on a.pid = l.pid
+        where l.locktype = 'advisory' and not l.granted and a.application_name = $1
+          and (l.classid::bigint << 32 | l.objid::bigint) = hashtext('REL-1')::bigint`;
+      const waiting = async () => (await pool.query(waitingOnRel1, [db.name])).rowCount;
+      for (let i = 0; i < 500 && !(await waiting()); i++) await new Promise((r) => setTimeout(r, 10));
+      expect(await waiting()).toBe(1);
       expect(await journaled('REL-1')).toBe(0);
       expect(await seed.getTicket('p', 'REL-1')).toBeUndefined();
     } finally {
