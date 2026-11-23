@@ -6,7 +6,7 @@ import { beforeInProgress, blockingFix, delegatedJob, hasHumanRounds, hasReviewL
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput, ConflictCase } from './agent-output.js';
 import { blockFacts } from './block-comment.js';
-import { AGENT_QUESTION, causeOf, CLARIFY_EXPIRED, isTakenOver, NO_ASSESSMENT, PAUSED, STOPPED, TAKEN_OVER, type BlockKind } from './block-cause.js';
+import { AGENT_QUESTION, causeOf, CLARIFY_EXPIRED, isTakenOver, NO_ASSESSMENT, PAUSED, REPO_CONFIG_REFUSED, STOPPED, TAKEN_OVER, type BlockKind } from './block-cause.js';
 import { LIFT_ON_WAIT, type Decision, type Effect } from './decision.js';
 import { CLASS_PATHS, needsRefreeze, type ClassifiedDiff } from './diff-class.js';
 import { asksForChange, awaitsAgent, commandOf, forAgent, STOP_COMMAND } from './human-message.js';
@@ -1832,7 +1832,8 @@ function pushChecked(out: Decision, event: FactoryEvent<'verify.passed' | 'verif
   const resume = 'reply to resume the agent: it rebases its work on top of your commits, and never pushes over them.';
   if (event.type === 'verify.errored') {
     // Still the push's block: a next push replaces it, and its verdict is told.
-    const reason = `The verification of ${head.slice(0, 12)}, pushed by a human, could not run: infrastructure failure.`;
+    const why = event.payload.repoConfig ? `. ${REPO_CONFIG_REFUSED}${event.payload.error}` : ': infrastructure failure.';
+    const reason = `The verification of ${head.slice(0, 12)}, pushed by a human, could not run${why}`;
     return block(out, workflow, { kind: 'human_push', reason, ...at, tried: [`Started the verification of the pushed commit: ${event.payload.error}`] });
   }
   if (event.type === 'verify.failed') {
@@ -2453,8 +2454,12 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     }
     case 'verify.errored': {
       // Not a failure of the work: no counter moves, and the agent gets nothing to fix. A human relaunch checks again.
-      const reason = `The verification of ${event.payload.job} could not run: infrastructure failure, not the agent's fault.`;
-      return ticket?.blocked ? out : block(out, workflow, { kind: 'infra', reason, job: event.payload.job, step: checkOf(workflow, event.payload.job), tried: [`Started the verification of ${event.payload.job}: ${event.payload.error}`] });
+      if (ticket?.blocked) return out;
+      const { job, error } = event.payload;
+      const at = { job, step: checkOf(workflow, job) };
+      if (event.payload.repoConfig) return block(out, workflow, { kind: 'repo_config', reason: `${REPO_CONFIG_REFUSED}${error}`, ...at, tried: [`Started the verification of ${job}.`] });
+      const reason = `The verification of ${job} could not run: infrastructure failure, not the agent's fault.`;
+      return block(out, workflow, { kind: 'infra', reason, ...at, tried: [`Started the verification of ${job}: ${error}`] });
     }
     case 'timer.fired': {
       const fired = event.payload;

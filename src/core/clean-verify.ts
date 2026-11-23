@@ -20,7 +20,7 @@ import { addedLines, isRepoRuleFile, REPO_RULES_DIR, REPO_RULES_TARGET, semgrepA
 import { isTestSpec } from '../checks/test-files.js';
 import { probeStart } from '../checks/preview-probe.js';
 import { brief, decideVisualProof, judgeShots, type CaptureGate, type Judged, type VisualProof } from '../checks/visual-proof.js';
-import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, setupOf, setupSecretsRefusal, type RepoConfig } from '../config/repo-config.js';
+import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, RepoConfigRefusal, setupOf, setupSecretsRefusal, type RepoConfig } from '../config/repo-config.js';
 import { BUNDLE_TARGET, extractWork, HARDENING, hostGitEnv, IN_SANDBOX, IN_SANDBOX_ENV } from '../publish/extract.js';
 import { recipeStart, type PreviewRecipe } from './agent-output.js';
 import { classifyBranch, type ClassifiedDiff } from './diff-class.js';
@@ -272,9 +272,9 @@ export const runCleanVerify: CleanVerifier = async (req) => {
 
     // As the commit declares them, which the launch did not read: provided, or refused before any of its code runs (ORC-282).
     const unprovided = req.sandboxes.unprovided([...new Set(config.services)]);
-    if (unprovided.length) throw new Error(servicesUnavailable(unprovided, true));
+    if (unprovided.length) throw new RepoConfigRefusal(servicesUnavailable(unprovided, true));
     const withheld = setupSecretsRefusal(setup, config.setupSecrets);
-    if (withheld) throw new Error(`${withheld}. Reply here once setup_secrets is changed on the default branch.`);
+    if (withheld) throw new RepoConfigRefusal(`${withheld}. Reply here once setup_secrets is changed on the default branch.`);
     // The repository's services (ORC-309), new for this check, never the agent's: filled by the setup, gone with the commands' sandbox.
     const withServices = { ...DEFAULT_REQUIREMENTS, services: config.services };
     await setUp('verify', cloneDir, config.services);

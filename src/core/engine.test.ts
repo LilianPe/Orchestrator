@@ -388,6 +388,18 @@ describe('decide — verify.errored (ORC-151)', () => {
     expect(causeOf((out.events[0] as { kind: BlockKind }).kind)).toBe('infra');
   });
 
+  it.each([
+    ['services (ORC-282)', 'The service redis is not available: .factory/config.yml declares it under `services`, and no sandbox backend of this factory provides it.'],
+    ['setup_secrets (ORC-461)', '.factory/config.yml declares setup_secrets (NPM_TOKEN) for its setup, and verify does not run such a setup'],
+  ])('a refusal of the repository configuration, %s, blocks as the repository\'s to fix, its reason told (ORC-493)', (_, error) => {
+    const refused = { ...errored(), payload: { runId: 'r1', job: 'dev', error, repoConfig: true } } as FactoryEvent;
+    const out = decide(checking(), refused, workflow);
+    expect(out.effects.some((e) => e.kind === 'start_run')).toBe(false);
+    expect(out.events).toEqual([{ type: 'ticket.blocked', reason: `Repository configuration to fix: ${error}`, kind: 'repo_config', job: 'dev' }]);
+    expect(out.effects).toContainEqual({ kind: 'block_comment', block: expect.objectContaining({ reason: `Repository configuration to fix: ${error}`, step: 'verify', tried: ['Started the verification of dev.'] }) });
+    expect(causeOf('repo_config')).toBe('repo_config');
+  });
+
   it('is no longer awaited once it arrived, and a stale one is fenced', () => {
     expect(reduce(checking(), errored())!.verifyingRunId).toBeUndefined();
     expect(isFenced(decide(checking(), errored('old'), workflow))).toBe(true);
