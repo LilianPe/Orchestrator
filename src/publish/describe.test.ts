@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseAgentOutput, parseSubmittedResult, type AgentOutput } from '../core/agent-output.js';
-import { describePr, formatRecap, PR_SECTIONS, type PrFacts } from './describe.js';
+import { readQuality, worstOfQuality } from '../checks/diff-quality.js';
+import { describePr, formatRecap, MEASURE_ROOM, PR_SECTIONS, type PrFacts } from './describe.js';
 import { OUTPUT_LIMITS } from './output-limits.js';
 import { OutputPolicy, OutputRefused } from './output-policy.js';
 
@@ -35,6 +36,26 @@ describe('describePr (ORC-195)', () => {
       { title: 'Where to look first', text: '- `src/export.ts`: the quoting' },
       { title: 'Evidence', text: expect.stringContaining('`npm test`') },
     ]);
+  });
+
+  it("adds the factory's two worst measures under the agent's hints in « Where to look first » (ORC-280)", () => {
+    const lookFirst = ['`src/a.ts:1-8` `grade`: CRAP 90 (CC 9, coverage 0 %)', '`pkg/d.py:1-6` and `lib/c.py:1-6`: similarity 0.90'];
+    const text = sections(describePr(full, facts({ lookFirst })).body).find((s) => s.title === 'Where to look first')!.text;
+    expect(text).toBe(`- \`src/export.ts\`: the quoting\n\n**Measured by the factory** (\`factory/qualité-diff\`):\n- ${lookFirst[0]}\n- ${lookFirst[1]}`);
+    const alone = sections(describePr(undefined, facts({ lookFirst: lookFirst.slice(0, 1) })).body).find((s) => s.title === 'Where to look first')!.text;
+    expect(alone).toContain(`**Measured by the factory** (\`factory/qualité-diff\`):\n- ${lookFirst[0]}`);
+  });
+
+  it('the room kept for the factory\'s facts holds the two worst measures at their longest (ORC-280)', () => {
+    // Paths and names as long as `readQuality` keeps them, with a backquote, which widens their code spans.
+    const long = (c: string) => `\`${c.repeat(200)}`;
+    const span = (c: string) => ({ path: long(c), start: 99_999, end: 99_999 });
+    const report = { functions: [{ ...span('f'), name: long('n'), cc: 999, coverage: 99.9, crap: 99_999.9 }], pairs: [{ score: 0.99, left: span('l'), right: span('r') }] };
+    const added = new Map([[long('f'), new Set([99_999])], [long('l'), new Set([99_999])]]);
+    const worst = worstOfQuality(readQuality({ code: 0, stdout: JSON.stringify(report), stderr: '' }, added));
+    expect(worst).toHaveLength(2);
+    const grown = describePr(full, facts({ lookFirst: worst })).body.length - describePr(full, facts()).body.length;
+    expect(grown).toBeLessThanOrEqual(MEASURE_ROOM);
   });
 
   it('criterion 1: an empty field keeps its place, said empty, so the order never moves', () => {

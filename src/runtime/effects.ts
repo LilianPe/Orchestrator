@@ -24,6 +24,7 @@ import { blockingFindings, inlineComment, NO_CHANGE, onItsLine, REVIEW_CHECK, re
 import { FREEZE_CHECK } from '../checks/freeze.js';
 import { ANTI_CHEAT_CHECK, ANTI_CHEAT_OK } from '../checks/anti-cheat.js';
 import { mdCode } from '../checks/markdown.js';
+import { DIFF_QUALITY_CHECK, diffQualityCheck, worstOfQuality } from '../checks/diff-quality.js';
 import { captureArtifactId, captureLabel, captureName, VISUAL_PROOF_CHECK, type VisualProof } from '../checks/visual-proof.js';
 import { changelogEntry, deliveredBody, lastPushed, mergedWork, type MergedPr } from '../core/changelog.js';
 import { isTakenOver } from '../core/block-cause.js';
@@ -42,6 +43,7 @@ export const CAPTURES_KEPT_MS = 30 * DAY_MS;
 const publishFacts = (t: TicketState, c: Extract<Effect, { kind: 'publish' }>) => ({
   ticketId: t.ticketId, title: t.title, sha: c.sha, ...(c.commands ? { commands: c.commands } : {}), ...(t.visualProof ? { visualProof: t.visualProof } : {}),
   ...(c.visualProof?.start ? { start: c.visualProof.start } : {}),
+  ...(c.quality ? { lookFirst: worstOfQuality(c.quality) } : {}),
 });
 
 /** A session's plan as the store keeps it (ORC-171): the session is that of the delegation that opened it. */
@@ -756,6 +758,7 @@ export abstract class DaemonEffects extends DaemonChecks {
       { name: FREEZE_CHECK, conclusion: frozen ? 'success' : 'neutral', summary: frozen ? `${frozen} frozen file(s) intact.` : 'No frozen test for this ticket.' },
       { name: ANTI_CHEAT_CHECK, conclusion: 'success', summary: ANTI_CHEAT_OK },
       ...(c.visualProof ? [{ name: VISUAL_PROOF_CHECK, ...visualCheck(c.visualProof) }] : []),
+      ...(c.quality ? [{ name: DIFF_QUALITY_CHECK, ...diffQualityCheck(c.quality) }] : []),
     ] as const;
     await Promise.all(
       checks.map(({ name, conclusion, summary }) =>

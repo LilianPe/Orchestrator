@@ -39,6 +39,12 @@ describe('the publish effect (ORC-125)', () => {
     expect(out.effects).toEqual([{ kind: 'publish', runId: 'r1', job: 'dev', sha: 'abc', visualProof }]);
   });
 
+  it("carries crapper's and dryer's measure verify journaled to the check it publishes (ORC-280)", () => {
+    const quality = { functions: [{ path: 'src/a.ts', name: 'grade', start: 1, end: 8, cc: 9, coverage: 0, crap: 90 }], pairs: [] };
+    const out = decide(verifying(), ev('verify.passed', { runId: 'r1', job: 'dev', sha: 'abc', quality }), workflow);
+    expect(out.effects).toEqual([{ kind: 'publish', runId: 'r1', job: 'dev', sha: 'abc', quality }]);
+  });
+
   it('the ticket stays held while it publishes: no next run starts beside it, and a stop fences its result', () => {
     const event = passed();
     const t = after(verifying(), event, decide(verifying(), event, workflow));

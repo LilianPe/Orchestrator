@@ -144,6 +144,25 @@ The manifests are read from the clone's objects, before any code of the branch h
 
 `verify` runs Semgrep (`factory/semgrep`, ORC-333) on the lines a branch adds, with two sets of rules: the factory's base of security rules (`docker/semgrep/` in the factory, copied into the runner image: code built at run time, shell commands built from a value, TLS verification turned off, unsafe deserialization, in JavaScript, TypeScript and Python), and the repository's own, the `.yml` and `.yaml` files under `.factory/semgrep/` of the default branch, in [Semgrep's rule syntax](https://semgrep.dev/docs/writing-rules/rule-syntax). They are read as `.factory/config.yml` is, never on the agent's branch, and without network: a rule of the Semgrep registry (`p/...`) does not load. Every finding blocks, at any severity. A finding on a line the branch did not write is the base's and does not block. A rule file Semgrep refuses stops `verify` as a breakdown, without a verdict, until the default branch fixes it.
 
+## Diff quality (`factory/qualité-diff`)
+
+`verify` measures what a branch changes with two tools by Uncle Bob, under the 0BSD licence, installed in the runner image at a fixed commit with their grammars (ORC-280):
+
+- [crapper](https://github.com/unclebob/crapper) gives each function its cyclomatic complexity (CC) and its CRAP score, `CC² × (1 − coverage)³ + CC`;
+- [dryer](https://github.com/unclebob/dryer) finds pairs of functions whose structure is at least 0.82 similar (the names and literals left out).
+
+They run once the commands have run, in the same sandbox at network `none`, on the files the diff adds lines to, test files left out. dryer compares each function of those files with every function of the repository in the same language. The check `factory/qualité-diff` lists the functions the diff touches whose CRAP is over 10, and the pairs with a side on a line the diff adds, worst first. It is a measure: it never blocks, and a breakdown of the tools is said on the check, neutral, without a verdict. Its two worst findings also go into the PR's *Where to look first*. crapper scores TypeScript, JavaScript and Python; dryer pairs TypeScript and Python functions only. The image carries no grammar for another language, and the sandbox has no network to fetch one: a file in another language is neither scored nor compared. The measure has its own cap, 2 minutes.
+
+The coverage is that of the repository's own tests, asked for as an LCOV report on their first run, when the runner can write one without installing anything:
+
+| Runner | When | Added to the command |
+| --- | --- | --- |
+| vitest | `@vitest/coverage-v8` or `@vitest/coverage-istanbul` in the root `package.json` | `--coverage.enabled`, the provider installed, `--coverage.reporter=lcov`, the thresholds set to 0 |
+| jest | always: jest carries its coverage | `--coverage --coverageReporters=lcov`, `--coverageThreshold='{}'` |
+| pytest | `pytest-cov` in `pyproject.toml`, `setup.cfg`, `setup.py`, `Pipfile`, or at the root `requirements.txt`, `requirements-dev.txt`, `requirements-test.txt`, `dev-requirements.txt` or `test-requirements.txt` | `--cov=. --cov-report=lcov:… --cov-fail-under=0` |
+
+The thresholds these flags reach are emptied, so that no threshold of the measure fails the tests, and the report is written even when a test fails. A red first run is the verdict, and is not run twice, unless the coverage is shown to have failed it: it wrote no report (a package declared but not installed, an instrumentation too slow), or every test the runner's own report names passed and vitest says a threshold is missed (one keyed by a glob, which no flag empties, a percentage or a count of uncovered lines). Then it is run again without, and that run's exit alone is the verdict. A failure with no test to name, such as a hook or an unhandled error, stays the run's once it wrote its report. With several commands, their reports of one file are merged: a line is covered when one of them covers it. Without a report that names its file, a function has no CRAP score: the check lists it by its complexity, past CC 5, with « coverage unknown ». The coverage is what the commit's tests report, measured after they ran: an indication for the reviewer, not a proof. Thresholds that block will come after twenty tickets measured, in a ticket of their own.
+
 ## The agent's network
 
 Each agent run takes the repository's level, read at launch, narrowed by its step's:

@@ -30,6 +30,8 @@ export interface PrFacts {
   captures?: readonly PublishedCapture[];
   /** Why the captures `verify` took are not shown (ORC-407): the forge refused to host them, or nothing here can. */
   unhosted?: string;
+  /** The two worst of `factory/qualité-diff` (ORC-280), as its check words them: the factory's measure, after the agent's hints. */
+  lookFirst?: readonly string[];
 }
 
 /**
@@ -60,10 +62,16 @@ const entry = (s: string): string => prose(s.replace(/\s*[\r\n]+\s*/g, ' ').trim
  */
 const linkUrl = (url: string): string => url.replace(/[\s()<>[\]]/g, (c) => (c === '(' ? '%28' : c === ')' ? '%29' : encodeURIComponent(c)));
 /**
- * What the factory's own facts may add to a description past the agent's fields: the ticket's id, the commands `verify` ran, the
- * captures, six links of about 175 characters each (ORC-407). `submit_result` keeps the agent's part under the cap of a PR body by this much (`publishedSizeIssues`).
+ * What `lookFirst` may add to « Where to look first » (ORC-280): its heading and two lines of the measure, each with two paths
+ * or a path and a name, which `readQuality` clips to 120 characters.
  */
-export const FACTS_ROOM = 2_500;
+export const MEASURE_ROOM = 700;
+/**
+ * What the factory's own facts may add to a description past the agent's fields: the ticket's id, the commands `verify` ran, the
+ * captures, six links of about 175 characters each (ORC-407), and the measure (`MEASURE_ROOM`). `submit_result` keeps the agent's
+ * part under the cap of a PR body by this much (`publishedSizeIssues`).
+ */
+export const FACTS_ROOM = 2_500 + MEASURE_ROOM;
 const bullets = (items: readonly string[]): string => (items.length ? items.map((i) => `- ${i}`).join('\n') : NONE);
 /** The tests the agent says it added, the same in the PR and in the recap. */
 const testsList = (o: Pick<AgentOutput, 'tests_added'>): string => bullets(o.tests_added.map((t) => mdCode(entry(t))));
@@ -123,7 +131,7 @@ export function describePr(o: AgentOutput | undefined, f: PrFacts): { title: str
     Untested: agent((r) => list(r.untested)),
     // The approved spec's section (ORC-212), as the agent carries it: ORC-212 may hand the spec's own once it keeps it.
     'Trusted without verification': agent((r) => list(r.trusted ?? [])),
-    'Where to look first': agent((r) => bullets(r.review_hints.map((h) => `${mdCode(entry(h.file))}: ${entry(h.reason)}`))),
+    'Where to look first': [agent((r) => bullets(r.review_hints.map((h) => `${mdCode(entry(h.file))}: ${entry(h.reason)}`))), ...(f.lookFirst?.length ? [`**Measured by the factory** (\`factory/qualité-diff\`):\n${bullets(f.lookFirst)}`] : [])].join('\n\n'),
     Evidence: evidence(o, f),
   };
   return { title: prTitle(f), body: [`Ticket: ${f.ticketId}`, ...PR_SECTIONS.map((s) => `## ${s}\n\n${text[s]}`)].join('\n\n') };

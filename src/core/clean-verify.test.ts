@@ -14,6 +14,7 @@ import { FakePackageRegistry } from '../checks/fake-registry.js';
 import type { RegistryOpener } from '../checks/registry.js';
 import { freezeTests } from '../checks/freeze.js';
 import { VISUAL_PROOF_CHECK } from '../checks/visual-proof.js';
+import { QUALITY_SCRIPT } from '../checks/diff-quality.js';
 import type { PreviewRecipe } from '../knowledge/preview-recipe.js';
 import { BUNDLE_TARGET } from '../publish/extract.js';
 import { OutputPolicy, type Capture } from '../publish/output-policy.js';
@@ -39,6 +40,8 @@ class LocalSandboxes extends FakeSandboxProvider {
   scan?: (argv: readonly string[]) => ExecResult;
   /** Semgrep's answer, with the request of the sandbox it runs in: no report by default. */
   semgrep?: (argv: readonly string[], req: SandboxRequest) => ExecResult;
+  /** crapper's and dryer's (ORC-280), with the request of the sandbox they run in: an empty report by default. */
+  quality?: (argv: readonly string[], req: SandboxRequest) => ExecResult;
 
   override async create(req: SandboxRequest) {
     const s = await super.create(req);
@@ -53,6 +56,7 @@ class LocalSandboxes extends FakeSandboxProvider {
     const args = argv.map((a) => (bundle ? a.replace(BUNDLE_TARGET, bundle) : a));
     if (args.includes('gitleaks')) return this.scan?.(args) ?? { stdout: '[]', stderr: '', code: 0 };
     if (args.includes('semgrep')) return this.semgrep?.(args, req) ?? { stdout: '{"results":[],"errors":[]}', stderr: '', code: 0 };
+    if (args.includes(QUALITY_SCRIPT)) return this.quality?.(args, req) ?? { stdout: '{"functions":[],"pairs":[]}', stderr: '', code: 0 };
     // What a test sets as a command comes as the wrapper's last word; what the factory runs itself comes as it is.
     const wrapped = args[0] === 'bash' && args[1] === '--norc' && args[2] === '-c';
     const shellCommand = wrapped ? args.at(-1)! : args[0] === 'timeout' ? args.at(-1)! : undefined;
@@ -1498,5 +1502,165 @@ describe('flaky tests in verify (ORC-164)', () => {
     expect(res).toMatchObject({ ok: true, failures: [] });
     expect(res.flaky).toBeUndefined();
     expect(sandboxes.created.map((c) => c.runId)).not.toContain('r1-verify-base');
+  });
+});
+
+describe('factory/qualité-diff (ORC-280)', () => {
+  const report = (functions: unknown[] = [], pairs: unknown[] = []) => ({ stdout: JSON.stringify({ functions, pairs }), stderr: '', code: 0 });
+  const grade = { path: 'src/a.ts', name: 'grade', start: 1, end: 3, cc: 9, coverage: 0, crap: 90 };
+
+  it('runs crapper and dryer after the commands, in their sandbox, on the files the diff adds lines to, and keeps what they list', async () => {
+    const { repo, sandboxes, req } = setup({ quality: true });
+    write(repo, 'src/a.ts', 'export function grade() {\n  return 1;\n}\n');
+    commit(repo, 'grade');
+    let seen: { argv: readonly string[]; box: SandboxRequest } | undefined;
+    sandboxes.quality = (argv, box) => ((seen = { argv, box }), report([grade]));
+    const res = await runCleanVerify(req);
+    expect(res).toMatchObject({ ok: true, failures: [] });
+    expect(res.quality).toEqual({ functions: [grade], pairs: [] });
+    expect(seen!.box).toMatchObject({ runId: 'r1-verify', network: 'none' });
+    expect(seen!.argv.slice(seen!.argv.indexOf('--') + 1).sort()).toEqual(['a.txt', 'src/a.ts']);
+  });
+
+  it('measures nothing when the request does not ask for it', async () => {
+    const { sandboxes, req } = setup();
+    let ran = false;
+    sandboxes.quality = () => ((ran = true), report());
+    const res = await runCleanVerify(req);
+    expect(ran).toBe(false);
+    expect(res.quality).toBeUndefined();
+  });
+
+  it('keeps the verdict green when the tools break down, and says why', async () => {
+    const { sandboxes, req } = setup({ quality: true });
+    sandboxes.quality = () => ({ stdout: '', stderr: 'python: not found', code: 127 });
+    const res = await runCleanVerify(req);
+    expect(res).toMatchObject({ ok: true, failures: [], quality: { unavailable: expect.stringContaining('python: not found') } });
+  });
+
+  it('asks vitest for an LCOV on its first run when the commit installs a coverage package, and reads it there', async () => {
+    const pkg = JSON.stringify({ devDependencies: { '@vitest/coverage-v8': '^5', vitest: '^5' } });
+    const { sandboxes, req } = setup({ quality: true, commands: ['npx vitest run'] }, undefined, { 'package.json': pkg });
+    sandboxes.answer = (command) => (command.includes('vitest run') ? { stdout: '', stderr: '', code: 0 } : undefined);
+    let argv: readonly string[] = [];
+    sandboxes.quality = (a) => ((argv = a), report());
+    await runCleanVerify(req);
+    const line = sandboxes.ran.find((r) => r.command.includes('vitest run'))!.command;
+    expect(line).toContain('--coverage.enabled --coverage.provider=v8 --coverage.reporter=lcov');
+    expect(line).toContain(`--coverage.reportsDirectory=${argv[5]}/0`);
+    expect(argv[6]).toBe('typescript');
+  });
+
+  it('a first run the coverage made fail is run again without it, whose exit is the verdict: the measure never fails the tests', async () => {
+    const pkg = JSON.stringify({ devDependencies: { '@vitest/coverage-v8': '^5' } });
+    const { sandboxes, req } = setup({ quality: true, commands: ['npx vitest run'] }, undefined, { 'package.json': pkg });
+    sandboxes.answer = (command) => (command.includes('vitest run') ? { stdout: '', stderr: 'MISSING DEPENDENCY', code: command.includes('--coverage') ? 1 : 0 } : undefined);
+    const res = await runCleanVerify(req);
+    expect(res).toMatchObject({ ok: true, failures: [] });
+    expect(sandboxes.ran.filter((r) => r.command.includes('vitest run')).map((r) => r.command.includes('--coverage'))).toEqual([true, false]);
+  });
+
+  /** The runner's JSON report where the command asks for it (`reportRun`): its tests, with their outcome. */
+  const reportTests = (command: string, tests: Record<string, 'passed' | 'failed'>) => {
+    const f = /factory-report-[\w-]+/.exec(command)?.[0];
+    const assertionResults = Object.entries(tests).map(([name, status]) => ({ fullName: name, title: name, status, duration: 5, failureMessages: status === 'failed' ? [`AssertionError: ${name}`] : [] }));
+    if (f) writeFileSync(join(process.env['TMPDIR'] || '/tmp', f), JSON.stringify({ testResults: [{ name: '/work/src/a.test.ts', assertionResults }] }));
+  };
+  /** The whole suite's runs, not the reruns of a test (`-t`): whether each asked for the coverage. */
+  const suiteRuns = (sandboxes: LocalSandboxes) => sandboxes.ran.filter((r) => r.command.includes('vitest run') && !r.command.includes(' -t ')).map((r) => r.command.includes('--coverage'));
+
+  it('a red first run whose report names a failing test is the verdict: a failing suite is not run twice', async () => {
+    const pkg = JSON.stringify({ devDependencies: { '@vitest/coverage-v8': '^5' } });
+    const { sandboxes, req } = setup({ quality: true, commands: ['npx vitest run'] }, undefined, { 'package.json': pkg });
+    sandboxes.answer = (command) => {
+      if (!command.includes('vitest run')) return undefined;
+      reportTests(command, { 'cart total': 'failed' });
+      return { stdout: '', stderr: 'AssertionError', code: 1 };
+    };
+    const res = await runCleanVerify(req);
+    expect(res.ok).toBe(false);
+    expect(suiteRuns(sandboxes)).toEqual([true]);
+  });
+
+  it.each([
+    'ERROR: Coverage for lines (80%) does not meet "src/**" threshold (95%)',
+    'ERROR: Uncovered lines (42) exceed "src/**" threshold (10)',
+  ])('a red first run whose report names no failing test failed for the coverage (a threshold the flags leave: %s), and is run again without it', async (missed) => {
+    const pkg = JSON.stringify({ devDependencies: { '@vitest/coverage-v8': '^5' } });
+    const { sandboxes, req } = setup({ quality: true, commands: ['npx vitest run'] }, undefined, { 'package.json': pkg });
+    sandboxes.answer = (command) => {
+      if (!command.includes('vitest run')) return undefined;
+      reportTests(command, { 'cart total': 'passed' });
+      // vitest writes its LCOV, then exits 1 on a glob's threshold: a percentage (`{ 'src/**': { lines: 95 } }`) or a count of uncovered lines (`lines: -10`).
+      const dir = /--coverage\.reportsDirectory=(\S+)/.exec(command)?.[1];
+      if (dir) write(dir, 'lcov.info', 'SF:src/a.ts\nend_of_record\n');
+      return { stdout: '', stderr: dir ? missed : '', code: dir ? 1 : 0 };
+    };
+    const res = await runCleanVerify(req);
+    rmSync(/factory-coverage-[^/]+/.exec(sandboxes.ran.find((r) => r.command.includes('reportsDirectory'))!.command)![0].replace(/^/, '/tmp/'), { recursive: true, force: true });
+    expect(res).toMatchObject({ ok: true, failures: [] });
+    expect(suiteRuns(sandboxes)).toEqual([true, false]);
+  });
+
+  it('a red first run with no test to name (a hook, an unhandled error) is the verdict once it wrote its LCOV: an intermittent failure does not vanish into a second run', async () => {
+    const pkg = JSON.stringify({ devDependencies: { '@vitest/coverage-v8': '^5' } });
+    for (const report of [undefined, { 'cart total': 'passed' as const }]) {
+      const { sandboxes, req } = setup({ quality: true, commands: ['npx vitest run'] }, undefined, { 'package.json': pkg });
+      sandboxes.answer = (command) => {
+        if (!command.includes('vitest run')) return undefined;
+        // A beforeAll that times out: no test failed, the report names none (or none at all), and the next run passes.
+        if (report) reportTests(command, report);
+        const dir = /--coverage\.reportsDirectory=(\S+)/.exec(command)?.[1];
+        if (dir) write(dir, 'lcov.info', 'SF:src/a.ts\nend_of_record\n');
+        return { stdout: '', stderr: dir ? 'Error: Hook timed out in 10000ms' : '', code: dir ? 1 : 0 };
+      };
+      const res = await runCleanVerify(req);
+      rmSync(/factory-coverage-[^/]+/.exec(sandboxes.ran.find((r) => r.command.includes('reportsDirectory'))!.command)![0].replace(/^/, '/tmp/'), { recursive: true, force: true });
+      expect(res.ok).toBe(false);
+      expect(suiteRuns(sandboxes)).toEqual([true]);
+    }
+  });
+
+  it('asks for the coverage once: a failing command and its reruns go without it', async () => {
+    const pkg = JSON.stringify({ devDependencies: { '@vitest/coverage-v8': '^5' } });
+    const { sandboxes, req } = setup({ quality: true, commands: ['npx vitest run'] }, undefined, { 'package.json': pkg });
+    sandboxes.answer = (command) => (command.includes('vitest run') ? { stdout: '', stderr: 'AssertionError', code: 1 } : undefined);
+    const res = await runCleanVerify(req);
+    expect(res.ok).toBe(false);
+    expect(sandboxes.ran.filter((r) => r.command.includes('--coverage'))).toHaveLength(1);
+  });
+
+  it('runs under a cap of its own, and a sandbox that rejects it leaves the verdict as it was', async () => {
+    const { sandboxes, req } = setup({ quality: true });
+    let argv: readonly string[] = [];
+    sandboxes.quality = (a) => {
+      argv = a;
+      throw new Error('the sandbox no longer responds');
+    };
+    const res = await runCleanVerify(req);
+    expect(argv.slice(0, 2)).toEqual(['timeout', '120']);
+    expect(res).toMatchObject({ ok: true, failures: [], quality: { unavailable: expect.stringContaining('no longer responds') } });
+  });
+
+  it('says a diff over 500 files is not measured', async () => {
+    // `max_diff` off: past its bounds the size check refuses the branch before anything runs.
+    const { repo, sandboxes, req } = setup({ quality: true, maxDiff: 'off' });
+    for (let i = 0; i < 501; i++) write(repo, `src/f${i}.ts`, `export const v${i} = ${i};\n`);
+    commit(repo, 'wide');
+    let ran = false;
+    sandboxes.quality = () => ((ran = true), report());
+    const res = await runCleanVerify(req);
+    expect(ran).toBe(false);
+    expect(res.quality).toMatchObject({ unavailable: expect.stringContaining('502 files') });
+  });
+
+  it('adds nothing to the tests when the commit has no coverage package, and reads no coverage', async () => {
+    const { sandboxes, req } = setup({ quality: true, commands: ['npx vitest run'] }, undefined, { 'package.json': JSON.stringify({ devDependencies: { vitest: '^5' } }) });
+    sandboxes.answer = (command) => (command.includes('vitest run') ? { stdout: '', stderr: '', code: 0 } : undefined);
+    let argv: readonly string[] = [];
+    sandboxes.quality = (a) => ((argv = a), report());
+    await runCleanVerify(req);
+    expect(sandboxes.ran.find((r) => r.command.includes('vitest run'))!.command).not.toContain('--coverage');
+    expect(argv[6]).toBe('');
   });
 });

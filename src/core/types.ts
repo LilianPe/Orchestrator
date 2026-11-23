@@ -7,6 +7,7 @@ import type { SpecVersion } from './spec.js';
 import type { FlakyTest } from '../checks/flaky.js';
 import type { FrozenTests } from '../checks/freeze.js';
 import type { RedCause } from '../checks/red.js';
+import type { DiffQuality } from '../checks/diff-quality.js';
 import type { VisualProof } from '../checks/visual-proof.js';
 import type { ReviewLens } from './workflow.js';
 
@@ -362,7 +363,7 @@ export interface EventPayloads {
   /** `visualProof`: what `verify` decided and took of the visual proof (ORC-176), the captures by their hash. */
   /** `flaky`: the failing tests `verify` reran (ORC-164), with the cause of each attempt; on a pass, only indicative ones. */
   /** `diffClass`: the class of the diff of `sha` against the default branch (ORC-198); absent on a commit found green again, or before ORC-198. */
-  'verify.passed': { runId: string; job: string; output?: AgentOutput; red?: RedCause; frozen?: FrozenTests; sha?: string; commands?: readonly string[]; visualProof?: VisualProof; flaky?: FlakyTest[]; diffClass?: ClassifiedDiff };
+  'verify.passed': { runId: string; job: string; output?: AgentOutput; red?: RedCause; frozen?: FrozenTests; sha?: string; commands?: readonly string[]; visualProof?: VisualProof; flaky?: FlakyTest[]; diffClass?: ClassifiedDiff; quality?: DiffQuality };
   /** `tree`: fingerprint of the content checked when the check failed: the commit's tree in a clean check, absent outside git (ORC-187). */
   'verify.failed': { runId: string; job: string; failures: VerifyFailure[]; tree?: string; red?: RedCause; frozen?: FrozenTests; flaky?: FlakyTest[] };
   /**
