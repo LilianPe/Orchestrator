@@ -96,7 +96,7 @@ describe('vault secret source', () => {
     const file = join(dir, 'token');
     writeFileSync(file, `${TOKEN}\n`, { mode: 0o644 });
     const source = vaultKind.create({ address, token_file: file, mount: 'kv' }, {});
-    await expect(source.read('app/github#key')).rejects.toThrow(`the token_file ${file} is readable by any user: chmod 600 it (640 for a Vault Agent of its group)`);
+    await expect(source.read('app/github#key')).rejects.toThrow(`the token_file ${file} is readable or writable by any user: chmod 600 it (640 for a Vault Agent of its group)`);
     chmodSync(file, 0o640);
     expect(await source.read('app/github#key')).toBe('pem-secret-value');
   });
@@ -175,6 +175,19 @@ describe('vault secret source', () => {
   it('knows the rotation date of a field by its version, and none for a field it does not hold', async () => {
     expect((await vault().describe!('app/github#key')).rotatedAt).toEqual(ROTATED);
     expect(await vault().describe!('app/github#absent')).toEqual({});
+  });
+});
+
+describe('doctor on a vault source', () => {
+  it('lists a token_file once, as a key in a file, and gives the token_file advice to the token alone', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-vault-'));
+    const env = { VAULT_ADDR: 'https://vault.example.com', VAULT_TOKEN_FILE: '/run/vault/token' };
+    writeFileSync(join(home, 'factory.yml'), 'secret_sources:\n  coffre: { kind: vault, address: env:VAULT_ADDR, token_file: env:VAULT_TOKEN_FILE }\n');
+    const reports = await serverSecretReport(home, env);
+    expect(reports.filter((r) => r.key.startsWith('secret_sources.')).map((r) => [r.key, r.reference, r.warnings[0]])).toEqual([
+      ['secret_sources.coffre.address', 'env:VAULT_ADDR', "in clear in the daemon's environment: a sealed source (systemd-creds) keeps it off the disk"],
+      ['secret_sources.coffre.token_file', '/run/vault/token', 'in clear in a file, the key to every secret of its source: no other user may read or write it (its group may, for a Vault Agent\'s token_file)'],
+    ]);
   });
 });
 

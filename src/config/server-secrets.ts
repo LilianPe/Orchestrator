@@ -13,7 +13,7 @@ export const ROTATION_MAX_DAYS = 180;
 
 const IN_CLEAR_ENV = "in clear in the daemon's environment: a sealed source (systemd-creds) keeps it off the disk";
 const IN_CLEAR_ENV_OPTION = "in clear in the daemon's environment, where a source's options are read from: a file option (vault's token_file) keeps it out of it";
-const IN_CLEAR_KEY_FILE = 'in clear in a file, the key to every secret of its source: keep it the daemon user\'s alone';
+const IN_CLEAR_KEY_FILE = "in clear in a file, the key to every secret of its source: no other user may read or write it (its group may, for a Vault Agent's token_file)";
 const IN_CLEAR_FILE = "in clear in a file, its owner's alone: for a workstation; on a server, a sealed source (systemd-creds) keeps it off the disk";
 
 export interface SealedFactoryYml {
@@ -108,7 +108,15 @@ export async function serverSecretReport(
   const yml = text === undefined ? undefined : parseFactoryYml(text, env, kinds, 'defer');
   const sources = openSecretSources(yml?.secretSources, kinds, env);
   const reports: SecretReport[] = [];
-  for (const [key, ref] of Object.entries(yml?.secretRefs ?? {})) reports.push(await describeRef(key, ref, yml, sources, now));
+  /** The keys of the sources' options its adapter names in `field`, `secret_sources.<name>.<option>`. */
+  const optionKeys = (field: 'credentialOptions' | 'credentialFiles'): Set<string> =>
+    new Set(Object.entries(yml?.secretSources ?? {}).flatMap(([name, decl]) => (kinds[decl.kind]?.[field] ?? []).map((option) => `secret_sources.${name}.${option}`)));
+  const credentials = optionKeys('credentialOptions');
+  const keyFiles = optionKeys('credentialFiles');
+  for (const [key, ref] of Object.entries(yml?.secretRefs ?? {})) {
+    // A key file's path written `env:NAME`: said once, below, by the file it names.
+    if (!keyFiles.has(key)) reports.push(await describeRef(key, ref, yml, sources, now, credentials.has(key)));
+  }
   // A source's own key, in clear on the disk though the secrets it opens are sealed (ORC-418).
   for (const [name, decl] of Object.entries(yml?.secretSources ?? {})) {
     for (const option of kinds[decl.kind]?.credentialFiles ?? []) {
@@ -135,11 +143,18 @@ export async function serverSecretReport(
   return reports;
 }
 
-async function describeRef(key: string, ref: SecretRef, yml: FactoryYml | undefined, sources: Record<string, SecretSource>, now: number): Promise<SecretReport> {
+async function describeRef(
+  key: string,
+  ref: SecretRef,
+  yml: FactoryYml | undefined,
+  sources: Record<string, SecretSource>,
+  now: number,
+  /** A source's credential option (`credentialOptions`): read from the environment alone, it cannot move to a sealed source. */
+  sourceCredential = false,
+): Promise<SecretReport> {
   const reference = refText(ref);
   const kind = ref.source === 'env' ? 'env' : yml?.secretSources?.[ref.source]?.kind;
-  // A source's option cannot move to a sealed source (only `env:NAME` resolves one).
-  if (kind === 'env') return { key, reference, inClear: true, warnings: [key.startsWith('secret_sources.') ? IN_CLEAR_ENV_OPTION : IN_CLEAR_ENV] };
+  if (kind === 'env') return { key, reference, inClear: true, warnings: [sourceCredential ? IN_CLEAR_ENV_OPTION : IN_CLEAR_ENV] };
   // A workstation's key, mode 0600 (ORC-470): in clear on its disk all the same.
   const inClear = kind === 'file';
   const clear = inClear ? [IN_CLEAR_FILE] : [];
