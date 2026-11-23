@@ -19,7 +19,7 @@ export async function checkCredentialFile(path: string, what: string, mask: numb
   } catch (err) {
     throw new Error(errnoCode(err) === 'ENOENT' ? `no ${what} ${path}` : `the ${what} ${path} could not be read`, { cause: err });
   }
-  if (process.platform !== 'win32' && (mode & mask) !== 0) throw new Error(`the ${what} ${path} is readable by ${fault}`);
+  if (process.platform !== 'win32' && (mode & mask) !== 0) throw new Error(`the ${what} ${path} is readable or writable by ${fault}`);
 }
 
 /**

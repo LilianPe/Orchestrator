@@ -88,7 +88,7 @@ describe.skipIf(!posix)('sops secret source', () => {
   it('refuses an age_key_file others than its owner can read, before running sops: it opens every secret', async () => {
     const f = fixture();
     chmodSync(f.keyFile, 0o640);
-    await expect(sops(f).read('github.key')).rejects.toThrow(`the age_key_file ${f.keyFile} is readable by others than its owner: chmod 600 it`);
+    await expect(sops(f).read('github.key')).rejects.toThrow(`the age_key_file ${f.keyFile} is readable or writable by others than its owner: chmod 600 it`);
     expect(calls(f)).toEqual([]);
     chmodSync(f.keyFile, 0o600);
     expect(await sops(f).read('github.key')).toBe('pem-secret-value');
