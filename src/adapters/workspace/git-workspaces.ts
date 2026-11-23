@@ -122,12 +122,13 @@ const FETCH_GRACE_MS = 5_000;
  * git and what stayed in its process group (its ssh) are killed, and the launch stops waiting a few seconds later
  * whatever still holds git's output. A failure's message reaches the ticket (Linear): it names neither the server's
  * path nor the command, which go to `log`. `refspecs`: what to fetch, instead of what the remote's config says. `auth`: the
- * App's token for a private repository (ORC-442), in git's environment.
+ * App's token for a private repository (ORC-442), in git's environment. `prune`: the refs of what the forge no longer has go,
+ * within what is fetched (ORC-486).
  */
-export async function fetchOrigin(exec: Exec, repo: string, o: { deadlineMs?: number; log?: (message: string) => void; refspecs?: readonly string[]; auth?: CloneAuth } = {}): Promise<void> {
+export async function fetchOrigin(exec: Exec, repo: string, o: { deadlineMs?: number; log?: (message: string) => void; refspecs?: readonly string[]; auth?: CloneAuth; prune?: boolean } = {}): Promise<void> {
   const deadlineMs = o.deadlineMs ?? FETCH_DEADLINE_MS;
   const silent = `the forge no longer responds after ${deadlineMs / 1000} s`;
-  const args = ['-C', repo, 'fetch', '--quiet', 'origin', ...(o.refspecs ?? [])];
+  const args = ['-C', repo, 'fetch', '--quiet', ...(o.prune ? ['--prune'] : []), 'origin', ...(o.refspecs ?? [])];
   const expired = () => o.log?.(`git ${args.join(' ')}: killed at ${deadlineMs / 1000} s, its output still held ${FETCH_GRACE_MS / 1000} s later by a process out of its group`);
   // A forge silent past the deadline, whichever of git or `within` gives up first: a timeout (`isTransient`, ORC-343).
   const timedOut = () => Object.assign(new Error(silent), { code: 'ETIMEDOUT' });
