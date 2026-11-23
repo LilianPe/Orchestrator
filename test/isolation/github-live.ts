@@ -23,7 +23,7 @@ export function appOptions(): GitHubAppForgeOptions {
   return {
     appId: process.env['FACTORY_ISO_GH_APP_ID']!.trim(),
     privateKey: readPrivateKey(process.env['FACTORY_ISO_GH_APP_KEY']!),
-    ...(installationId ? { installationId } : {}),
+    ...(installationId ? { installationId: Number(installationId) } : {}),
   };
 }
 

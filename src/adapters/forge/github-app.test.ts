@@ -67,7 +67,7 @@ function checksRoutes(runs: unknown[], statuses: unknown[]): Route[] {
 
 function makeForge(
   routes: Route[],
-  opts: { now?: () => number; calls?: Call[]; log?: (m: string) => void; installationId?: string | number } = {},
+  opts: { now?: () => number; calls?: Call[]; log?: (m: string) => void; installationId?: number } = {},
 ) {
   const calls = opts.calls ?? [];
   const forge = new GitHubAppForge({

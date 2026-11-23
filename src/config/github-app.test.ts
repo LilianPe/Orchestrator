@@ -23,7 +23,7 @@ describe('GitHub App configuration', () => {
       GH_APP_KEY: PEM.replace(/\n/g, '\\n'),
       GH_APP_INSTALLATION_ID: '42',
     });
-    expect(settings).toMatchObject({ appId: '123', installationId: '42' });
+    expect(settings).toMatchObject({ appId: '123', installationId: 42 });
     expect(settings!.privateKey).toBe(`${PEM}\n`);
   });
 
@@ -32,7 +32,7 @@ describe('GitHub App configuration', () => {
       { ...base(), github: { appId: '7', privateKey: PEM, installationId: '99' } },
       { GH_APP_ID: '123', GH_APP_KEY: 'ignored', GH_APP_INSTALLATION_ID: '42' },
     );
-    expect(settings).toMatchObject({ appId: '7', installationId: '99' });
+    expect(settings).toMatchObject({ appId: '7', installationId: 99 });
   });
 
   it('reads a PEM from a file path instead of inlining it', () => {
@@ -65,5 +65,29 @@ describe('GitHub App configuration', () => {
 
   it('accepts a numeric app id from YAML', () => {
     expect(effectiveInstance(parseFactoryYml('github: { app_id: 123, private_key: env:GH_APP_KEY }\n', { GH_APP_KEY: PEM })).github).toEqual({ appId: '123', privateKey: PEM });
+  });
+
+  it('keeps the pinned installation as a number, from YAML written 42 or "42", or from GH_APP_INSTALLATION_ID (ORC-490)', () => {
+    const pinned = (installationId: string | undefined, env: NodeJS.ProcessEnv = {}) => {
+      const key = installationId === undefined ? '' : `, installation_id: ${installationId}`;
+      return resolveGithubApp(effectiveInstance(parseFactoryYml(`github: { app_id: 123, private_key: env:GH_APP_KEY${key} }\n`, { GH_APP_KEY: PEM })), env)?.installationId;
+    };
+    expect(pinned('42')).toBe(42);
+    expect(pinned('"42"')).toBe(42);
+    expect(pinned(undefined, { GH_APP_INSTALLATION_ID: ' 42 ' })).toBe(42);
+    // A leading zero changes nothing: YAML reads `042` unquoted as 42 already, its quoted form is the same id.
+    expect(pinned('"042"')).toBe(42);
+    expect(pinned(undefined)).toBeUndefined();
+  });
+
+  it('refuses at the start a pinned installation that is not a positive integer, saying what to write (ORC-490)', () => {
+    const start = (installationId: string) => () => resolveGithubApp({ ...base(), github: { appId: '7', privateKey: PEM, installationId } }, {});
+    for (const written of ['abc', '0', '-42', '4.2', '42abc', '1e3', '99999999999999999999']) {
+      expect(start(written)).toThrow(`github.installation_id: "${written}" is not an installation id.`);
+    }
+    expect(start('abc')).toThrow(/Write the positive integer GitHub shows at the end of the installation's URL .*settings\/installations\/<id>/);
+    expect(() => resolveGithubApp(base(), { GH_APP_ID: '7', GH_APP_KEY: PEM, GH_APP_INSTALLATION_ID: 'abc' })).toThrow(/^GH_APP_INSTALLATION_ID: "abc" is not an installation id/);
+    // factory.yml's key hides the variable: the refusal names the key read.
+    expect(() => resolveGithubApp({ ...base(), github: { appId: '7', privateKey: PEM, installationId: 'abc' } }, { GH_APP_INSTALLATION_ID: '42' })).toThrow(/^github\.installation_id: "abc"/);
   });
 });

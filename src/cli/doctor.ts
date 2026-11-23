@@ -228,7 +228,7 @@ export interface DoctorOptions {
   /** The knowledge base's repository on GitHub (`knowledge.github`, ORC-481): the App must read and push it. */
   knowledge?: string;
   /** The installation factory.yml pins (`github.installation_id`): the one covering the repository and the knowledge base's, when set (ORC-489). */
-  installationId?: string;
+  installationId?: number;
   api: DoctorApi;
   /** The host the daemon runs on (`checkHost`). */
   host: HostReport;
@@ -719,7 +719,7 @@ export interface InstallationReport {
   /** The installation covering the repository, absent when it could not be read (ORC-489). */
   id?: number;
   /** The pinned installation (`github.installation_id`), set when it is not the one covering the repository: refused for it alone (ORC-489). */
-  pinned?: string;
+  pinned?: number;
   /** As GitHub granted them to the installation, absent when it could not be read. */
   permissions?: Record<string, string>;
   /** `unchecked`: the call failed (network, authentication), said with a warning, never a refusal (ORC-439). */
@@ -843,9 +843,8 @@ function unreadInstallation(error: unknown): InstallationReport {
  * Why the installation covering `github` is not the one factory.yml pins (ORC-489): the daemon asks every token of the pinned
  * installation, which cannot reach `github` then. Nothing without a pin: the daemon finds each repository's installation itself.
  */
-function otherInstallation(github: string, id: number, pinned: string): string | undefined {
-  // Compared as numbers: a pin written `"042"` names installation 42.
-  if (/^\d+$/.test(pinned) && Number(pinned) === id) return undefined;
+function otherInstallation(github: string, id: number, pinned: number): string | undefined {
+  if (pinned === id) return undefined;
   return (
     `installation ${id} of the App covers ${github}, not the pinned installation ${pinned}: the daemon asks its tokens of ${pinned}, which cannot reach it. ` +
     `Either add ${github} to installation ${pinned} (Settings → Applications → Installed GitHub Apps → Configure → Repository access), ` +
@@ -857,13 +856,13 @@ function otherInstallation(github: string, id: number, pinned: string): string |
  * The installation's verdict, its id kept. Not the pinned one (ORC-489), it is refused alone: the daemon never uses its
  * permissions, and the pinned installation's are unread.
  */
-function judgeCovering(github: string, { id, permissions }: Installation, pinned: string | undefined): InstallationReport {
+function judgeCovering(github: string, { id, permissions }: Installation, pinned: number | undefined): InstallationReport {
   const other = pinned === undefined ? undefined : otherInstallation(github, id, pinned);
   return other === undefined ? { id, ...judgeInstallation(permissions) } : { id, pinned, verdict: 'refused', reasons: [other] };
 }
 
 /** The result's refusal of a repository the pinned installation does not cover (ORC-489). */
-const uncoveredBy = (pinned: string, github: string) => `the pinned GitHub App installation ${pinned} does not cover ${github}`;
+const uncoveredBy = (pinned: number, github: string) => `the pinned GitHub App installation ${pinned} does not cover ${github}`;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -1008,7 +1007,7 @@ export interface KnowledgeReport {
   /** The installation covering it, absent when it could not be read (ORC-489). */
   installation?: number;
   /** The pinned installation, set when it is not the one covering it: refused for it alone (ORC-489). */
-  pinned?: string;
+  pinned?: number;
   verdict: Verdict;
   reasons: string[];
 }
@@ -1018,7 +1017,7 @@ export interface KnowledgeReport {
  * notes with the installation's token, which needs Contents in write. An installation that cannot be read there refuses, whatever
  * the cause, a network failure included (stricter than `unreadInstallation`, on purpose): doctor cannot tell then that the push will go.
  */
-async function judgeKnowledge(api: DoctorApi, github: string, pinned: string | undefined): Promise<KnowledgeReport> {
+async function judgeKnowledge(api: DoctorApi, github: string, pinned: number | undefined): Promise<KnowledgeReport> {
   let installation: Installation;
   try {
     installation = await api.installation(github);

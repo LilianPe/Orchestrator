@@ -115,7 +115,7 @@ function workflow(content: string, path = '.github/workflows/ci.yml'): WorkflowS
 async function doctor(
   workflows: WorkflowSource[],
   environments: EnvironmentProtection[] = [],
-  options: { json?: boolean; fake?: FakeOptions; naming?: BranchNaming; checkout?: string; commands?: Record<string, string>; host?: HostReport; knowledge?: string; pinned?: string } = {},
+  options: { json?: boolean; fake?: FakeOptions; naming?: BranchNaming; checkout?: string; commands?: Record<string, string>; host?: HostReport; knowledge?: string; pinned?: number } = {},
 ): Promise<{ code: number; lines: string[]; text: string; api: FakeApi }> {
   const api = new FakeApi(workflows, environments, options.fake);
   const lines: string[] = [];
@@ -613,6 +613,12 @@ jobs:
     const refused = await runDoctorCommand({ checkout: '/repo', home, env: { FACTORY_CONTAINER_CLI: 'docker', ...RUNNER, GH_APP_KEY: pemPath }, out: (line) => pinned.push(line), http, exec, now: () => now });
     expect(refused).toBe(1);
     expect(pinned.join('\n')).toContain('Knowledge base acme/notes: refused — installation 77 of the App covers acme/notes, not the pinned installation 42');
+    // A pin written with a leading zero names installation 42 (ORC-490): its tokens are asked of 42, the only route served.
+    notesInstallation = 42;
+    writeFileSync(join(home, 'factory.yml'), 'github:\n  app_id: "123"\n  private_key: env:GH_APP_KEY\n  installation_id: "042"\nknowledge:\n  github: acme/notes\n');
+    const zero: string[] = [];
+    expect(await runDoctorCommand({ checkout: '/repo', home, env: { FACTORY_CONTAINER_CLI: 'docker', ...RUNNER, GH_APP_KEY: pemPath }, out: (line) => zero.push(line), http, exec, now: () => now })).toBe(0);
+    expect(zero.join('\n')).toContain('Knowledge base acme/notes: accepted');
   });
 
   it('refuses a repository whose origin is not on GitHub, as the start refuses it, before any call to GitHub (ORC-478)', async () => {
@@ -1121,6 +1127,12 @@ describe("the daemon's start refusals, each one doctor's", () => {
     'the Smee relay with dev: false': { instance: { ...local, relay: smee, dev: false }, reason: /^relay: \{ kind: smee \}.*\(dev: false\)/ },
     'the Smee relay beside a publicUrl in the development mode': { instance: { ...local, relay: smee, dev: true, publicUrl: 'https://f.example.com' }, reason: /^relay: \{ kind: smee \} in factory\.yml beside public_url/ },
     'half the GitHub App': { env: { GH_APP_ID: '456' }, reason: /^Incomplete GitHub App configuration/ },
+    // ORC-490: never left for doctor to report as another installation.
+    'a pinned installation that is not an integer': {
+      factoryYml: 'github: { app_id: 456, private_key: env:GH_APP_KEY, installation_id: abc }\n',
+      env: { GH_APP_KEY: '-----BEGIN PRIVATE KEY-----\nMIIBfake\n-----END PRIVATE KEY-----' },
+      reason: /^github\.installation_id: "abc" is not an installation id\. Write the positive integer/,
+    },
     'a status no step shows': { factoryYml: 'statuses: { nope: Todo }\n', reason: /^factory\.yml: statuses\.nope: is not a step/ },
     'a step setting of no agent step': { factoryYml: 'budgets: { max_turns: { nope: 3 } }\n', reason: /^factory\.yml: budgets\.max_turns\.nope: not an agent step/ },
     'a Claude token a header cannot carry': { env: { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-x\r\nX-Injected: 1' }, reason: /^CLAUDE_CODE_OAUTH_TOKEN: the Claude token holds a character/ },
@@ -1705,25 +1717,25 @@ describe("the knowledge base's repository, which the daemon reads and pushes wit
 
 describe('the installation factory.yml pins (github.installation_id), which the daemon asks every token of (ORC-489)', () => {
   it('accepts the target and the knowledge base when the pinned installation covers both', async () => {
-    const result = await doctor([], [], { knowledge: 'acme/notes', pinned: '42' });
+    const result = await doctor([], [], { knowledge: 'acme/notes', pinned: 42 });
     expect(result.code).toBe(0);
     expect(result.text).toContain('GitHub App installation: accepted');
     expect(result.text).toContain('Knowledge base acme/notes: accepted');
   });
 
   it('refuses a knowledge base another installation covers, naming it and how to fix it', async () => {
-    const result = await doctor([], [], { knowledge: 'acme/notes', pinned: '42', fake: { knowledgeInstallationId: 77 } });
+    const result = await doctor([], [], { knowledge: 'acme/notes', pinned: 42, fake: { knowledgeInstallationId: 77 } });
     expect(result.code).toBe(1);
     const line = result.lines.find((l) => l.startsWith('Knowledge base acme/notes: refused'));
     for (const named of ['installation 77 of the App covers acme/notes, not the pinned installation 42', 'add acme/notes to installation 42', 'Repository access', 'github.installation_id']) expect(line).toContain(named);
     expect(result.text).toContain('GitHub App installation: accepted');
     expect(result.text).toContain('Result: refused — the pinned GitHub App installation 42 does not cover the knowledge base acme/notes');
-    const json = JSON.parse((await doctor([], [], { json: true, knowledge: 'acme/notes', pinned: '42', fake: { knowledgeInstallationId: 77 } })).text) as { knowledge: object };
-    expect(json.knowledge).toMatchObject({ github: 'acme/notes', installation: 77, pinned: '42', verdict: 'refused' });
+    const json = JSON.parse((await doctor([], [], { json: true, knowledge: 'acme/notes', pinned: 42, fake: { knowledgeInstallationId: 77 } })).text) as { knowledge: object };
+    expect(json.knowledge).toMatchObject({ github: 'acme/notes', installation: 77, pinned: 42, verdict: 'refused' });
   });
 
   it('refuses a target repository another installation covers, naming it and how to fix it', async () => {
-    const result = await doctor([], [], { pinned: '42', fake: { installationId: 77 } });
+    const result = await doctor([], [], { pinned: 42, fake: { installationId: 77 } });
     expect(result.code).toBe(1);
     const line = result.lines.find((l) => l.startsWith('GitHub App installation: refused'));
     for (const named of ['installation 77 of the App covers acme/app, not the pinned installation 42', 'add acme/app to installation 42', 'github.installation_id']) expect(line).toContain(named);
@@ -1733,18 +1745,14 @@ describe('the installation factory.yml pins (github.installation_id), which the 
   it("names the pin as the cause when its token cannot read the repository's workflows, as GitHub answers then", async () => {
     // The token of an installation that does not cover the repository: 422 on its request, so no workflow nor protection is read.
     const fake = { installationId: 77, failWorkflows: true, failProtection: true, permissions: { administration: 'write' } };
-    const result = await doctor([], [], { pinned: '42', fake });
+    const result = await doctor([], [], { pinned: 42, fake });
     expect(result.code).toBe(1);
     expect(result.lines.at(-1)).toBe('Result: refused — the pinned GitHub App installation 42 does not cover acme/app: its token cannot read the repository (Cannot read the workflows: 403 Resource not accessible).');
     // That installation's permissions are none of the daemon's: not judged.
     expect(result.text).not.toContain('Administration');
-    const json = JSON.parse((await doctor([], [], { json: true, pinned: '42', fake })).text) as { error: string; installation: object };
+    const json = JSON.parse((await doctor([], [], { json: true, pinned: 42, fake })).text) as { error: string; installation: object };
     expect(json.error).toContain('the pinned GitHub App installation 42 does not cover acme/app');
-    expect(json.installation).toEqual({ id: 77, pinned: '42', verdict: 'refused', reasons: [expect.stringContaining('installation 77 of the App covers acme/app')] });
-  });
-
-  it('takes a pin written with leading zeros for the installation it names', async () => {
-    expect((await doctor([], [], { knowledge: 'acme/notes', pinned: '042' })).code).toBe(0);
+    expect(json.installation).toEqual({ id: 77, pinned: 42, verdict: 'refused', reasons: [expect.stringContaining('installation 77 of the App covers acme/app')] });
   });
 
   it('compares nothing without a pin: any installation of the App is the one the daemon finds', async () => {
