@@ -65,17 +65,14 @@ describe('readQuality, what reaches the journal', () => {
 });
 
 describe('qualityArgv', () => {
-  it('runs the script with its own interpreter, isolated, under the cap, on the paths after a `--`', () => {
-    const argv = qualityArgv({ coverageDir: '/tmp/cov', covered: ['typescript'], files: ['-odd.ts', 'src/a.ts'], timeoutS: 900 });
-    expect(argv.slice(0, 4)).toEqual(['timeout', '900', '/opt/quality/crapper/bin/python', '-I']);
-    expect(argv).toContain('/usr/local/share/factory/quality/diff_quality.py');
-    expect(argv.slice(argv.indexOf('--coverage'), argv.indexOf('--coverage') + 4)).toEqual(['--coverage', '/tmp/cov', '--covered', 'typescript']);
-    expect(argv.slice(argv.indexOf('--') + 1)).toEqual(['-odd.ts', 'src/a.ts']);
+  it('runs the script with its own interpreter, isolated, under its cap, on the paths after a `--`', () => {
+    const argv = qualityArgv({ coverageDir: '/tmp/cov', covered: ['typescript', 'python'], files: ['-odd.ts', 'src/a.ts'] });
+    expect(argv).toEqual(['timeout', '120', '/opt/quality/crapper/bin/python', '-I', '/usr/local/share/factory/quality/diff_quality.py', '/tmp/cov', 'typescript,python', '0.82', '--', '-odd.ts', 'src/a.ts']);
   });
 });
 
 describe('coverageOf', () => {
-  const at = (files: Record<string, string>) => ({ showAtHead: async (p: string) => files[p] });
+  const at = (files: Record<string, string>) => async (p: string) => files[p];
 
   it('asks vitest for an LCOV, with the provider the commit installs, and thresholds that cannot fail the run', async () => {
     const c = await coverageOf('vitest', at({ 'package.json': JSON.stringify({ devDependencies: { '@vitest/coverage-istanbul': '^5' } }) }));
@@ -86,6 +83,7 @@ describe('coverageOf', () => {
     expect(flags).toContain('--coverage.reporter=lcov');
     expect(flags).toContain('--coverage.reportsDirectory=/tmp/cov/0');
     expect(flags).toContain('--coverage.thresholds.lines=0');
+    expect(flags).toContain('--coverage.reportOnFailure');
   });
 
   it('adds nothing to vitest without a coverage package in the commit', async () => {
@@ -103,6 +101,7 @@ describe('coverageOf', () => {
 
   it('asks pytest for an LCOV only when pytest-cov is declared in the commit', async () => {
     expect(await coverageOf('pytest', at({ 'pyproject.toml': '[project]\ndependencies = ["pytest"]\n' }))).toBeUndefined();
+    expect(await coverageOf('pytest', at({ 'pyproject.toml': '[dependency-groups]\ndev = ["pytest-cov>=6"]\n' }))).toMatchObject({ language: 'python' });
     const c = await coverageOf('pytest', at({ 'requirements-dev.txt': 'pytest==8.3\npytest-cov==6.0\n' }));
     expect(c?.language).toBe('python');
     expect(c!.flags('/tmp/cov/2')).toContain('--cov-report=lcov:/tmp/cov/2/pytest.lcov');
@@ -130,7 +129,7 @@ describe('diffQualityCheck', () => {
 
   it('clips a path or a name past 120 characters: the summary and the PR keep their size', () => {
     const long = `src/${'x'.repeat(300)}.ts`;
-    const r = diffQualityCheck(q({ functions: [{ path: long, name: 'n'.repeat(300), start: 1, end: 9, cc: 7, coverage: null, crap: null }] }));
+    const r = diffQualityCheck(readQuality(ok({ functions: [fn({ path: long, name: 'n'.repeat(300), cc: 7 })], pairs: [] }), added({ [long]: [2] })));
     expect(r.summary).not.toContain('x'.repeat(130));
     expect(r.summary).not.toContain('n'.repeat(130));
     expect(r.summary).toContain('…');

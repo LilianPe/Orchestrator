@@ -43,7 +43,7 @@ export const CAPTURES_KEPT_MS = 30 * DAY_MS;
 const publishFacts = (t: TicketState, c: Extract<Effect, { kind: 'publish' }>) => ({
   ticketId: t.ticketId, title: t.title, sha: c.sha, ...(c.commands ? { commands: c.commands } : {}), ...(t.visualProof ? { visualProof: t.visualProof } : {}),
   ...(c.visualProof?.start ? { start: c.visualProof.start } : {}),
-  ...(c.quality && worstOfQuality(c.quality).length ? { lookFirst: worstOfQuality(c.quality) } : {}),
+  ...(c.quality ? { lookFirst: worstOfQuality(c.quality) } : {}),
 });
 
 /** A session's plan as the store keeps it (ORC-171): the session is that of the delegation that opened it. */

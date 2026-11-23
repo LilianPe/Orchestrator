@@ -161,7 +161,7 @@ The coverage is that of the repository's own tests, asked for as an LCOV report 
 | jest | always: jest carries its coverage | `--coverage --coverageReporters=lcov`, `--coverageThreshold='{}'` |
 | pytest | `pytest-cov` in `pyproject.toml`, `setup.cfg`, `setup.py`, `Pipfile` or a root `requirements*.txt` | `--cov=. --cov-report=lcov:… --cov-fail-under=0` |
 
-The thresholds a repository sets are emptied, so that the measure never fails its tests; and a first run that fails with the coverage is run again without it, whose exit alone is the verdict (a coverage package declared but not installed, an instrumentation too slow). Without a report that names its file, a function has no CRAP score: the check lists it by its complexity, past CC 5, with « coverage unknown ». The coverage is what the commit's tests report, measured after they ran: an indication for the reviewer, not a proof. Thresholds that block will come after twenty tickets measured, in a ticket of their own.
+The thresholds a repository sets are emptied, so that the measure never fails its tests; the report is written even when a test fails, and a first run that fails without writing it failed for the coverage (a package declared but not installed, an instrumentation too slow): it is run again without, and that run's exit alone is the verdict. Without a report that names its file, a function has no CRAP score: the check lists it by its complexity, past CC 5, with « coverage unknown ». The coverage is what the commit's tests report, measured after they ran: an indication for the reviewer, not a proof. Thresholds that block will come after twenty tickets measured, in a ticket of their own.
 
 ## The agent's network
 

@@ -12,7 +12,7 @@ import { DIFF_SIZE_CHECK, diffSizeCheck } from '../checks/diff-size.js';
 import { needsBase, rerunOnBase, runAndRerun, settle, type CommandRun, type FlakyTest, type KnownFlaky, type Run, type Standing } from '../checks/flaky.js';
 import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '../checks/freeze.js';
 import { checkForbiddenPaths, FORBIDDEN_CHECK, type ForbiddenView } from '../checks/forbidden-paths.js';
-import { coverageOf, QUALITY_TIMEOUT_S, qualityArgv, readQuality, type CoverageAsk, type DiffQuality } from '../checks/diff-quality.js';
+import { coverageOf, QUALITY_MAX_FILES, qualityArgv, readQuality, unmeasured, type CoverageAsk, type DiffQuality } from '../checks/diff-quality.js';
 import { mdCode } from '../checks/markdown.js';
 import { REPORT_FLAGS, testCommand, type Runner } from '../checks/red.js';
 import type { PackageRegistry, RegistryOpener } from '../checks/registry.js';
@@ -227,14 +227,15 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const diff = await readDiff(git, from, sha);
     failures.push(...checkSize(diff, config, req.maxDiff === 'off'));
     const manifests = failures.length ? [] : await changedManifests(git, from, sha);
+    // The regular files the diff adds lines to, with those lines: what Semgrep scans, and what the measure reads (ORC-280).
+    const addedFiles = diff && (req.semgrep || req.quality) ? await scanned(git, from, sha, diff) : new Map<string, Set<number>>();
     // Refused already: not scanned, as nothing of it is installed or run. A breakdown of the scan would hide the verdict.
-    const added = req.semgrep && diff && !failures.length ? await scanned(git, from, sha, diff) : new Map<string, Set<number>>();
+    const added = req.semgrep && !failures.length ? addedFiles : new Map<string, Set<number>>();
     const rules = added.size ? await repoRules(git, rulesDir) : [];
     const { proof, shooting, probe } = await planVisual(req.visual, { git, from, sha, config, refused: failures.length > 0 });
     // Read before any code of the agent has run: the runner of each command, and the base checked out for the reruns there.
-    const tests = await testCommands(git, sha, commands);
-    const coverage = req.quality ? await coverageAsks(git, sha, commands, tests) : new Map<string, CoverageAsk>();
-    const measured = req.quality && diff ? (added.size ? added : await scanned(git, from, sha, diff)) : undefined;
+    const tests = await testCommands(git, sha, commands, req.quality);
+    const measured = req.quality && diff ? addedFiles : undefined;
     const onBase = from !== EMPTY_TREE && [...tests.values()].some((t) => t.runner) && !failures.length;
     if (shooting || onBase) await checkoutBase(req, cloneDir, { dir: beforeDir, index: beforeIndex }, from);
     let flaky: FlakyTest[] = [];
@@ -283,13 +284,13 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const coverageDir = `/tmp/factory-coverage-${randomUUID()}`;
     await inBox('verify', cloneDir, [], async (id) => {
       for (const [i, command] of commands.entries()) {
-        const { line, runner } = tests.get(command)!;
-        const ask = coverage.get(command);
+        const { line, runner, coverage } = tests.get(command)!;
         const run = reportRun(sandboxes, id, env);
-        const failed = await runAndRerun(command, runner, ask ? firstWith(run, ask.flags(`${coverageDir}/${i}`)) : run, standing, line);
+        const failed = await runAndRerun(command, runner, coverage ? firstWith(run, coverage.flags(`${coverageDir}/${i}`), lcovIn(sandboxes, id, `${coverageDir}/${i}`)) : run, standing, line);
         if (failed) ran.push(failed);
       }
-      if (measured) quality = await measureQuality(sandboxes, id, measured, { coverageDir, covered: [...new Set([...coverage.values()].map((c) => c.language))] });
+      const covered = [...new Set([...tests.values()].flatMap((t) => (t.coverage ? [t.coverage.language] : [])))];
+      if (measured) quality = await measureQuality(sandboxes, id, measured, { coverageDir, covered });
     }, withServices);
     // The base's tests get services as the commit's do, new ones.
     if (onBase && needsBase(ran, standing)) {
@@ -353,47 +354,37 @@ export function reportRun(sandboxes: Boxes, id: string, env: Record<string, stri
   };
 }
 
-/**
- * What each command's runner is asked for the measure (ORC-280): an LCOV, when it can write one without installing anything.
- * Read before any code of the agent has run.
- */
-async function coverageAsks(git: CloneGit, sha: string, commands: readonly string[], tests: Awaited<ReturnType<typeof testCommands>>): Promise<Map<string, CoverageAsk>> {
-  const asks = new Map<string, CoverageAsk>();
-  for (const command of commands) {
-    const ask = await coverageOf(tests.get(command)!.runner, { showAtHead: (p) => show(git, sha, p) });
-    if (ask) asks.set(command, ask);
-  }
-  return asks;
-}
+/** Whether a run wrote its LCOV in `dir`, in sandbox `id`: one that failed without writing it failed for the coverage asked of it. */
+const lcovIn = (sandboxes: Boxes, id: string, dir: string) => async (): Promise<boolean> =>
+  (await sandboxes.exec(id, ['bash', '--norc', '-c', `find ${dir} -name lcov.info -o -name '*.lcov' 2>/dev/null | grep -q .`])).code === 0;
 
 /**
  * `run`, its first line with `flags`, the coverage the measure asks for: the reruns of failing tests do not overwrite the whole
- * run's. A first run that fails with them is run again without: its exit is the verdict, so a measure never fails the tests
- * (a coverage package declared and not installed, an instrumentation too slow).
+ * run's. A first run that fails without writing its report (`wrote`) failed for the coverage (a package declared and not installed,
+ * an instrumentation too slow): it is run again without, whose exit is the verdict. A measure never fails the tests.
  */
-function firstWith(run: Run, flags: string): Run {
+function firstWith(run: Run, flags: string, wrote: () => Promise<boolean>): Run {
   let first = true;
   return async (line, runner) => {
     if (!first) return run(line, runner);
     first = false;
     const measured = await run(`${line} ${flags}`, runner);
-    return measured.exitCode === 0 ? measured : run(line, runner);
+    return measured.exitCode === 0 || (await wrote()) ? measured : run(line, runner);
   };
 }
 
 /**
  * `factory/qualité-diff` (ORC-280) in sandbox `id`, once the commands ran: crapper and dryer on the regular files the diff adds
- * lines to (`added`), the LCOV of the tests under `coverageDir`. Never a verdict: a breakdown, or a diff too wide for one
- * command line, is said as unavailable.
+ * lines to (`added`), the LCOV of the tests under `coverageDir`. Never a verdict: a breakdown, or a diff too wide, is said as unavailable.
  */
 async function measureQuality(sandboxes: Boxes, id: string, added: ReadonlyMap<string, ReadonlySet<number>>, at: { coverageDir: string; covered: readonly string[] }): Promise<DiffQuality> {
   const files = [...added.keys()];
   if (!files.length) return { functions: [], pairs: [] };
-  if (files.length > SCAN_BATCH) return { functions: [], pairs: [], unavailable: `the diff adds lines to ${files.length} files, past the ${SCAN_BATCH} measured in one run` };
+  if (files.length > QUALITY_MAX_FILES) return unmeasured(`the diff adds lines to ${files.length} files, past the ${QUALITY_MAX_FILES} measured`);
   try {
-    return readQuality(await sandboxes.exec(id, qualityArgv({ ...at, files, timeoutS: QUALITY_TIMEOUT_S })), added);
+    return readQuality(await sandboxes.exec(id, qualityArgv({ ...at, files })), added);
   } catch (err) {
-    return { functions: [], pairs: [], unavailable: `crapper and dryer could not run: ${(err as Error).message}` };
+    return unmeasured(`crapper and dryer could not run: ${(err as Error).message}`);
   }
 }
 
@@ -401,10 +392,19 @@ async function measureQuality(sandboxes: Boxes, id: string, added: ReadonlyMap<s
  * Each command as the red check runs it (`testCommand`, ORC-420): the line its files and flags are appended to, and the runner
  * it names, from the commit's `package.json` for a script npm, pnpm or yarn runs. Read before any of its code runs, each file once.
  */
-export async function testCommands(git: CloneGit, sha: string, commands: readonly string[]): Promise<Map<string, { line: string; runner?: Runner }>> {
+export async function testCommands(git: CloneGit, sha: string, commands: readonly string[], measured = false): Promise<Map<string, { line: string; runner?: Runner; coverage?: CoverageAsk }>> {
   const read = new Map<string, Promise<string | undefined>>();
   const showAtHead = (p: string) => read.get(p) ?? read.set(p, show(git, sha, p)).get(p)!;
-  return new Map(await Promise.all(commands.map(async (c) => [c, await testCommand(c, { showAtHead })] as const)));
+  return new Map(
+    await Promise.all(
+      commands.map(async (c) => {
+        const ran = await testCommand(c, { showAtHead });
+        // What the measure asks of its runner (ORC-280): an LCOV, when it can write one without installing anything.
+        const coverage = measured ? await coverageOf(ran.runner, showAtHead) : undefined;
+        return [c, { ...ran, ...(coverage ? { coverage } : {}) }] as const;
+      }),
+    ),
+  );
 }
 
 /**

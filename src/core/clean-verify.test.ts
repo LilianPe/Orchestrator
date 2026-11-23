@@ -1508,7 +1508,6 @@ describe('flaky tests in verify (ORC-164)', () => {
 describe('factory/qualité-diff (ORC-280)', () => {
   const report = (functions: unknown[] = [], pairs: unknown[] = []) => ({ stdout: JSON.stringify({ functions, pairs }), stderr: '', code: 0 });
   const grade = { path: 'src/a.ts', name: 'grade', start: 1, end: 3, cc: 9, coverage: 0, crap: 90 };
-  const after = (argv: readonly string[], flag: string) => argv[argv.indexOf(flag) + 1];
 
   it('runs crapper and dryer after the commands, in their sandbox, on the files the diff adds lines to, and keeps what they list', async () => {
     const { repo, sandboxes, req } = setup({ quality: true });
@@ -1548,8 +1547,8 @@ describe('factory/qualité-diff (ORC-280)', () => {
     await runCleanVerify(req);
     const line = sandboxes.ran.find((r) => r.command.includes('vitest run'))!.command;
     expect(line).toContain('--coverage.enabled --coverage.provider=v8 --coverage.reporter=lcov');
-    expect(line).toContain(`--coverage.reportsDirectory=${after(argv, '--coverage')}/0`);
-    expect(after(argv, '--covered')).toBe('typescript');
+    expect(line).toContain(`--coverage.reportsDirectory=${argv[5]}/0`);
+    expect(argv[6]).toBe('typescript');
   });
 
   it('a first run the coverage made fail is run again without it, whose exit is the verdict: the measure never fails the tests', async () => {
@@ -1559,6 +1558,21 @@ describe('factory/qualité-diff (ORC-280)', () => {
     const res = await runCleanVerify(req);
     expect(res).toMatchObject({ ok: true, failures: [] });
     expect(sandboxes.ran.filter((r) => r.command.includes('vitest run')).map((r) => r.command.includes('--coverage'))).toEqual([true, false]);
+  });
+
+  it('a red first run that wrote its LCOV is the verdict: a failing suite is not run twice', async () => {
+    const pkg = JSON.stringify({ devDependencies: { '@vitest/coverage-v8': '^5' } });
+    const { sandboxes, req } = setup({ quality: true, commands: ['npx vitest run'] }, undefined, { 'package.json': pkg });
+    sandboxes.answer = (command) => {
+      if (!command.includes('vitest run')) return undefined;
+      const dir = /--coverage\.reportsDirectory=(\S+)/.exec(command)?.[1];
+      if (dir) write(dir, 'lcov.info', 'SF:src/a.ts\nend_of_record\n');
+      return { stdout: '', stderr: 'AssertionError', code: 1 };
+    };
+    const res = await runCleanVerify(req);
+    rmSync(/factory-coverage-[^/]+/.exec(sandboxes.ran.find((r) => r.command.includes('reportsDirectory'))!.command)![0].replace(/^/, '/tmp/'), { recursive: true, force: true });
+    expect(res.ok).toBe(false);
+    expect(sandboxes.ran.filter((r) => r.command.includes('vitest run')).map((r) => r.command.includes('--coverage'))).toEqual([true]);
   });
 
   it('asks for the coverage once: a failing command and its reruns go without it', async () => {
@@ -1601,6 +1615,6 @@ describe('factory/qualité-diff (ORC-280)', () => {
     sandboxes.quality = (a) => ((argv = a), report());
     await runCleanVerify(req);
     expect(sandboxes.ran.find((r) => r.command.includes('vitest run'))!.command).not.toContain('--coverage');
-    expect(after(argv, '--covered')).toBe('');
+    expect(argv[6]).toBe('');
   });
 });

@@ -7,42 +7,45 @@
 // installing anything: no coverage, no CRAP, and the functions are listed by complexity.
 import type { ExecResult } from '../adapters/exec.js';
 import { isRecord } from '../adapters/graphql-pages.js';
+import { manifestDependencies } from './deps.js';
+import { logExcerpt } from './log-excerpt.js';
 import { mdCode } from './markdown.js';
-import { readPackageJson, type Runner } from './red.js';
+import type { Runner } from './red.js';
 
 export const DIFF_QUALITY_CHECK = 'factory/qualité-diff';
 
 /** Where docker/runner.Dockerfile installs crapper and dryer, one tool environment, and copies the script. */
-export const QUALITY_PYTHON = '/opt/quality/crapper/bin/python';
+const QUALITY_PYTHON = '/opt/quality/crapper/bin/python';
 export const QUALITY_SCRIPT = '/usr/local/share/factory/quality/diff_quality.py';
 
 /** Past it, a function is listed: crapper's « worth a look ». */
-export const CRAP_LIMIT = 10;
+const CRAP_LIMIT = 10;
 /** Without coverage, a function is listed past this complexity: untested, its CRAP would be over 40. */
-export const CC_LIMIT = 5;
+const CC_LIMIT = 5;
+/** dryer's default: two functions at least this similar in structure are a pair. */
+const SIMILARITY = 0.82;
 /** What the check and the event keep of each list, worst first. */
 const LISTED = 20;
 /** The measure's own cap: about 4 s on a repository of a thousand files, dryer comparing the diff's functions with all of them. */
 export const QUALITY_TIMEOUT_S = 120;
+/** Past it, the diff is not measured: the paths go on one command line, and each file's functions are compared with the whole repository. */
+export const QUALITY_MAX_FILES = 500;
 
-export interface QualityFunction {
+interface QualitySpan {
   path: string;
-  name: string;
   start: number;
   end: number;
+}
+
+interface QualityFunction extends QualitySpan {
+  name: string;
   cc: number;
-  /** A percentage; null when no report covers its language. */
+  /** A percentage; null when no report names its file. */
   coverage: number | null;
   crap: number | null;
 }
 
-export interface QualitySpan {
-  path: string;
-  start: number;
-  end: number;
-}
-
-export interface QualityPair {
+interface QualityPair {
   score: number;
   left: QualitySpan;
   right: QualitySpan;
@@ -57,6 +60,8 @@ export interface DiffQuality {
   unavailable?: string;
 }
 
+export const unmeasured = (why: string): DiffQuality => ({ functions: [], pairs: [], unavailable: why });
+
 /** The commit's runner asked for an LCOV in `dir`: the language its report covers, and the flags appended to the command. */
 export interface CoverageAsk {
   language: 'typescript' | 'python';
@@ -64,44 +69,48 @@ export interface CoverageAsk {
 }
 
 const VITEST_PROVIDERS = { '@vitest/coverage-v8': 'v8', '@vitest/coverage-istanbul': 'istanbul' } as const;
-/** The root files that declare a Python project's test dependencies. */
-const PYTHON_MANIFESTS = ['pyproject.toml', 'setup.cfg', 'setup.py', 'Pipfile', 'requirements.txt', 'requirements-dev.txt', 'requirements-test.txt', 'dev-requirements.txt', 'test-requirements.txt'];
+/** The root files besides `pyproject.toml` that declare a Python project's test dependencies, read line by line. */
+const PYTHON_LISTS = ['setup.cfg', 'setup.py', 'Pipfile', 'requirements.txt', 'requirements-dev.txt', 'requirements-test.txt', 'dev-requirements.txt', 'test-requirements.txt'];
+
+/** Whether the commit declares pytest-cov: in any group of `pyproject.toml`, or on a line of another manifest that is not a comment. */
+async function declaresPytestCov(showAtHead: (path: string) => Promise<string | undefined>): Promise<boolean> {
+  const pyproject = await showAtHead('pyproject.toml');
+  if (pyproject && manifestDependencies('pyproject.toml', pyproject).names.includes('pytest-cov')) return true;
+  const lists = await Promise.all(PYTHON_LISTS.map(showAtHead));
+  return lists.some((text) => (text ?? '').split('\n').some((l) => /pytest[-_]cov\b/i.test(l.replace(/#.*/, ''))));
+}
 
 /**
  * How the commit's runner writes an LCOV, when it can without installing anything: vitest with a coverage package in the
  * root `package.json`, jest, which carries its own, pytest with pytest-cov declared. The thresholds a repository sets are
- * emptied: a measure never fails its tests. Undefined: nothing is added to the command.
+ * emptied, and the report written even when a test fails: a measure never fails its tests, nor needs a second run of a red
+ * one. Undefined: nothing is added to the command.
  */
-export async function coverageOf(runner: Runner | undefined, at: { showAtHead(path: string): Promise<string | undefined> }): Promise<CoverageAsk | undefined> {
+export async function coverageOf(runner: Runner | undefined, showAtHead: (path: string) => Promise<string | undefined>): Promise<CoverageAsk | undefined> {
   if (runner === 'jest') return { language: 'typescript', flags: (dir) => `--coverage --coverageReporters=lcov --coverageDirectory=${dir} --coverageThreshold='{}'` };
   if (runner === 'vitest') {
-    const pkg = await readPackageJson(at);
-    const deps = { ...(isRecord(pkg?.dependencies) ? pkg.dependencies : {}), ...(isRecord(pkg?.devDependencies) ? pkg.devDependencies : {}) };
-    const found = Object.entries(VITEST_PROVIDERS).find(([name]) => name in deps);
-    if (!found) return undefined;
+    const { names } = manifestDependencies('package.json', (await showAtHead('package.json')) ?? '{}');
+    const provider = Object.entries(VITEST_PROVIDERS).find(([name]) => names.includes(name))?.[1];
+    if (!provider) return undefined;
     const thresholds = ['lines', 'functions', 'branches', 'statements'].map((t) => `--coverage.thresholds.${t}=0`).join(' ');
     return {
       language: 'typescript',
-      flags: (dir) => `--coverage.enabled --coverage.provider=${found[1]} --coverage.reporter=lcov --coverage.reportsDirectory=${dir} ${thresholds} --coverage.thresholds.perFile=false --coverage.thresholds.autoUpdate=false`,
+      flags: (dir) => `--coverage.enabled --coverage.provider=${provider} --coverage.reporter=lcov --coverage.reportsDirectory=${dir} --coverage.reportOnFailure ${thresholds} --coverage.thresholds.perFile=false --coverage.thresholds.autoUpdate=false`,
     };
   }
-  if (runner === 'pytest') {
-    for (const manifest of PYTHON_MANIFESTS) {
-      const declared = ((await at.showAtHead(manifest)) ?? '').split('\n').some((l) => /pytest[-_]cov\b/i.test(l.replace(/#.*/, '')));
-      if (declared) return { language: 'python', flags: (dir) => `--cov=. --cov-report=lcov:${dir}/pytest.lcov --cov-fail-under=0` };
-    }
-  }
+  if (runner === 'pytest' && (await declaresPytestCov(showAtHead))) return { language: 'python', flags: (dir) => `--cov=. --cov-report=lcov:${dir}/pytest.lcov --cov-fail-under=0` };
   return undefined;
 }
 
-/** The script on `files`, under `timeoutS`, with the LCOV reports under `coverageDir` for the `covered` languages. A path may start with a dash. */
-export function qualityArgv(o: { coverageDir: string; covered: readonly string[]; files: readonly string[]; timeoutS: number }): string[] {
-  return ['timeout', String(o.timeoutS), QUALITY_PYTHON, '-I', QUALITY_SCRIPT, '--coverage', o.coverageDir, '--covered', o.covered.join(','), '--', ...o.files];
+/** The script on `files`, under its cap, with the LCOV reports under `coverageDir` for the `covered` languages. A path may start with a dash. */
+export function qualityArgv(o: { coverageDir: string; covered: readonly string[]; files: readonly string[] }): string[] {
+  return ['timeout', String(QUALITY_TIMEOUT_S), QUALITY_PYTHON, '-I', QUALITY_SCRIPT, o.coverageDir, o.covered.join(','), String(SIMILARITY), '--', ...o.files];
 }
 
 /** A path or a name from the agent's code, cut so that no line of the journal, the check or the PR outgrows its room. */
 const CLIPPED = 120;
 const clip = (s: string): string => (s.length > CLIPPED ? `${s.slice(0, CLIPPED - 1)}…` : s);
+const clipSpan = (s: QualitySpan): QualitySpan => ({ ...s, path: clip(s.path) });
 
 const touches = (s: QualitySpan, added: ReadonlyMap<string, ReadonlySet<number>>): boolean => {
   const lines = added.get(s.path);
@@ -121,11 +130,11 @@ const isPair = (p: unknown): p is QualityPair => isRecord(p) && typeof p['score'
 
 /**
  * What the script found on the lines the diff adds (`added`): a function with one of them in its span, listed past the
- * limits; a pair with one of them in either side. A breakdown is said, never thrown: the measure blocks nothing.
+ * limits; a pair with one of them in either side. Paths and names clipped, as the journal keeps them. A breakdown is said,
+ * never thrown: the measure blocks nothing.
  */
 export function readQuality({ code, stdout, stderr }: ExecResult, added: ReadonlyMap<string, ReadonlySet<number>>): DiffQuality {
-  const none = (unavailable: string): DiffQuality => ({ functions: [], pairs: [], unavailable });
-  if (code !== 0) return none(`crapper and dryer could not run (code ${code})${stderr.trim() ? `: ${mdCode(stderr.trim().slice(-300))}` : ''}`);
+  if (code !== 0) return unmeasured(`crapper and dryer could not run (code ${code})${stderr.trim() ? `: ${mdCode(logExcerpt(stderr.trim(), 300))}` : ''}`);
   let report: unknown;
   try {
     report = JSON.parse(stdout);
@@ -133,17 +142,21 @@ export function readQuality({ code, stdout, stderr }: ExecResult, added: Readonl
     report = undefined;
   }
   if (!isRecord(report) || !Array.isArray(report['functions']) || !Array.isArray(report['pairs']) || !report['functions'].every(isFunction) || !report['pairs'].every(isPair)) {
-    return none('crapper and dryer returned no readable report');
+    return unmeasured('crapper and dryer returned no readable report');
   }
-  const functions = report['functions'].filter((f) => touches(f, added) && listed(f)).sort(worse).map((f) => ({ ...f, path: clip(f.path), name: clip(f.name) }));
-  const pairs = report['pairs'].filter((p) => touches(p.left, added) || touches(p.right, added)).sort((a, b) => b.score - a.score).map((p) => ({ ...p, left: { ...p.left, path: clip(p.left.path) }, right: { ...p.right, path: clip(p.right.path) } }));
+  const functions = report['functions'].filter((f) => touches(f, added) && listed(f)).sort(worse);
+  const pairs = report['pairs'].filter((p) => touches(p.left, added) || touches(p.right, added)).sort((a, b) => b.score - a.score);
   const more = Math.max(0, functions.length - LISTED) + Math.max(0, pairs.length - LISTED);
-  return { functions: functions.slice(0, LISTED), pairs: pairs.slice(0, LISTED), ...(more ? { more } : {}) };
+  return {
+    functions: functions.slice(0, LISTED).map((f) => ({ ...clipSpan(f), name: clip(f.name) }) as QualityFunction),
+    pairs: pairs.slice(0, LISTED).map((p) => ({ ...p, left: clipSpan(p.left), right: clipSpan(p.right) })),
+    ...(more ? { more } : {}),
+  };
 }
 
-const at = (s: QualitySpan) => mdCode(`${clip(s.path)}:${s.start}-${s.end}`);
+const at = (s: QualitySpan) => mdCode(`${s.path}:${s.start}-${s.end}`);
 const functionLine = (f: QualityFunction) =>
-  `${at(f)} ${mdCode(clip(f.name))}: ${f.crap === null ? `CC ${f.cc}, coverage unknown` : `CRAP ${f.crap} (CC ${f.cc}, coverage ${f.coverage} %)`}`;
+  `${at(f)} ${mdCode(f.name)}: ${f.crap === null ? `CC ${f.cc}, coverage unknown` : `CRAP ${f.crap} (CC ${f.cc}, coverage ${f.coverage} %)`}`;
 const pairLine = (p: QualityPair) => `${at(p.left)} and ${at(p.right)}: similarity ${p.score.toFixed(2)}`;
 
 /**
@@ -155,7 +168,7 @@ export function diffQualityCheck(q: DiffQuality): { conclusion: 'success' | 'neu
   if (!q.functions.length && !q.pairs.length) return { conclusion: 'success', summary: `Nothing to look at: no function the diff touches is past CRAP ${CRAP_LIMIT}, and none is a near copy of another.` };
   const parts = ['A measure, which blocks nothing.'];
   if (q.functions.length) parts.push(`**Functions the diff touches past CRAP ${CRAP_LIMIT}** (past CC ${CC_LIMIT} when the coverage is unknown), worst first:\n${q.functions.map((f) => `- ${functionLine(f)}`).join('\n')}`);
-  if (q.pairs.length) parts.push(`**Near copies** (dryer, structure at least 0.82 similar), a side in the diff:\n${q.pairs.map((p) => `- ${pairLine(p)}`).join('\n')}`);
+  if (q.pairs.length) parts.push(`**Near copies** (dryer, structure at least ${SIMILARITY} similar), a side in the diff:\n${q.pairs.map((p) => `- ${pairLine(p)}`).join('\n')}`);
   if (q.more) parts.push(`And ${q.more} more not listed.`);
   return { conclusion: 'neutral', summary: parts.join('\n\n') };
 }
