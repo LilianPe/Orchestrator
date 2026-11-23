@@ -2,12 +2,11 @@
 // factory runs them itself and reads the runner's machine report (vitest, jest, pytest, ORC-342), its text output
 // when the runner wrote none; it never takes the agent's word.
 import { randomUUID } from 'node:crypto';
-import { posix } from 'node:path';
 import { isRecord } from '../adapters/graphql-pages.js';
 import { ANSI } from './log-excerpt.js';
 import { missingProperties, propertyTestFiles } from './properties.js';
 import { isTestFile, isTestSpec, normalizePath } from './test-files.js';
-import { exportedNames, importedFrom, isPython, parse } from './ts-ast.js';
+import { exportedNames, importedFrom, isPython, parse, pyModule, tsCandidates } from './ts-ast.js';
 
 /**
  * Why the red is verified or not. Verified: an `assertion`; a `missing_module` the build will create (absent at
@@ -254,7 +253,6 @@ export async function testCommand(command: string, deps: Pick<RedDeps, 'showAtHe
   return ran(hasSeparator(call.args) ? command : `${command.trimEnd()} --`, runner);
 }
 
-const TS_EXT = ['.ts', '.tsx', '.js', '.jsx', '.mts', '.mjs', '.cts', '.cjs'];
 // ponytail: Python reads modules from the root or `src/`; other layouts read as packages, and are refused.
 const PY_ROOTS = ['', 'src/'];
 
@@ -265,15 +263,7 @@ function testOf(importer: string | undefined, tests: readonly string[]): string 
   return tests.find((t) => t === p || t.endsWith(`/${p}`) || p.endsWith(`/${t}`));
 }
 
-/** The repository paths a relative TS module imported by `test` could be. */
-function tsCandidates(module: string, test: string): string[] {
-  const path = posix.normalize(posix.join(posix.dirname(test), module));
-  // ESM TypeScript imports `./x.js` for `./x.ts`.
-  const stem = path.replace(/\.[cm]?jsx?$/, '');
-  return [path, ...TS_EXT.map((e) => stem + e), ...TS_EXT.map((e) => `${stem}/index${e}`)];
-}
-
-const pyCandidates = (module: string): string[] => PY_ROOTS.flatMap((r) => [`${r}${module.replace(/\./g, '/')}.py`, `${r}${module.replace(/\./g, '/')}/__init__.py`]);
+const pyCandidates = (module: string): string[] => PY_ROOTS.flatMap((r) => pyModule(module).map((p) => r + p));
 
 export const escape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -319,7 +309,7 @@ export interface RedDeps {
    * The approved spec's « for any input » properties (ORC-261): each needs its test, in the file the factory names, committed by
    * this pass of the step or already at its head (`atHead`, an earlier pass's, frozen).
    */
-  properties?: { ticketId: string; count: number; atHead?: readonly string[] };
+  properties?: { ticketId: string; count: number; atHead: readonly string[] };
 }
 
 export interface RedResult {
@@ -347,9 +337,13 @@ export async function checkRed(repoCommand: string, deps: RedDeps): Promise<RedR
   if (outside.length > 0) return verdict('scope', `The tests step changed files that are not tests: ${[...new Set(outside)].join(', ')}.`);
   const tests = deps.changed.filter((f) => !f.deleted && isTestSpec(f.path)).map((f) => normalizePath(f.path));
   if (tests.length === 0) return verdict('no_tests', 'The tests step committed no test.');
-  const owed = deps.properties ? missingProperties(deps.properties.ticketId, deps.properties.count, [...tests, ...(deps.properties.atHead ?? [])]) : [];
-  if (owed.length) {
-    const named = owed.map((n) => `property ${n}: \`${propertyTestFiles(deps.properties!.ticketId, n).ts}\` or \`${propertyTestFiles(deps.properties!.ticketId, n).py}\``);
+  const p = deps.properties;
+  const owed = p ? missingProperties(p.ticketId, p.count, [...tests, ...p.atHead]) : [];
+  if (p && owed.length) {
+    const named = owed.map((n) => {
+      const { ts, py } = propertyTestFiles(p.ticketId, n);
+      return `property ${n}: \`${ts}\` or \`${py}\``;
+    });
     return verdict('missing_property', `The tests step committed no test for an approved property, in the file the factory names: ${named.join('; ')}.`);
   }
 

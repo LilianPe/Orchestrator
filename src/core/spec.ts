@@ -45,6 +45,9 @@ export interface SpecVersion {
   drafting?: true;
 }
 
+/** How many « for any input » properties the approved version holds (ORC-261): none while no version is approved. */
+export const approvedProperties = (spec: SpecVersion | null | undefined): number => (spec?.approval ? (spec.spec.properties?.length ?? 0) : 0);
+
 /** The commands of the spec gate, the factory's own, read in a reply of the ticket's session (ORC-212). */
 export const APPROVE = '/approve';
 export const CHANGES = '/changes';

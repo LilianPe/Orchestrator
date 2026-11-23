@@ -207,7 +207,7 @@ describe('checkRed', () => {
   });
 
   it('refuses a step that left an approved property without its test, naming the file it is owed (ORC-261)', async () => {
-    const properties = { ticketId: 'ORC-12', count: 2 };
+    const properties = { ticketId: 'ORC-12', count: 2, atHead: [] };
     const d = { ...deps(['src/export.test.ts', 'src/orc-12.property-1.test.ts'], 1, VITEST_ASSERTION), properties };
     const red = await checkRed('npx vitest run', d);
     expect(red).toMatchObject({ verified: false, cause: 'missing_property' });

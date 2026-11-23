@@ -22,6 +22,7 @@ import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
 import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import { isTestFile } from '../checks/test-files.js';
 import { propertySupport, propertyTests } from '../checks/properties.js';
+import { approvedProperties } from '../core/spec.js';
 import { captureArtifactId, scenarioPath } from '../checks/visual-proof.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 import { factoryDefault } from '../presets/factory-default.js';
@@ -98,14 +99,17 @@ export abstract class DaemonChecks extends DaemonBase {
           return { exitCode: cappedExit(r.code, started), output: r.stdout + r.stderr };
         };
       }
-      const count = t.spec?.approval ? (t.spec.spec.properties?.length ?? 0) : 0;
-      const atHead = count ? await diff.filesAtHead() : [];
-      const red = await checkRed(command, { ...diff, uncommitted, run: runTests, ...(count ? { properties: { ticketId: t.ticketId, count, atHead } } : {}) });
+      const count = approvedProperties(t.spec);
+      // Read once: the property tests, the generators they import and the freeze all look at the same commit.
+      const files = await diff.filesAtHead();
+      const view = { ...diff, filesAtHead: async () => files };
+      const properties = count ? propertyTests(t.ticketId, count, files) : [];
+      const red = await checkRed(command, { ...diff, uncommitted, run: runTests, ...(count ? { properties: { ticketId: t.ticketId, count, atHead: properties } } : {}) });
       // The freeze (ORC-131) on the same commit: the step's tests and the harness, whatever the red's verdict.
       // ponytail: committed files only; a test left uncommitted is not frozen (verify reads commits once ORC-151 lands).
       const tests = diff.changed.filter((f) => !f.deleted && isTestFile(f.path)).map((f) => f.path);
       // The generators of the property tests (ORC-261), whoever wrote them and whenever: what a property draws its inputs from.
-      const read = await freezeTests([...tests, ...(count ? await propertySupport(propertyTests(t.ticketId, count, atHead), diff) : [])], diff);
+      const read = await freezeTests([...tests, ...(await propertySupport(properties, view))], view);
       return { ...red, frozen: t.frozenTests ? newTestsOnly(read) : read };
     } catch (err) {
       return { verified: false, cause: 'infra', command: '', exitCode: null, detail: `The red check could not run: ${(err as Error).message}` };

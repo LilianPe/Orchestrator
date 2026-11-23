@@ -18,6 +18,9 @@ export function normalizePath(path: string): string {
   return path.replace(/\\/g, '/').replace(/^\.\//, '');
 }
 
+/** The last segment of a repository path. */
+export const fileName = (path: string): string => normalizePath(path).split('/').at(-1) ?? '';
+
 function parts(path: string): string[] {
   return normalizePath(path).split('/').filter(Boolean);
 }

@@ -1,5 +1,6 @@
 // The TypeScript parser for the deterministic checks (ORC-342): they read the syntax tree of a JS or TS file, not its
 // text, so a rewrite (an alias, another syntax) reads the same. No type checker, no other file: one file, as it is.
+import { posix } from 'node:path';
 import ts from 'typescript';
 
 export { ts };
@@ -9,6 +10,19 @@ export const isScript = (path: string): boolean => /\.(?:[cm]?[jt]sx?|vue|svelte
 
 /** A Python file: no parser here reads it, its checks stay line by line. */
 export const isPython = (path: string): boolean => /\.pyi?$/.test(path);
+
+const TS_EXT = ['.ts', '.tsx', '.js', '.jsx', '.mts', '.mjs', '.cts', '.cjs'];
+
+/** The repository paths a relative TS module imported by `from` could be. */
+export function tsCandidates(module: string, from: string): string[] {
+  const path = posix.normalize(posix.join(posix.dirname(from), module));
+  // ESM TypeScript imports `./x.js` for `./x.ts`.
+  const stem = path.replace(/\.[cm]?jsx?$/, '');
+  return [path, ...TS_EXT.map((e) => stem + e), ...TS_EXT.map((e) => `${stem}/index${e}`)];
+}
+
+/** The paths of a dotted Python module, relative to a root: its file or its package. */
+export const pyModule = (dotted: string): string[] => [`${dotted.replace(/\./g, '/')}.py`, `${dotted.replace(/\./g, '/')}/__init__.py`];
 
 const COMPONENT = /\.(?:vue|svelte|astro)$/;
 

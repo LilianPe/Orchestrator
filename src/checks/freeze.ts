@@ -3,7 +3,7 @@
 // made it (the agent or a human commit), until a maintainer's `/refreeze`. Blocking from the first ticket.
 import { createHash } from 'node:crypto';
 import { mdCode } from './markdown.js';
-import { isTestHarnessFile, normalizePath } from './test-files.js';
+import { fileName, isTestHarnessFile, normalizePath } from './test-files.js';
 import { isTable, parseToml } from './toml.js';
 import type { CheckResult } from './types.js';
 import type { ClarifyAnswer } from '../core/types.js';
@@ -41,8 +41,6 @@ export interface FreezeView {
   filesAtHead(): Promise<string[]>;
   showAtHead(path: string): Promise<string | undefined>;
 }
-
-const fileName = (path: string): string => normalizePath(path).split('/').at(-1) ?? '';
 
 /**
  * The lines of `[section]` in an INI file, blank and comment lines left out, indentation kept (it continues a value).
