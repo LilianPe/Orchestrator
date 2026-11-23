@@ -608,12 +608,17 @@ describe('GitWorkspaces', () => {
 
   it("checks the agent's LFS files out as their pointers, whatever Git LFS the host installs, so that its git sees them unchanged (ORC-479)", async () => {
     // A pointer committed on the forge as is, whatever Git LFS the machine running the test has (GitHub's runners install it
-    // system-wide: its clean filter would turn any other text into a pointer to it).
+    // system-wide: its clean filter would turn any other text into a pointer to it). Off in the repository's own config, not
+    // for `add` alone: the commit's index refresh hashes the file again (racily clean), and a git-lfs run installs its pre-push
+    // hook, which refuses to push a pointer whose object is not stored here.
     const pointer = 'version https://git-lfs.github.com/spec/v1\noid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\nsize 12345\n';
     const { repo, root } = fixtureRepo();
+    git(repo, 'config', 'filter.lfs.clean', '');
+    git(repo, 'config', 'filter.lfs.process', '');
+    git(repo, 'config', 'filter.lfs.required', 'false');
     writeFileSync(join(repo, '.gitattributes'), '*.bin filter=lfs\n');
     writeFileSync(join(repo, 'big.bin'), pointer);
-    git(repo, '-c', 'filter.lfs.clean=', '-c', 'filter.lfs.process=', '-c', 'filter.lfs.required=false', 'add', '.');
+    git(repo, 'add', '.');
     git(repo, 'commit', '-qm', 'lfs');
     expect(git(repo, 'cat-file', '-p', 'HEAD:big.bin')).toBe(pointer.trim());
     git(repo, 'push', '-q', 'origin', 'main');
