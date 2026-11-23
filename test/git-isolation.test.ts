@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -15,7 +15,7 @@ const freshRepo = () => {
 // ORC-494: a test's git never reads nor writes the workstation's own config or hooks (a `core.hooksPath` there once
 // received a Git LFS pre-push hook, and 42 tests of git-workspaces.test.ts failed under it).
 describe("the tests' git, apart from the workstation's", () => {
-  it("inherits nothing of its caller's git, reads no global nor system config, and cannot write the global one", () => {
+  it("inherits nothing of its caller's git, reads no global nor system config, and cannot write the global one, which no other user can plant", () => {
     expect(Object.keys(process.env).filter((n) => n.startsWith('GIT_')).sort()).toEqual(
       ['GIT_CONFIG_COUNT', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_KEY_1', 'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_VALUE_0', 'GIT_CONFIG_VALUE_1'],
     );
@@ -27,6 +27,7 @@ describe("the tests' git, apart from the workstation's", () => {
     );
     expect(spawnSync('git', ['config', '--global', 'factory.test', 'written'], { cwd: dir }).status).not.toBe(0);
     expect(existsSync(dirname(NO_GLOBAL_CONFIG))).toBe(false);
+    expect(statSync(dirname(dirname(NO_GLOBAL_CONFIG))).mode & 0o777).toBe(0o700);
   });
 
   it("reads neither the workstation's ignore nor its attributes file", () => {
