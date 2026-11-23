@@ -75,7 +75,9 @@ A ticket's `verify` runs its `setup` on the agent's commit, which is ahead of th
 fail every `verify`, after the build. So `verify` refuses such a setup before it runs, and the dry run says it at onboarding:
 
 - the dry run does not run the setup: it is red, with one break of kind `secret` at step `config`, naming the secrets withheld
-  and why. Nothing else runs, so the repository's other breaks show only once `setup_secrets` is changed. The gate refuses the repository's tickets, with that break in the block's comment;
+  and why. It comes after the config's own checks (an unreadable `.factory/config.yml`, a `services` entry no backend
+  provides, each a break of its own first) and nothing after it runs, so the breaks of the setup and the commands show only once
+  `setup_secrets` is changed. The gate refuses the repository's tickets, with that break in the block's comment;
 - the `main` maturity card says it red, its break `` secret in `.factory/config.yml` ``. A card set by a dry run recorded before
   ORC-461 still says `unverifiable: …` until the next dry run on the default branch;
 - `factory dry-run` prints it red and exits 1; `factory doctor` warns about it ([CLI](cli.md#factory-doctor-repo));
