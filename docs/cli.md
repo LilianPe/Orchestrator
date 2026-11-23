@@ -71,6 +71,7 @@ Check before entrusting a repository, run where the daemon runs (`docker compose
 
 - Reads `.github/workflows`, `GET /repos/{owner}/{repo}/environments` and the default branch's protection with the GitHub App.
 - With `knowledge.github` in `factory.yml`, refuses a knowledge base's repository the App's installation does not cover with *Contents* in write: the daemon clones, pulls and pushes it with its token (ORC-481).
+- With `github.installation_id` in `factory.yml`, refuses the repository or the knowledge base's when another installation of the App covers it, naming that installation and how to fix it: the daemon asks every token of the pinned one (ORC-489). Without a pin, nothing is compared.
 - Finds the repository's entries in `factory.yml` by the GitHub repository its checkout's `origin` names, whatever its case (ORC-480), and reads `owner/name` as the entry writes it, else as that origin does; refuses an origin that is not on GitHub, with the start's message (ORC-478), once the instance's checks are said. Current repository by default.
 - `--json`: machine report (`host`, `branchProtection`, workflows with their triggers, secrets yes/no, environments and verdict; `accepted` false on any refusal). A refusal before the checks (the configuration below, no GitHub App) stays JSON too, with `accepted: false` and the message under `error` (ORC-449).
 - Never prints a secret; when in doubt (ambiguous YAML, dynamic `on`, indirect secrets, API error), refuses.

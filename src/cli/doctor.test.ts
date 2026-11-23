@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Exec } from '../adapters/exec.js';
-import type { BranchProtection, EnvironmentProtection, WorkflowSource } from '../adapters/forge/github-app-api.js';
+import type { BranchProtection, EnvironmentProtection, Installation, WorkflowSource } from '../adapters/forge/github-app-api.js';
 import { UnreadableAnswerError, type HttpClient, type HttpRequest } from '../adapters/forge/github-app.js';
 import type { BranchNaming } from '../core/naming.js';
 import { MISSING_TEST_COMMAND } from '../config/repo-config.js';
@@ -24,6 +24,10 @@ interface FakeOptions {
   permissions?: Record<string, string>;
   /** The installation's permissions on the knowledge base's repository, `acme/notes` (ORC-481), or why GitHub gave none. */
   knowledge?: Record<string, string> | Error;
+  /** The id of the installation covering the target repository, 42 without it (ORC-489). */
+  installationId?: number;
+  /** The id of the installation covering `acme/notes`, 42 without it (ORC-489). */
+  knowledgeInstallationId?: number;
 }
 
 /** The permissions the manifest asks for (docs/github-app-manifest.json): what a conforming installation holds. */
@@ -56,15 +60,15 @@ class FakeApi implements DoctorApi {
     return this.options.protection ?? { branch: 'main', classic: false, rules: ['pull_request'], pullRequestRulesets: [{ id: 1, bypass: 'never' }] };
   }
 
-  async installationPermissions(github: string): Promise<Record<string, string>> {
+  async installation(github: string): Promise<Installation> {
     if (github === 'acme/notes') {
       const knowledge = this.options.knowledge ?? MANIFEST_PERMISSIONS;
       if (knowledge instanceof Error) throw knowledge;
-      return knowledge;
+      return { id: this.options.knowledgeInstallationId ?? 42, permissions: knowledge };
     }
     if (this.options.failInstallation === 'network') throw new Error('getaddrinfo ENOTFOUND api.github.com');
     if (this.options.failInstallation === 'unreadable') throw new UnreadableAnswerError('GitHub API GET /repos/acme/app/installation: unreadable answer');
-    return this.options.permissions ?? MANIFEST_PERMISSIONS;
+    return { id: this.options.installationId ?? 42, permissions: this.options.permissions ?? MANIFEST_PERMISSIONS };
   }
 }
 
@@ -111,7 +115,7 @@ function workflow(content: string, path = '.github/workflows/ci.yml'): WorkflowS
 async function doctor(
   workflows: WorkflowSource[],
   environments: EnvironmentProtection[] = [],
-  options: { json?: boolean; fake?: FakeOptions; naming?: BranchNaming; checkout?: string; commands?: Record<string, string>; host?: HostReport; knowledge?: string } = {},
+  options: { json?: boolean; fake?: FakeOptions; naming?: BranchNaming; checkout?: string; commands?: Record<string, string>; host?: HostReport; knowledge?: string; pinned?: string } = {},
 ): Promise<{ code: number; lines: string[]; text: string; api: FakeApi }> {
   const api = new FakeApi(workflows, environments, options.fake);
   const lines: string[] = [];
@@ -125,6 +129,7 @@ async function doctor(
     ...(options.naming ? { naming: options.naming } : {}),
     ...(options.commands ? { commands: options.commands } : {}),
     ...(options.knowledge ? { knowledge: options.knowledge } : {}),
+    ...(options.pinned ? { installationId: options.pinned } : {}),
   });
   return { code, lines, text: lines.join('\n'), api };
 }
@@ -532,6 +537,8 @@ jobs:
     writeFileSync(join(home, 'factory.yml'), 'github:\n  app_id: "123"\n  private_key: env:GH_APP_KEY\n  installation_id: "42"\nknowledge:\n  github: acme/notes\n');
 
     const now = Date.parse('2026-10-22T10:00:00Z');
+    // The installation covering the knowledge base's repository: the pinned one, then another (ORC-489).
+    let notesInstallation = 42;
     const ci = 'on: pull_request\npermissions: read-all\njobs:\n  test:\n    steps:\n      - run: npm test\n';
     const routes: ((url: URL, init: HttpRequest) => { body?: unknown } | undefined)[] = [
       (url) =>
@@ -552,7 +559,7 @@ jobs:
       (url) => (url.pathname === '/repos/acme/app/rules/branches/main' ? { body: [{ type: 'pull_request', ruleset_id: 9 }] } : undefined),
       (url) => (url.pathname === '/repos/acme/app/rulesets/9' ? { body: { id: 9, current_user_can_bypass: 'never' } } : undefined),
       (url) => (url.pathname === '/repos/acme/app/installation' ? { body: { id: 42, permissions: MANIFEST_PERMISSIONS } } : undefined),
-      (url) => (url.pathname === '/repos/acme/notes/installation' ? { body: { id: 42, permissions: MANIFEST_PERMISSIONS } } : undefined),
+      (url) => (url.pathname === '/repos/acme/notes/installation' ? { body: { id: notesInstallation, permissions: MANIFEST_PERMISSIONS } } : undefined),
     ];
     const http: HttpClient = async (url, init) => {
       const parsed = new URL(url);
@@ -599,6 +606,13 @@ jobs:
       'Server secrets:',
       "  github.private_key (env:GH_APP_KEY): in clear — warning: in clear in the daemon's environment: a sealed source (systemd-creds) keeps it off the disk",
     ]);
+
+    // factory.yml's pinned installation reaches doctor (ORC-489): another installation on the knowledge base's repository refuses.
+    notesInstallation = 77;
+    const pinned: string[] = [];
+    const refused = await runDoctorCommand({ checkout: '/repo', home, env: { FACTORY_CONTAINER_CLI: 'docker', ...RUNNER, GH_APP_KEY: pemPath }, out: (line) => pinned.push(line), http, exec, now: () => now });
+    expect(refused).toBe(1);
+    expect(pinned.join('\n')).toContain('Knowledge base acme/notes: refused — installation 77 of the App covers acme/notes, not the pinned installation 42');
   });
 
   it('refuses a repository whose origin is not on GitHub, as the start refuses it, before any call to GitHub (ORC-478)', async () => {
@@ -1524,7 +1538,7 @@ describe("the GitHub App's installation permissions (ORC-439, ORC-441, ORC-443)"
     expect(result.lines.some((l) => l.startsWith('  Warning: the App is installed'))).toBe(false);
     expect(result.text).toContain('GitHub App installation: accepted — installed without the Administration, Workflows or Actions (write) permission');
     const json = JSON.parse((await doctor([], [], { json: true })).text) as { installation: object };
-    expect(json.installation).toEqual({ permissions: MANIFEST_PERMISSIONS, verdict: 'accepted', reasons: ['installed without the Administration, Workflows or Actions (write) permission'] });
+    expect(json.installation).toEqual({ id: 42, permissions: MANIFEST_PERMISSIONS, verdict: 'accepted', reasons: ['installed without the Administration, Workflows or Actions (write) permission'] });
   });
 
   it('warns, never refuses, when the installation cannot be read (network, authentication), and tells it unchecked', async () => {
@@ -1657,7 +1671,7 @@ describe("the knowledge base's repository, which the daemon reads and pushes wit
     expect(result.code).toBe(0);
     expect(result.text).toContain("Knowledge base acme/notes: accepted — the App's installation covers it with Contents (write): the daemon clones it, pulls it and pushes its notes with its token");
     const json = JSON.parse((await doctor([], [], { json: true, knowledge: 'acme/notes' })).text) as { knowledge: object };
-    expect(json.knowledge).toEqual({ github: 'acme/notes', verdict: 'accepted', reasons: [expect.stringContaining('Contents (write)')] });
+    expect(json.knowledge).toEqual({ github: 'acme/notes', installation: 42, verdict: 'accepted', reasons: [expect.stringContaining('Contents (write)')] });
   });
 
   it('refuses it when the installation reads it only, and says how to grant the push', async () => {
@@ -1686,5 +1700,39 @@ describe("the knowledge base's repository, which the daemon reads and pushes wit
     const result = await doctor([], [], { knowledge: 'acme/notes', fake: { failWorkflows: true, knowledge: { contents: 'read' } } });
     expect(result.code).toBe(1);
     expect(result.text).toContain('Knowledge base acme/notes: refused');
+  });
+});
+
+describe('the installation factory.yml pins (github.installation_id), which the daemon asks every token of (ORC-489)', () => {
+  it('accepts the target and the knowledge base when the pinned installation covers both', async () => {
+    const result = await doctor([], [], { knowledge: 'acme/notes', pinned: '42' });
+    expect(result.code).toBe(0);
+    expect(result.text).toContain('GitHub App installation: accepted');
+    expect(result.text).toContain('Knowledge base acme/notes: accepted');
+  });
+
+  it('refuses a knowledge base another installation covers, naming it and how to fix it', async () => {
+    const result = await doctor([], [], { knowledge: 'acme/notes', pinned: '42', fake: { knowledgeInstallationId: 77 } });
+    expect(result.code).toBe(1);
+    const line = result.lines.find((l) => l.startsWith('Knowledge base acme/notes: refused'));
+    for (const named of ['installation 77 of the App covers acme/notes, not the pinned installation 42', 'add acme/notes to installation 42', 'Repository access', 'github.installation_id']) expect(line).toContain(named);
+    expect(result.text).toContain('GitHub App installation: accepted');
+    expect(result.text).toContain('Result: refused — the pinned GitHub App installation 42 does not cover the knowledge base acme/notes');
+    const json = JSON.parse((await doctor([], [], { json: true, knowledge: 'acme/notes', pinned: '42', fake: { knowledgeInstallationId: 77 } })).text) as { knowledge: object };
+    expect(json.knowledge).toMatchObject({ github: 'acme/notes', verdict: 'refused' });
+  });
+
+  it('refuses a target repository another installation covers, naming it and how to fix it', async () => {
+    const result = await doctor([], [], { pinned: '42', fake: { installationId: 77 } });
+    expect(result.code).toBe(1);
+    const line = result.lines.find((l) => l.startsWith('GitHub App installation: refused'));
+    for (const named of ['installation 77 of the App covers acme/app, not the pinned installation 42', 'add acme/app to installation 42', 'github.installation_id']) expect(line).toContain(named);
+    expect(result.text).toContain('Result: refused — the pinned GitHub App installation 42 does not cover acme/app');
+  });
+
+  it('compares nothing without a pin: any installation of the App is the one the daemon finds', async () => {
+    const result = await doctor([], [], { knowledge: 'acme/notes', fake: { installationId: 77, knowledgeInstallationId: 78 } });
+    expect(result.code).toBe(0);
+    expect(result.text).not.toContain('pinned');
   });
 });
