@@ -12,6 +12,7 @@ import { DIFF_SIZE_CHECK, diffSizeCheck } from '../checks/diff-size.js';
 import { needsBase, rerunOnBase, runAndRerun, settle, type CommandRun, type FlakyTest, type KnownFlaky, type Run, type Standing } from '../checks/flaky.js';
 import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '../checks/freeze.js';
 import { checkForbiddenPaths, FORBIDDEN_CHECK, type ForbiddenView } from '../checks/forbidden-paths.js';
+import { coverageOf, qualityArgv, readQuality, type CoverageAsk, type DiffQuality } from '../checks/diff-quality.js';
 import { mdCode } from '../checks/markdown.js';
 import { REPORT_FLAGS, testCommand, type Runner } from '../checks/red.js';
 import type { PackageRegistry, RegistryOpener } from '../checks/registry.js';
@@ -57,6 +58,8 @@ export interface CleanVerifyRequest {
   gitleaks: boolean;
   /** `factory/semgrep` (ORC-333), by the image's Semgrep. Only an isolation test on a public image without it turns it off. */
   semgrep: boolean;
+  /** `factory/qualité-diff` (ORC-280), a measure, by the image's crapper and dryer. Absent, nothing is measured, nor any coverage asked of the tests. */
+  quality?: boolean;
   /** factory.yml's `max_diff: off` (ORC-381): `factory/taille-du-diff` applies only the bounds the base's `max_diff` sets. */
   maxDiff?: 'off';
   /** `factory/dependances` (ORC-371): the daemon's way to the package registries, never a sandbox's. Absent, a branch that adds a package has no verdict. */
@@ -111,7 +114,8 @@ export interface VisualRequest {
  * longer starts the application on the commit, `detail` what it printed. Absent: nothing to keep nor to invalidate.
  */
 export type PreviewOutcome = { of: 'found'; answered: true } | { of: 'found' | 'learned'; answered: false; detail: string };
-export type CleanVerifyResult = VerifyResult & { sha: string; tree: string; commands?: readonly string[]; flaky?: FlakyTest[]; visual?: { proof: VisualProof; files: Judged['files'] }; diffClass?: ClassifiedDiff; preview?: PreviewOutcome };
+/** `quality`: what crapper and dryer found on the lines the diff adds (ORC-280), once the commands ran; a measure, in no verdict. */
+export type CleanVerifyResult = VerifyResult & { sha: string; tree: string; commands?: readonly string[]; flaky?: FlakyTest[]; visual?: { proof: VisualProof; files: Judged['files'] }; diffClass?: ClassifiedDiff; preview?: PreviewOutcome; quality?: DiffQuality };
 
 /** A verdict on the commit: rejecting means there is none, an infrastructure failure the agent is not sent. */
 export type CleanVerifier = (req: CleanVerifyRequest) => Promise<CleanVerifyResult>;
@@ -229,14 +233,17 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const { proof, shooting, probe } = await planVisual(req.visual, { git, from, sha, config, refused: failures.length > 0 });
     // Read before any code of the agent has run: the runner of each command, and the base checked out for the reruns there.
     const tests = await testCommands(git, sha, commands);
+    const coverage = req.quality ? await coverageAsks(git, sha, commands, tests) : new Map<string, CoverageAsk>();
+    const measured = req.quality && diff ? await scanned(git, from, sha, diff) : undefined;
     const onBase = from !== EMPTY_TREE && [...tests.values()].some((t) => t.runner) && !failures.length;
     if (shooting || onBase) await checkoutBase(req, cloneDir, { dir: beforeDir, index: beforeIndex }, from);
     let flaky: FlakyTest[] = [];
     let preview: PreviewOutcome | undefined;
+    let quality: DiffQuality | undefined;
     // Every verdict goes out through here: the proof, decided, with it.
     const verdict = (files: Judged['files'] = []): CleanVerifyResult => ({
       ok: !failures.length, failures, sha, tree, commands, ...(diffClass ? { diffClass } : {}),
-      ...(flaky.length ? { flaky } : {}), ...(preview ? { preview } : {}),
+      ...(flaky.length ? { flaky } : {}), ...(preview ? { preview } : {}), ...(quality ? { quality } : {}),
       ...(proof ? { visual: { proof: files.length ? { ...proof, captures: files.map((f) => f.capture) } : proof, files } } : {}),
     });
     const setUp = async (suffix: string, workspacePath: string, services: readonly string[] = []) => {
@@ -272,12 +279,17 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     await setUp('verify', cloneDir, config.services);
     const ran: CommandRun[] = [];
     const standing: Standing = { known: req.knownFlaky ?? [], ...(req.frozen ? { frozen: req.frozen } : {}) };
+    // Where the tests write their LCOV for the measure: a dir per command, out of the checkout.
+    const coverageDir = `/tmp/factory-coverage-${randomUUID()}`;
     await inBox('verify', cloneDir, [], async (id) => {
-      for (const command of commands) {
+      for (const [i, command] of commands.entries()) {
         const { line, runner } = tests.get(command)!;
-        const failed = await runAndRerun(command, runner, reportRun(sandboxes, id, env), standing, line);
+        const ask = coverage.get(command);
+        const run = reportRun(sandboxes, id, env);
+        const failed = await runAndRerun(command, runner, ask ? firstWith(run, ask.flags(`${coverageDir}/${i}`)) : run, standing, line);
         if (failed) ran.push(failed);
       }
+      if (measured) quality = await measureQuality(sandboxes, id, measured, { coverageDir, covered: [...new Set([...coverage.values()].map((c) => c.language))] });
     }, withServices);
     // The base's tests get services as the commit's do, new ones.
     if (onBase && needsBase(ran, standing)) {
@@ -339,6 +351,41 @@ export function reportRun(sandboxes: Boxes, id: string, env: Record<string, stri
     const report = await sandboxes.exec(id, ['bash', '--norc', '-c', `[ -f ${f} ] && timeout ${REPORT_READ_S} head -c ${MAX_REPORT_BYTES} ${f}; rm -f ${f}`], { env });
     return report.stdout ? { ...run, report: report.stdout } : run;
   };
+}
+
+/**
+ * What each command's runner is asked for the measure (ORC-280): an LCOV, when it can write one without installing anything.
+ * Read before any code of the agent has run.
+ */
+async function coverageAsks(git: CloneGit, sha: string, commands: readonly string[], tests: Awaited<ReturnType<typeof testCommands>>): Promise<Map<string, CoverageAsk>> {
+  const asks = new Map<string, CoverageAsk>();
+  for (const command of commands) {
+    const ask = await coverageOf(tests.get(command)!.runner, { showAtHead: (p) => show(git, sha, p) });
+    if (ask) asks.set(command, ask);
+  }
+  return asks;
+}
+
+/** `run`, its first line with `flags`: the reruns of failing tests do not overwrite the whole run's coverage. */
+function firstWith(run: Run, flags: string): Run {
+  let first = true;
+  return (line, runner) => {
+    const extra = first ? ` ${flags}` : '';
+    first = false;
+    return run(`${line}${extra}`, runner);
+  };
+}
+
+/**
+ * `factory/qualité-diff` (ORC-280) in sandbox `id`, once the commands ran: crapper and dryer on the regular files the diff adds
+ * lines to (`added`), the LCOV of the tests under `coverageDir`. Never a verdict: a breakdown, or a diff too wide for one
+ * command line, is said as unavailable.
+ */
+async function measureQuality(sandboxes: Boxes, id: string, added: ReadonlyMap<string, ReadonlySet<number>>, at: { coverageDir: string; covered: readonly string[] }): Promise<DiffQuality> {
+  const files = [...added.keys()];
+  if (!files.length) return { functions: [], pairs: [] };
+  if (files.length > SCAN_BATCH) return { functions: [], pairs: [], unavailable: `the diff adds lines to ${files.length} files, past the ${SCAN_BATCH} measured in one run` };
+  return readQuality(await sandboxes.exec(id, qualityArgv({ ...at, files, timeoutS: VERIFY_TIMEOUT_MS / 1000 })), added);
 }
 
 /**

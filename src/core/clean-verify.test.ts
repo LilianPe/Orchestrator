@@ -14,6 +14,7 @@ import { FakePackageRegistry } from '../checks/fake-registry.js';
 import type { RegistryOpener } from '../checks/registry.js';
 import { freezeTests } from '../checks/freeze.js';
 import { VISUAL_PROOF_CHECK } from '../checks/visual-proof.js';
+import { QUALITY_SCRIPT } from '../checks/diff-quality.js';
 import type { PreviewRecipe } from '../knowledge/preview-recipe.js';
 import { BUNDLE_TARGET } from '../publish/extract.js';
 import { OutputPolicy, type Capture } from '../publish/output-policy.js';
@@ -39,6 +40,8 @@ class LocalSandboxes extends FakeSandboxProvider {
   scan?: (argv: readonly string[]) => ExecResult;
   /** Semgrep's answer, with the request of the sandbox it runs in: no report by default. */
   semgrep?: (argv: readonly string[], req: SandboxRequest) => ExecResult;
+  /** crapper's and dryer's (ORC-280), with the request of the sandbox they run in: an empty report by default. */
+  quality?: (argv: readonly string[], req: SandboxRequest) => ExecResult;
 
   override async create(req: SandboxRequest) {
     const s = await super.create(req);
@@ -53,6 +56,7 @@ class LocalSandboxes extends FakeSandboxProvider {
     const args = argv.map((a) => (bundle ? a.replace(BUNDLE_TARGET, bundle) : a));
     if (args.includes('gitleaks')) return this.scan?.(args) ?? { stdout: '[]', stderr: '', code: 0 };
     if (args.includes('semgrep')) return this.semgrep?.(args, req) ?? { stdout: '{"results":[],"errors":[]}', stderr: '', code: 0 };
+    if (args.includes(QUALITY_SCRIPT)) return this.quality?.(args, req) ?? { stdout: '{"functions":[],"pairs":[]}', stderr: '', code: 0 };
     // What a test sets as a command comes as the wrapper's last word; what the factory runs itself comes as it is.
     const wrapped = args[0] === 'bash' && args[1] === '--norc' && args[2] === '-c';
     const shellCommand = wrapped ? args.at(-1)! : args[0] === 'timeout' ? args.at(-1)! : undefined;
@@ -1498,5 +1502,63 @@ describe('flaky tests in verify (ORC-164)', () => {
     expect(res).toMatchObject({ ok: true, failures: [] });
     expect(res.flaky).toBeUndefined();
     expect(sandboxes.created.map((c) => c.runId)).not.toContain('r1-verify-base');
+  });
+});
+
+describe('factory/qualité-diff (ORC-280)', () => {
+  const report = (functions: unknown[] = [], pairs: unknown[] = []) => ({ stdout: JSON.stringify({ functions, pairs }), stderr: '', code: 0 });
+  const grade = { path: 'src/a.ts', name: 'grade', start: 1, end: 3, cc: 9, coverage: 0, crap: 90 };
+  const after = (argv: readonly string[], flag: string) => argv[argv.indexOf(flag) + 1];
+
+  it('runs crapper and dryer after the commands, in their sandbox, on the files the diff adds lines to, and keeps what they list', async () => {
+    const { repo, sandboxes, req } = setup({ quality: true });
+    write(repo, 'src/a.ts', 'export function grade() {\n  return 1;\n}\n');
+    commit(repo, 'grade');
+    let seen: { argv: readonly string[]; box: SandboxRequest } | undefined;
+    sandboxes.quality = (argv, box) => ((seen = { argv, box }), report([grade]));
+    const res = await runCleanVerify(req);
+    expect(res).toMatchObject({ ok: true, failures: [] });
+    expect(res.quality).toEqual({ functions: [grade], pairs: [] });
+    expect(seen!.box).toMatchObject({ runId: 'r1-verify', network: 'none' });
+    expect(seen!.argv.slice(seen!.argv.indexOf('--') + 1).sort()).toEqual(['a.txt', 'src/a.ts']);
+  });
+
+  it('measures nothing when the request does not ask for it', async () => {
+    const { sandboxes, req } = setup();
+    let ran = false;
+    sandboxes.quality = () => ((ran = true), report());
+    const res = await runCleanVerify(req);
+    expect(ran).toBe(false);
+    expect(res.quality).toBeUndefined();
+  });
+
+  it('keeps the verdict green when the tools break down, and says why', async () => {
+    const { sandboxes, req } = setup({ quality: true });
+    sandboxes.quality = () => ({ stdout: '', stderr: 'python: not found', code: 127 });
+    const res = await runCleanVerify(req);
+    expect(res).toMatchObject({ ok: true, failures: [], quality: { unavailable: expect.stringContaining('python: not found') } });
+  });
+
+  it('asks vitest for an LCOV on its first run when the commit installs a coverage package, and reads it there', async () => {
+    const pkg = JSON.stringify({ devDependencies: { '@vitest/coverage-v8': '^5', vitest: '^5' } });
+    const { sandboxes, req } = setup({ quality: true, commands: ['npx vitest run'] }, undefined, { 'package.json': pkg });
+    sandboxes.answer = (command) => (command.includes('vitest run') ? { stdout: '', stderr: '', code: 0 } : undefined);
+    let argv: readonly string[] = [];
+    sandboxes.quality = (a) => ((argv = a), report());
+    await runCleanVerify(req);
+    const line = sandboxes.ran.find((r) => r.command.includes('vitest run'))!.command;
+    expect(line).toContain('--coverage.enabled --coverage.provider=v8 --coverage.reporter=lcov');
+    expect(line).toContain(`--coverage.reportsDirectory=${after(argv, '--coverage')}/0`);
+    expect(after(argv, '--covered')).toBe('typescript');
+  });
+
+  it('adds nothing to the tests when the commit has no coverage package, and reads no coverage', async () => {
+    const { sandboxes, req } = setup({ quality: true, commands: ['npx vitest run'] }, undefined, { 'package.json': JSON.stringify({ devDependencies: { vitest: '^5' } }) });
+    sandboxes.answer = (command) => (command.includes('vitest run') ? { stdout: '', stderr: '', code: 0 } : undefined);
+    let argv: readonly string[] = [];
+    sandboxes.quality = (a) => ((argv = a), report());
+    await runCleanVerify(req);
+    expect(sandboxes.ran.find((r) => r.command.includes('vitest run'))!.command).not.toContain('--coverage');
+    expect(after(argv, '--covered')).toBe('');
   });
 });
