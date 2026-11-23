@@ -13,6 +13,12 @@ export interface EnvironmentProtection {
   requiredReviewers: boolean;
 }
 
+/** The App's installation on a repository (`GET /repos/{owner}/{repo}/installation`): its id, and its permissions as granted. */
+export interface Installation {
+  id: number;
+  permissions: Record<string, string>;
+}
+
 /**
  * The default branch's protection as `factory doctor` reads it (ORC-208), with the App's read permissions only: the
  * classic protection's flag (its rules need the *Administration* permission, which the App does not have) and the types
@@ -93,8 +99,8 @@ const isRule = (r: unknown): r is { type: string; ruleset_id: number } => isReco
 const isRuleset = (v: unknown): v is { current_user_can_bypass: string } => isRecord(v) && typeof v.current_user_can_bypass === 'string';
 
 /** An installation with its permissions, each a level (`read`, `write`): anything else is no proof of what it holds. */
-const isInstallation = (v: unknown): v is { permissions: Record<string, string> } =>
-  isRecord(v) && isRecord(v.permissions) && Object.values(v.permissions).every((level) => typeof level === 'string');
+const isInstallation = (v: unknown): v is Installation =>
+  isRecord(v) && typeof v.id === 'number' && isRecord(v.permissions) && Object.values(v.permissions).every((level) => typeof level === 'string');
 
 function hasRequiredReviewers(rules: EnvironmentDto['protection_rules']): boolean {
   return (rules ?? []).some((rule) => rule.type === 'required_reviewers' && (rule.reviewers ?? []).length > 0);
@@ -167,9 +173,9 @@ export class GitHubAppApi extends GitHubAppAuth {
     return { branch, classic, rules: [...new Set(rules.map((rule) => rule.type))].sort(), pullRequestRulesets };
   }
 
-  /** What the App's installation on the repository holds, as granted, not as the manifest asks: read with the App's JWT. */
-  async installationPermissions(github: string): Promise<Record<string, string>> {
+  /** The App's installation on the repository, its id and what it holds, as granted, not as the manifest asks: read with the App's JWT. */
+  async installation(github: string): Promise<Installation> {
     const repo = repoRef(github);
-    return (await this.read('GET', `${repoApi(repo)}/installation`, this.appJwt(), isInstallation, 'an installation with its permissions')).permissions;
+    return this.read('GET', `${repoApi(repo)}/installation`, this.appJwt(), isInstallation, 'an installation with its id and permissions');
   }
 }

@@ -5,6 +5,7 @@ import {
   GitHubAppApi,
   type BranchProtection,
   type EnvironmentProtection,
+  type Installation,
   type WorkflowSource,
 } from '../adapters/forge/github-app-api.js';
 import { UnreadableAnswerError, type HttpClient } from '../adapters/forge/github-app.js';
@@ -56,7 +57,7 @@ export interface DoctorApi {
   listWorkflows(github: string): Promise<WorkflowSource[]>;
   listEnvironments(github: string): Promise<EnvironmentProtection[]>;
   branchProtection(github: string): Promise<BranchProtection>;
-  installationPermissions(github: string): Promise<Record<string, string>>;
+  installation(github: string): Promise<Installation>;
 }
 
 type Verdict = 'accepted' | 'refused';
@@ -226,6 +227,8 @@ export interface DoctorOptions {
   github: string;
   /** The knowledge base's repository on GitHub (`knowledge.github`, ORC-481): the App must read and push it. */
   knowledge?: string;
+  /** The installation factory.yml pins (`github.installation_id`): the one covering the repository and the knowledge base's, when set (ORC-489). */
+  installationId?: string;
   api: DoctorApi;
   /** The host the daemon runs on (`checkHost`). */
   host: HostReport;
@@ -713,6 +716,10 @@ function analyzeWorkflow(
 }
 
 export interface InstallationReport {
+  /** The installation covering the repository, absent when it could not be read (ORC-489). */
+  id?: number;
+  /** The pinned installation (`github.installation_id`), set when it is not the one covering the repository: refused for it alone (ORC-489). */
+  pinned?: string;
   /** As GitHub granted them to the installation, absent when it could not be read. */
   permissions?: Record<string, string>;
   /** `unchecked`: the call failed (network, authentication), said with a warning, never a refusal (ORC-439). */
@@ -832,6 +839,32 @@ function unreadInstallation(error: unknown): InstallationReport {
   };
 }
 
+/**
+ * Why the installation covering `github` is not the one factory.yml pins (ORC-489): the daemon asks every token of the pinned
+ * installation, which cannot reach `github` then. Nothing without a pin: the daemon finds each repository's installation itself.
+ */
+function otherInstallation(github: string, id: number, pinned: string): string | undefined {
+  // Compared as numbers: a pin written `"042"` names installation 42.
+  if (/^\d+$/.test(pinned) && Number(pinned) === id) return undefined;
+  return (
+    `installation ${id} of the App covers ${github}, not the pinned installation ${pinned}: the daemon asks its tokens of ${pinned}, which cannot reach it. ` +
+    `Either add ${github} to installation ${pinned} (Settings → Applications → Installed GitHub Apps → Configure → Repository access), ` +
+    `or set github.installation_id in factory.yml to an installation covering every repository the factory reads (${id} covers ${github}), then run doctor again.`
+  );
+}
+
+/**
+ * The installation's verdict, its id kept. Not the pinned one (ORC-489), it is refused alone: the daemon never uses its
+ * permissions, and the pinned installation's are unread.
+ */
+function judgeCovering(github: string, { id, permissions }: Installation, pinned: string | undefined): InstallationReport {
+  const other = pinned === undefined ? undefined : otherInstallation(github, id, pinned);
+  return other === undefined ? { id, ...judgeInstallation(permissions) } : { id, pinned, verdict: 'refused', reasons: [other] };
+}
+
+/** The result's refusal of a repository the pinned installation does not cover (ORC-489). */
+const uncoveredBy = (pinned: string, github: string) => `the pinned GitHub App installation ${pinned} does not cover ${github}`;
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -848,11 +881,15 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
     verdict: 'refused',
     reasons: [`Cannot read the protection of the default branch: ${errorMessage(error)}`],
   }));
-  const installationRead = api.installationPermissions(github).then(judgeInstallation, unreadInstallation);
-  const knowledgeRead = options.knowledge === undefined ? undefined : judgeKnowledge(api, options.knowledge);
+  const installationRead = api.installation(github).then((installation) => judgeCovering(github, installation, options.installationId), unreadInstallation);
+  const knowledgeRead = options.knowledge === undefined ? undefined : judgeKnowledge(api, options.knowledge, options.installationId);
   // Unreadable workflows or environments still tell the host's, the protection's, the installation's and the knowledge base's verdicts.
-  const failure = async (message: string) =>
-    doctorFailure(options, message, ignored, warnings, { host: options.host, branchProtection: await protectionRead, installation: await installationRead, ...(knowledgeRead ? { knowledge: await knowledgeRead } : {}) });
+  const failure = async (message: string) => {
+    const installation = await installationRead;
+    // The pinned installation's token cannot read a repository it does not cover (GitHub answers 422): that is the cause to say (ORC-489).
+    const said = installation.pinned ? `Result: refused — ${uncoveredBy(installation.pinned, github)}: its token cannot read the repository (${message}).` : message;
+    return doctorFailure(options, said, ignored, warnings, { host: options.host, branchProtection: await protectionRead, installation, ...(knowledgeRead ? { knowledge: await knowledgeRead } : {}) });
+  };
   let workflows: WorkflowSource[];
   try {
     workflows = await api.listWorkflows(github);
@@ -885,10 +922,14 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
     ...(protection.verdict === 'refused'
       ? [protection.branch === undefined ? "the default branch's protection cannot be read" : `the default branch${branch} is not protected`]
       : []),
-    ...(installation.verdict === 'refused'
-      ? [installation.permissions ? installedWith(installation.permissions) : "the GitHub App installation's permissions cannot be read"]
+    ...(installation.verdict === 'refused' ? [installationRefusal(installation, github)] : []),
+    ...(knowledge?.verdict === 'refused'
+      ? [
+          knowledge.pinned
+            ? uncoveredBy(knowledge.pinned, `the knowledge base ${knowledge.github}`)
+            : `the GitHub App cannot push to the knowledge base ${knowledge.github}`,
+        ]
       : []),
-    ...(knowledge?.verdict === 'refused' ? [`the GitHub App cannot push to the knowledge base ${knowledge.github}`] : []),
     ...(refused > 0
       ? [
           `${refused} workflow(s) of ${reports.length} can expose secrets or a writable GITHUB_TOKEN to the factory's branches` +
@@ -939,6 +980,12 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   return accepted ? 0 : 1;
 }
 
+/** The refusal of a refused installation: not the pinned one (ORC-489), holding forbidden permissions, or unread. */
+function installationRefusal({ pinned, permissions }: InstallationReport, github: string): string {
+  if (pinned) return uncoveredBy(pinned, github);
+  return permissions ? installedWith(permissions) : "the GitHub App installation's permissions cannot be read";
+}
+
 /** The refusal of an installation holding forbidden permissions, named. */
 function installedWith(permissions: Record<string, string>): string {
   const names = heldForbidden(permissions).map(({ name }) => name);
@@ -958,6 +1005,10 @@ interface Verdicts {
 /** Whether the App can read and push the knowledge base's repository (ORC-481), as its installation there says. */
 export interface KnowledgeReport {
   github: string;
+  /** The installation covering it, absent when it could not be read (ORC-489). */
+  installation?: number;
+  /** The pinned installation, set when it is not the one covering it: refused for it alone (ORC-489). */
+  pinned?: string;
   verdict: Verdict;
   reasons: string[];
 }
@@ -967,10 +1018,10 @@ export interface KnowledgeReport {
  * notes with the installation's token, which needs Contents in write. An installation that cannot be read there refuses, whatever
  * the cause, a network failure included (stricter than `unreadInstallation`, on purpose): doctor cannot tell then that the push will go.
  */
-async function judgeKnowledge(api: DoctorApi, github: string): Promise<KnowledgeReport> {
-  let contents: string | undefined;
+async function judgeKnowledge(api: DoctorApi, github: string, pinned: string | undefined): Promise<KnowledgeReport> {
+  let installation: Installation;
   try {
-    contents = (await api.installationPermissions(github))['contents'];
+    installation = await api.installation(github);
   } catch (error) {
     return {
       github,
@@ -978,9 +1029,14 @@ async function judgeKnowledge(api: DoctorApi, github: string): Promise<Knowledge
       reasons: [`the App's installation on it cannot be read: ${errorMessage(error)}. Install the App on ${github} (Settings → Applications → Installed GitHub Apps → Configure → Repository access), then run doctor again.`],
     };
   }
-  if (contents === 'write') return { github, verdict: 'accepted', reasons: ["the App's installation covers it with Contents (write): the daemon clones it, pulls it and pushes its notes with its token"] };
+  const read = { github, installation: installation.id };
+  // Another installation than the pinned one: the daemon's token cannot reach it, whatever that installation holds (ORC-489).
+  const other = pinned === undefined ? undefined : otherInstallation(github, installation.id, pinned);
+  if (other !== undefined) return { ...read, pinned, verdict: 'refused', reasons: [other] };
+  const contents = installation.permissions['contents'];
+  if (contents === 'write') return { ...read, verdict: 'accepted', reasons: ["the App's installation covers it with Contents (write): the daemon clones it, pulls it and pushes its notes with its token"] };
   return {
-    github,
+    ...read,
     verdict: 'refused',
     reasons: [
       `the App's installation holds Contents (${contents ?? 'none'}) on it: the daemon could not push its notes. In the App's settings (Permissions & events), set Repository permissions → Contents to Read and write and save, ` +
@@ -1142,5 +1198,5 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   } catch (error) {
     return doctorFailure(report, `Cannot read the repository's branch naming: ${errorMessage(error)}`);
   }
-  return runDoctor({ ...report, github, ...(knowledge ? { knowledge } : {}), api, host: await checkHost(env, options.exec), naming: config.branches, commands: config.commands });
+  return runDoctor({ ...report, github, ...(knowledge ? { knowledge } : {}), ...(githubApp.installationId ? { installationId: githubApp.installationId } : {}), api, host: await checkHost(env, options.exec), naming: config.branches, commands: config.commands });
 }

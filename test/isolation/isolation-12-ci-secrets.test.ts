@@ -41,9 +41,9 @@ describe.skipIf(skip)(title, () => {
     const live = new GitHubAppApi(appOptions());
     // The CI secret check alone: the host, the branch protection (ORC-208) and the App's installation (ORC-439) are other verdicts, held accepted here.
     const branchProtection = async () => ({ branch: 'main', classic: false, rules: ['pull_request'], pullRequestRulesets: [{ id: 1, bypass: 'never' }] });
-    const installationPermissions = async () => ({});
+    const installation = async () => ({ id: 42, permissions: {} });
     const host: HostReport = { verdict: 'accepted', reasons: ['held accepted'] };
-    const api = { listWorkflows: (p: string) => live.listWorkflows(p), listEnvironments: (p: string) => live.listEnvironments(p), branchProtection, installationPermissions };
+    const api = { listWorkflows: (p: string) => live.listWorkflows(p), listEnvironments: (p: string) => live.listEnvironments(p), branchProtection, installation };
     const lines: string[] = [];
     expect(await runDoctor({ checkout: REPO, github: REPO, api, host, out: (l) => lines.push(l), json: true }), lines.join('\n')).toBe(0);
     const report = JSON.parse(lines.join('\n')) as { workflows: { path: string; secrets: boolean; verdict: string }[] };
@@ -153,7 +153,7 @@ describe.skipIf(protectionGate.skip)(protectionGate.title, () => {
 
     // What doctor judges, the other verdicts held accepted.
     const host: HostReport = { verdict: 'accepted', reasons: ['held accepted'] };
-    const api = { listWorkflows: async () => [], listEnvironments: async () => [], branchProtection: async () => protection, installationPermissions: async () => ({}) };
+    const api = { listWorkflows: async () => [], listEnvironments: async () => [], branchProtection: async () => protection, installation: async () => ({ id: 42, permissions: {} }) };
     const lines: string[] = [];
     const code = await runDoctor({ checkout: REPO, github: REPO, api, host, out: (l) => lines.push(l), json: true });
     const report = JSON.parse(lines.join('\n')) as { branchProtection: { branch: string; verdict: string } };

@@ -323,7 +323,7 @@ describe('the workflows doctor reads on the pilot repository (ORC-475)', () => {
             .map((f) => ({ path: `.github/workflows/${f}`, content: read(`.github/workflows/${f}`) })),
         listEnvironments: async () => [],
         branchProtection: async () => ({ branch: 'main', classic: false, rules: ['pull_request', 'required_status_checks'], pullRequestRulesets: [{ id: 1, bypass: 'never' }] }),
-        installationPermissions: async () => GITHUB_APP_PERMISSIONS,
+        installation: async () => ({ id: 42, permissions: GITHUB_APP_PERMISSIONS }),
       },
       host: { verdict: 'accepted', reasons: [] },
       json: true,
