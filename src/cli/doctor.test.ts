@@ -1254,6 +1254,19 @@ describe('doctor --secrets', () => {
     expect(message).toMatch(/the Claude token holds a character/);
     expect(await doctorBoth(refused, true)).toMatchObject({ code: 1, error: message });
   });
+
+  it.each([
+    { what: 'not JSON', text: `{"linear": {"accessToken": lin_oauth_${WITNESS}"}}` },
+    { what: 'not an object', text: 'null' },
+  ])("refuses a secrets.json in clear $what as the start does, which encrypts it with secrets_key; without --secrets, not read", async ({ text }) => {
+    const home = sealedHome();
+    writeFileSync(join(home, 'secrets.json'), text);
+    const message = await startRefusal(home);
+    expect(message).toMatch(/^secrets\.json is not (valid JSON|a JSON object)/);
+    const doctor = await doctorBoth(home, true);
+    expect({ code: doctor.code, said: doctor.lines.includes(message!), jsonCode: doctor.jsonCode, error: doctor.error }).toEqual({ code: 1, said: true, jsonCode: 1, error: message });
+    expect(await doctorBoth(home)).toMatchObject({ last: NO_APP, error: NO_APP });
+  });
 });
 
 // ORC-449: the daemon's environment the start refuses (sandboxRefusals), refused by doctor's host check with the start's message.
