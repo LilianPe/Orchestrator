@@ -180,7 +180,8 @@ export const boxOpener = (sandboxes: Boxes, of: { runId: string; ticketId: strin
  *    base is checked out from the clone's objects at step 3, before any code of the agent has run in it.
  *
  * `setup`, which has to install, runs before them in its own sandbox at `limited`, without a secret: it is sealed like
- * the attempt's (`runSealedSetup`), on commits nobody reviewed, and never on a commit the checks already refused. It
+ * the attempt's (`runSealedSetup`), on commits nobody reviewed, and never on a commit the checks already refused. A setup that
+ * declares `setup_secrets` is refused before it runs, naming them (ORC-461): it would fail without them, after the build. It
  * rejects on any failure, the setup's included: an install that fails can be a registry down, and what cannot be told
  * from a breakdown is never sent to the agent.
  */
@@ -264,6 +265,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     // As the commit declares them, which the launch did not read: provided, or refused before any of its code runs (ORC-282).
     const unprovided = req.sandboxes.unprovided([...new Set(config.services)]);
     if (unprovided.length) throw new Error(servicesUnavailable(unprovided, true));
+    if (setup.length && config.setupSecrets.length) throw new Error(`${setupSecretsWithheld(config.setupSecrets)}, then reply here.`);
     // The repository's services (ORC-309), new for this check, never the agent's: filled by the setup, gone with the commands' sandbox.
     const withServices = { ...DEFAULT_REQUIREMENTS, services: config.services };
     await setUp('verify', cloneDir, config.services);
@@ -312,6 +314,16 @@ export function servicesUnavailable(missing: readonly string[], sandboxed: boole
   const [which, it] = missing.length === 1 ? [`The service ${missing[0]} is`, 'it'] : [`The services ${missing.join(', ')} are`, 'them'];
   const why = sandboxed ? `no sandbox backend of this factory provides ${it}` : 'this factory runs without sandboxes (FACTORY_CONTAINER_CLI), which provide none';
   return `${which} not available: .factory/config.yml declares ${it} under \`services\`, and ${why}. Nothing runs without ${it}: take ${it} out of \`services\` or give the factory a backend that provides ${it}, then reply here.`;
+}
+
+/**
+ * A `verify`, or a dry run, refused for the `setup_secrets` the repository's setup declares (ORC-461): the commit `verify` checks
+ * is beyond the default branch, which the launch's rule (`unreviewed`) takes as code nobody reviewed, and a setup on it gets no
+ * secret. Said on the ticket, before the setup runs, rather than failing it without them.
+ */
+export function setupSecretsWithheld(secrets: readonly string[]): string {
+  const them = secrets.length === 1 ? 'it' : 'them';
+  return `${REPO_CONFIG_PATH} declares setup_secrets (${secrets.join(', ')}) for its setup, and verify does not run such a setup: the commit it checks has commits beyond the default branch, which nobody reviewed, and as at the launch a setup on such a commit gets no secret. Take ${them} out of setup_secrets if the setup passes without ${them}`;
 }
 
 export const BASE = 'refs/factory/base';

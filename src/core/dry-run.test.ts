@@ -247,59 +247,23 @@ describe('runDryRun (ORC-408)', () => {
     expect(run.breaks).toEqual([expect.objectContaining({ kind: 'dependency', step: 'setup', detail: expect.stringContaining('egress proxy does not allow') })]);
   });
 
-  describe('a setup that declares its setup_secrets (ORC-453)', () => {
-    const SECRET_CONFIG = 'setup: npm ci\nsetup_secrets: [NPM_TOKEN]\ncommands:\n  test: grep green state.txt\n';
-    const failing = (stderr: string, code = 1) => {
-      const f = forge({}, { '.factory/config.yml': SECRET_CONFIG });
-      f.sandboxes.answer = (command) => (command === 'npm ci' ? { stdout: '', stderr, code } : undefined);
-      return f;
-    };
+  describe('a setup that declares setup_secrets (ORC-461)', () => {
+    const SECRET_CONFIG = 'setup: npm ci\nsetup_secrets: [NPM_TOKEN, REGISTRY_TOKEN]\ncommands:\n  test: grep green state.txt\n';
 
-    it('failing as a private registry does without its token, is not red: unverifiable without its secrets, the tickets go on', async () => {
-      const { req, sandboxes } = failing('npm error code E404\nnpm error 404 Not Found - GET https://npm.acme.internal/@acme%2fui - Not found\n');
+    it("is red before its setup runs, as verify refuses it on a ticket's commit: the secrets named, and why", async () => {
+      const { req, sandboxes } = forge({}, { '.factory/config.yml': SECRET_CONFIG });
       const run = await runDryRun(req);
-      expect(run).toMatchObject({ ok: true, breaks: [], unverified: { kind: 'secret', step: 'setup', command: 'npm ci', detail: expect.stringContaining('NPM_TOKEN') } });
-      expect(run.unverified!.detail).toContain('npm error code E404');
-      expect(run.unverified!.detail).not.toContain('dependency');
-      expect(run.commands).toEqual([]);
-      expect(dryRunVerdict(run)).toBe('unverifiable');
-      // No secret reaches the dry run's setup.
-      expect(sandboxes.ran.find((r) => r.command === 'npm ci')!.env).not.toHaveProperty('NPM_TOKEN');
-    });
-
-    it('failing on anything else than a variable or a service is unverifiable too: a failure, an over-cap setup', async () => {
-      expect((await runDryRun(failing('npm error code E401\nnpm error Unable to authenticate, need: Basic realm="acme"\n').req)).unverified?.kind).toBe('secret');
-      expect((await runDryRun(failing('Error: NPM_TOKEN is not set\n').req)).unverified?.kind).toBe('secret');
-      const now = Date.now();
-      const { req, sandboxes } = failing('');
-      sandboxes.answer = (command) => {
-        if (command !== 'npm ci') return undefined;
-        // Past the cap on the factory's clock: the exit is the cap's (`cappedExit`).
-        vi.spyOn(Date, 'now').mockReturnValue(now + 2 * VERIFY_TIMEOUT_MS);
-        return { stdout: '', stderr: 'npm http fetch GET https://npm.acme.internal/@acme%2fui\n', code: 124 };
-      };
-      const capped = await runDryRun(req);
-      expect(capped).toMatchObject({ ok: true, breaks: [], unverified: { kind: 'secret', detail: expect.stringContaining('NPM_TOKEN') } });
-    });
-
-    it.each([
-      ['a variable the repository does not declare', 'Error: STRIPE_KEY is not set\n', 'variable'],
-      ['a service of its own refusing', 'Error: connect ECONNREFUSED 127.0.0.1:5432\n', 'service'],
-      ['a lockfile out of sync', 'npm error `npm ci` can only install packages when your package.json and package-lock.json or npm-shrinkwrap.json are in sync.\n', 'dependency'],
-      ['a version too recent', 'ERR_PNPM_NO_MATURE_MATCHING_VERSION  Version 4.1.0 of vite does not meet the minimumReleaseAge constraint\n', 'dependency'],
-      ['a host the egress proxy refuses a CONNECT to', 'curl: (56) CONNECT tunnel failed, response 403\n', 'dependency'],
-    ])('failing on %s stays red as such: its own cause, whatever the secrets', async (_, stderr, kind) => {
-      const run = await runDryRun(failing(stderr).req);
-      expect(run).toMatchObject({ ok: false, breaks: [expect.objectContaining({ kind, step: 'setup' })] });
+      expect(run).toMatchObject({ ok: false, commands: [], breaks: [{ kind: 'secret', step: 'config', command: '.factory/config.yml' }] });
+      expect(run.breaks[0]!.detail).toContain('setup_secrets (NPM_TOKEN, REGISTRY_TOKEN)');
+      expect(run.breaks[0]!.detail).toContain('nobody reviewed');
       expect(run.unverified).toBeUndefined();
+      expect(sandboxes.ran.map((r) => r.command)).not.toContain('npm ci');
+      expect(dryRunVerdict(run)).toBe('red');
+      expect(dryRunRefusal(run).tried).toEqual([expect.stringContaining('secret, .factory/config.yml declares setup_secrets (NPM_TOKEN, REGISTRY_TOKEN)')]);
     });
 
-    it('a registry or the egress proxy not answering still rejects: a breakdown says nothing of the secrets', async () => {
-      await expect(runDryRun(failing('npm error connect ECONNREFUSED 127.0.0.1:3128\n').req)).rejects.toThrow('no dry run recorded');
-    });
-
-    it('a setup that passes is green: the secrets are needed only when it fails', async () => {
-      const { req } = forge({}, { '.factory/config.yml': SECRET_CONFIG });
+    it('with no setup to run, nothing is withheld: green', async () => {
+      const { req } = forge({ setup: [] }, { '.factory/config.yml': 'setup_secrets: [NPM_TOKEN]\ncommands:\n  test: grep green state.txt\n' });
       expect(await runDryRun(req)).toMatchObject({ ok: true, breaks: [], commands: ['grep green state.txt'] });
     });
   });
@@ -410,8 +374,8 @@ describe('dryRunHolds (ORC-409)', () => {
     expect(dryRunHolds(run(true), { sha: 'a'.repeat(40), fingerprint: other })).toBe(false);
     expect(dryRunHolds(run(false), { sha: 'a'.repeat(40), fingerprint: other })).toBe(false);
   });
-  it('an unverifiable one (ORC-453) holds as a green one does', () => {
-    expect(dryRunHolds(runOf({ unverified }), { sha: 'f'.repeat(40), fingerprint })).toBe(true);
+  it('an unverifiable one, recorded before ORC-461, no longer holds: it runs again, red now', () => {
+    expect(dryRunHolds(runOf({ unverified }), { sha: 'a'.repeat(40), fingerprint })).toBe(false);
   });
 });
 

@@ -22,6 +22,7 @@ import { cliLinearTracker } from './linear.js';
 import { originGithub, sameGithub } from '../app/project-github.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
 import { browserImage, sandboxConfig, sandboxLimits, visualProofLine } from '../app/sandbox-wiring.js';
+import { setupSecretsWithheld } from '../core/clean-verify.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning, testCommandWarnings, type RepoConfig } from '../config/repo-config.js';
 import { branchNameOfType, branchSpaces, branchTypes, DEFAULT_BRANCH_NAMING, LEGACY_BRANCHES, legacyBranchName, type BranchNaming } from '../core/naming.js';
 
@@ -238,6 +239,8 @@ export interface DoctorOptions {
   naming?: BranchNaming;
   /** The repository's commands (`.factory/config.yml`): a warning without `test`, the red check's command (ORC-412). */
   commands?: Readonly<Record<string, string>>;
+  /** The repository's `setup_secrets` (`.factory/config.yml`): a warning when it declares some, as verify refuses its setup (ORC-461). */
+  setupSecrets?: readonly string[];
   /**
    * Whether this instance can take the visual proof (ORC-404), `browserImage`'s answer, for the JSON report, failures included:
    * never part of the verdict. In text, `runDoctorCommand` says it first.
@@ -868,12 +871,16 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Said whatever the verdict (ORC-461): a ticket's verify refuses a setup that declares `setup_secrets`, and the dry run is red on it. */
+const setupSecretsWarnings = (secrets: readonly string[] | undefined): string[] =>
+  secrets?.length ? [`Warning: ${setupSecretsWithheld(secrets)}. The dry run is red on it, and no ticket of the repository starts.`] : [];
+
 export async function runDoctor(options: DoctorOptions): Promise<number> {
   const { checkout, github, api, out } = options;
   // A workflow file an older factory read (ORC-388): named whatever the verdict, never read.
   const ignored = ignoredWorkflowFiles(checkout);
   // Neither is part of the verdict: said whatever it is.
-  const warnings = testCommandWarnings(options.commands);
+  const warnings = [...testCommandWarnings(options.commands), ...setupSecretsWarnings(options.setupSecrets)];
   if (!options.json) for (const line of [...ignored.map(ignoredWorkflowWarning), ...warnings]) out(line);
   // Read beside the workflows; an unreadable protection is a refusal with its reason, the other verdicts still told.
   const protectionRead = api.branchProtection(github).then(judgeProtection, (error: unknown): BranchProtectionReport => ({
@@ -1205,5 +1212,5 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   } catch (error) {
     return doctorFailure(report, `Cannot read the repository's branch naming: ${errorMessage(error)}`);
   }
-  return runDoctor({ ...report, github, ...(knowledge ? { knowledge } : {}), ...(githubApp.installationId ? { installationId: githubApp.installationId } : {}), api, host: await checkHost(env, options.exec), naming: config.branches, commands: config.commands });
+  return runDoctor({ ...report, github, ...(knowledge ? { knowledge } : {}), ...(githubApp.installationId ? { installationId: githubApp.installationId } : {}), api, host: await checkHost(env, options.exec), naming: config.branches, commands: config.commands, setupSecrets: config.setupSecrets });
 }
