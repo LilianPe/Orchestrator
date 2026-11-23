@@ -337,14 +337,18 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
   };
   // The knowledge base (ORC-481): ghost's own clone, `<ghost>/.knowledge`, never the daemon's, which it would race for git's locks.
   // Made from GitHub if missing, brought up to its default branch once per command; a failure is not kept, the next ticket tries again.
+  const knowledgeDir = join(homePaths(home).ghost, '.knowledge');
   let knowledgeClone: Promise<string> | undefined;
-  const knowledgeOf = async (github: string): Promise<string> => {
-    const dir = join(homePaths(home).ghost, '.knowledge');
-    const why = await new KnowledgeBase(dir, { origin: mirrors.url(github), auth: mirrors.authOf(github) }).pull().catch((err: Error) => err.message);
-    if (why === undefined) return dir;
-    knowledgeClone = undefined;
-    throw new Error(`the knowledge base ${github} could not be pulled: ${why}`);
-  };
+  const knowledgeOf = (github: string): Promise<string> =>
+    (knowledgeClone ??= new KnowledgeBase(knowledgeDir, { origin: mirrors.url(github), auth: mirrors.authOf(github) }).pull().then(
+      (why) => {
+        if (why) throw new Error(why);
+        return knowledgeDir;
+      },
+    ).catch((err: Error) => {
+      knowledgeClone = undefined;
+      throw new Error(`the knowledge base ${github} could not be pulled: ${err.message}`);
+    }));
   try {
     let user = 'cli';
     try {
@@ -380,7 +384,7 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
         if (!memory || !instance.knowledge) return { start };
         // Transaction time: the knowledge base as it stood when the start commit was made.
         const at = await startTime({ dir: repo, sha: start });
-        const knowledge = await knowledgeAt({ repo: await (knowledgeClone ??= knowledgeOf(instance.knowledge.github)), before: at, dir: join(dir, 'knowledge') });
+        const knowledge = await knowledgeAt({ repo: await knowledgeOf(instance.knowledge.github), before: at, dir: join(dir, 'knowledge') });
         return { start, ...(knowledge ? { knowledge } : {}) };
       },
       ask: (q) => (rl ??= createInterface({ input: process.stdin, output: process.stdout })).question(q),

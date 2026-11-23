@@ -901,6 +901,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   const accepted = refusals.length === 0;
 
   if (options.json) {
+    // `repoPath`: the JSON report's field, kept as documented (docs/github.md) though the option is `checkout`.
     out(JSON.stringify({ repoPath: checkout, accepted, host, branchProtection: protection, installation, ...(knowledge ? { knowledge } : {}), workflows: reports, ...notes(ignored, warnings), ...instanceReportOf(options) }, null, 2));
   } else {
     for (const line of verdictLines({ host, branchProtection: protection, installation, ...(knowledge ? { knowledge } : {}) })) out(line);
@@ -964,7 +965,7 @@ export interface KnowledgeReport {
 /**
  * The knowledge base's repository as the App's installation covers it (ORC-481): the daemon clones it, pulls it and pushes its
  * notes with the installation's token, which needs Contents in write. An installation that cannot be read there refuses, whatever
- * the cause: doctor cannot tell then that the push will go.
+ * the cause, a network failure included (stricter than `unreadInstallation`, on purpose): doctor cannot tell then that the push will go.
  */
 async function judgeKnowledge(api: DoctorApi, github: string): Promise<KnowledgeReport> {
   let contents: string | undefined;
