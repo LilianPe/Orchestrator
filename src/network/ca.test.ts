@@ -124,6 +124,20 @@ describe('a CA stored before ORC-477 that OpenSSL cannot read (ORC-483)', () => 
     expect(log).toHaveBeenCalledOnce();
   });
 
+  it('a key OpenSSL cannot parse fails the load and is never written over (ORC-484)', async () => {
+    const at = join(dir, 'ca-encrypted');
+    const keyPath = join(at, 'ca.key');
+    const made = await loadOrCreateCa(at);
+    // An operator's key behind a passphrase: not ours to replace.
+    const encrypted = createPrivateKey(made.keyPem).export({ type: 'pkcs8', format: 'pem', cipher: 'aes-256-cbc', passphrase: 'operator' }) as string;
+    writeFileSync(keyPath, encrypted);
+    const log = vi.fn();
+    await expect(loadOrCreateCa(at, log)).rejects.toThrow();
+    expect(readFileSync(keyPath, 'utf8')).toBe(encrypted);
+    expect(readFileSync(made.certPath, 'utf8')).toBe(made.certPem);
+    expect(log).not.toHaveBeenCalled();
+  });
+
   it('a CA OpenSSL reads is kept byte for byte, nothing said', async () => {
     const at = join(dir, 'ca-valid');
     const keyPath = join(at, 'ca.key');

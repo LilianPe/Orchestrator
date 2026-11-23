@@ -48,7 +48,7 @@ export async function loadOrCreateCa(dir: string, log?: (message: string) => voi
   ]);
   cert.sign(forge.pki.privateKeyFromPem(privateKey), forge.md.sha256.create());
   const certPem = forge.pki.certificateToPem(cert);
-  // The key first, the certificate last: cut in between, the old certificate stays, still unreadable, and the next start makes another.
+  // The key first, the certificate last: cut in between, the new key sits beside the old certificate, which the next load finds unusable and replaces.
   replace(keyPath, privateKey, 0o600);
   replace(certPath, certPem, 0o644);
   if (unusable) log?.(`egress: the CA in ${dir} could not be used (${unusable}): a new one replaced it`);
@@ -57,21 +57,17 @@ export async function loadOrCreateCa(dir: string, log?: (message: string) => voi
 
 /**
  * Why the stored pair cannot sign: a certificate OpenSSL cannot read (no sandbox trusts it), or a key that is not its own
- * (every leaf fails verification, ORC-484). Never the key's content; undefined when the pair is usable.
+ * (every leaf fails verification, ORC-484); undefined when the pair is usable. A key OpenSSL cannot parse throws, as it
+ * did before: an operator's encrypted key, say, is never written over.
  */
 function unusableReason(certPem: string, keyPem: string): string | undefined {
   let cert: X509Certificate;
   try {
     cert = new X509Certificate(certPem);
   } catch (err) {
-    return `certificate unreadable to OpenSSL, so no sandbox trusted it: ${(err as Error).message}`;
+    return `its certificate is unreadable to OpenSSL, so no sandbox trusted it: ${(err as Error).message}`;
   }
-  try {
-    if (cert.checkPrivateKey(createPrivateKey(keyPem))) return undefined;
-  } catch {
-    // An unreadable key; OpenSSL's message is not passed on, in case it quotes the key.
-  }
-  return 'its key does not match its certificate, so every leaf failed verification';
+  return cert.checkPrivateKey(createPrivateKey(keyPem)) ? undefined : 'its key is not its certificate’s, so every leaf failed verification';
 }
 
 /**
