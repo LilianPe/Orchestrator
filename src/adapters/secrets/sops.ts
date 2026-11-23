@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { parse } from 'yaml';
 import { execCmd, TIMED_OUT } from '../exec.js';
+import { checkCredentialFile } from './file.js';
 import type { SecretSourceKind } from './types.js';
 
 /** A key path in the decrypted document: names of letters, digits, `_`, `-` (an index for a list), joined by `.`. */
@@ -63,6 +64,7 @@ export function sopsRotation(text: string): Date | undefined {
  */
 export const sopsKind: SecretSourceKind = {
   checkPath: (path) => (KEY_PATH.test(path) ? undefined : `"${path}" is not a key path of the sops file (\`section.key\`)`),
+  credentialFiles: ['age_key_file'],
   checkOptions: (options) =>
     // `file` first, required: checked even when absent.
     Object.entries({ file: undefined, ...options }).flatMap(([key, v]) => {
@@ -73,7 +75,11 @@ export const sopsKind: SecretSourceKind = {
     const file = options['file'] as string;
     const keyFile = options['age_key_file'] as string | undefined;
     const sopsEnv: Record<string, string> = Object.fromEntries(Object.entries({ ...env, ...(keyFile ? { SOPS_AGE_KEY_FILE: keyFile } : {}) }).filter((e): e is [string, string] => e[1] !== undefined));
-    const value = async (path: string): Promise<unknown> => at(await decrypt(file, sopsEnv), path);
+    const value = async (path: string): Promise<unknown> => {
+      // The key opens every secret of the file: its owner's alone, as a `file` source's value.
+      if (keyFile) await checkCredentialFile(keyFile, 'age_key_file', 0o077, 'others than its owner: chmod 600 it');
+      return at(await decrypt(file, sopsEnv), path);
+    };
     return {
       read: async (path) => {
         const v = await value(path);

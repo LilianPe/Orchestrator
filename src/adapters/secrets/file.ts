@@ -1,4 +1,4 @@
-import { lstat, open, type FileHandle } from 'node:fs/promises';
+import { lstat, open, stat, type FileHandle } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { NO_FOLLOW_READ } from '../read-capped.js';
 import type { SecretSourceKind } from './types.js';
@@ -7,6 +7,20 @@ import type { SecretSourceKind } from './types.js';
 const FILE_NAME = /^[A-Za-z0-9_-][A-Za-z0-9_.-]*$/;
 
 const errnoCode = (err: unknown): string | undefined => (err as NodeJS.ErrnoException | undefined)?.code;
+
+/**
+ * A source's own credential file (sops's `age_key_file`, vault's `token_file`, ORC-418): refused when its mode lets `mask`'s readers
+ * read it, `fault` saying why. Windows has no mode bits: the folder's ACL keeps it. Its errors carry a path, never a content.
+ */
+export async function checkCredentialFile(path: string, what: string, mask: number, fault: string): Promise<void> {
+  let mode: number;
+  try {
+    mode = (await stat(path)).mode;
+  } catch (err) {
+    throw new Error(errnoCode(err) === 'ENOENT' ? `no ${what} ${path}` : `the ${what} ${path} could not be read`, { cause: err });
+  }
+  if (process.platform !== 'win32' && (mode & mask) !== 0) throw new Error(`the ${what} ${path} is readable by ${fault}`);
+}
 
 /**
  * `kind: file` (ORC-470): a value held in a file of `dir`, mode 0600, its owner's alone. What `factory init --dev` declares for the

@@ -12,6 +12,7 @@ import { isSealed, SECRETS_KEY_REQUIRED } from './secrets-file.js';
 export const ROTATION_MAX_DAYS = 180;
 
 const IN_CLEAR_ENV = "in clear in the daemon's environment: a sealed source (systemd-creds) keeps it off the disk";
+const IN_CLEAR_KEY_FILE = 'in clear in a file, the key to every secret of its source: keep it the daemon user\'s alone';
 const IN_CLEAR_FILE = "in clear in a file, its owner's alone: for a workstation; on a server, a sealed source (systemd-creds) keeps it off the disk";
 
 export interface SealedFactoryYml {
@@ -107,6 +108,13 @@ export async function serverSecretReport(
   const sources = openSecretSources(yml?.secretSources, kinds, env);
   const reports: SecretReport[] = [];
   for (const [key, ref] of Object.entries(yml?.secretRefs ?? {})) reports.push(await describeRef(key, ref, yml, sources, now));
+  // A source's own key, in clear on the disk though the secrets it opens are sealed (ORC-418).
+  for (const [name, decl] of Object.entries(yml?.secretSources ?? {})) {
+    for (const option of kinds[decl.kind]?.credentialFiles ?? []) {
+      const file = decl.options[option];
+      if (typeof file === 'string') reports.push({ key: `secret_sources.${name}.${option}`, reference: file, inClear: true, warnings: [IN_CLEAR_KEY_FILE] });
+    }
+  }
   const instance = effectiveInstance(yml);
   const stored = secretsText(home);
   // The daemon does not start without it off the loopback, said whether or not secrets.json exists yet, nor beside Linear (ORC-470).

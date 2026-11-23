@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
+import { checkCredentialFile } from './file.js';
 import type { SecretSourceKind } from './types.js';
 
 /** A segment of a secret's path or of a mount: letters, digits, spaces, `_`, `.`, `-`, never `.` or `..`. */
@@ -49,6 +50,7 @@ const KNOWN = new Set(['address', 'token', 'token_file', 'mount', 'namespace']);
 export const vaultKind: SecretSourceKind = {
   checkPath: (path) => (split(path) ? undefined : `"${path}" is not \`<path>#<field>\` of a Vault secret`),
   credentialOptions: ['token'],
+  credentialFiles: ['token_file'],
   checkOptions: (options) => {
     const faults: string[] = [];
     const address = addressFault(options['address']);
@@ -71,6 +73,8 @@ export const vaultKind: SecretSourceKind = {
     const token = async (): Promise<string> => {
       let value = options['token'] as string;
       if (tokenFile) {
+        // A Vault Agent's sink is 0640 by default: its group may read it, as the daemon does when it is of that group.
+        await checkCredentialFile(tokenFile, 'token_file', 0o007, 'any user: chmod 600 it (640 for a Vault Agent of its group)');
         try {
           value = (await readFile(tokenFile, 'utf8')).trim();
         } catch (err) {

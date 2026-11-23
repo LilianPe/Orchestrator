@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -79,10 +79,20 @@ describe('vault secret source', () => {
   it('reads its token from token_file at each read: a Vault Agent renews it there', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'vault-'));
     const file = join(dir, 'token');
-    writeFileSync(file, 'hvs.stale\n');
+    writeFileSync(file, 'hvs.stale\n', { mode: 0o640 });
     const source = vaultKind.create({ address, token_file: file, mount: 'kv' }, {});
     await expect(source.read('app/github#key')).rejects.toThrow('Vault refused the token (403)');
     writeFileSync(file, `${TOKEN}\n`);
+    expect(await source.read('app/github#key')).toBe('pem-secret-value');
+  });
+
+  it.skipIf(process.platform === 'win32')('refuses a token_file any user can read; a Vault Agent sink of its group (0640) is read', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vault-'));
+    const file = join(dir, 'token');
+    writeFileSync(file, `${TOKEN}\n`, { mode: 0o644 });
+    const source = vaultKind.create({ address, token_file: file, mount: 'kv' }, {});
+    await expect(source.read('app/github#key')).rejects.toThrow(`the token_file ${file} is readable by any user: chmod 600 it (640 for a Vault Agent of its group)`);
+    chmodSync(file, 0o640);
     expect(await source.read('app/github#key')).toBe('pem-secret-value');
   });
 
@@ -107,7 +117,7 @@ describe('vault secret source', () => {
   it('refuses a token that is no header value without quoting it: fetch would put it in its error', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'vault-'));
     const file = join(dir, 'token');
-    writeFileSync(file, 'hvs.first\nhvs.second\n');
+    writeFileSync(file, 'hvs.first\nhvs.second\n', { mode: 0o600 });
     for (const source of [vaultKind.create({ address, token_file: file }, {}), vaultKind.create({ address, token: 'hvs.a b' }, {})]) {
       const err = (await rejection(source.read('app/github#key'))) as Error;
       expect(err.message).toBe('the Vault token is not a valid header value (printable characters, no space)');

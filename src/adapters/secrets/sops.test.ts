@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { rejection } from '../../../test/contracts/cases.js';
 import { describeSecretSourceContract } from '../../../test/contracts/secret-source.contract.js';
+import { serverSecretReport } from '../../config/server-secrets.js';
 import { sopsKind, sopsRotation } from './sops.js';
 
 const ROTATED = new Date('2026-09-01T10:00:00Z');
@@ -41,7 +42,7 @@ function fixture(plain: unknown = { github: { key: 'pem-secret-value' }, port: 5
   const file = join(root, 'secrets.enc.json');
   writeFileSync(file, JSON.stringify({ plain, sops: { lastmodified: ROTATED.toISOString(), version: '3.9.0' }, ...extra }));
   const keyFile = join(root, 'keys.txt');
-  writeFileSync(keyFile, `# public key: age1fake\n${AGE_KEY}\n`);
+  writeFileSync(keyFile, `# public key: age1fake\n${AGE_KEY}\n`, { mode: 0o600 });
   const log = join(root, 'calls.log');
   writeFileSync(log, '');
   return { file, keyFile, log, env: { PATH: `${root}:${dirname(process.execPath)}`, FAKE_SOPS_LOG: log } };
@@ -79,6 +80,26 @@ describe('sops secret source', () => {
     const source = sopsKind.create({ file: f.file }, { ...f.env, SOPS_AGE_KEY_FILE: f.keyFile });
     expect(await source.read('github.key')).toBe('pem-secret-value');
     expect(calls(f)[0]?.key).toBe(f.keyFile);
+  });
+
+  it.skipIf(process.platform === 'win32')('refuses an age_key_file others than its owner can read, before running sops: it opens every secret', async () => {
+    const f = fixture();
+    chmodSync(f.keyFile, 0o640);
+    await expect(sops(f).read('github.key')).rejects.toThrow(`the age_key_file ${f.keyFile} is readable by others than its owner: chmod 600 it`);
+    expect(calls(f)).toEqual([]);
+    chmodSync(f.keyFile, 0o600);
+    expect(await sops(f).read('github.key')).toBe('pem-secret-value');
+  });
+
+  it('lists its age_key_file in doctor as a key in clear in a file, beside the secrets it seals', async () => {
+    const f = fixture();
+    const home = dirname(f.file);
+    writeFileSync(join(home, 'factory.yml'), `secret_sources:\n  s: { kind: sops, file: ${f.file}, age_key_file: ${f.keyFile} }\ngithub: { app_id: 1, private_key: "s:github.key" }\n`);
+    const reports = await serverSecretReport(home, f.env, { now: ROTATED.getTime() });
+    expect(reports.map((r) => [r.key, r.reference, r.inClear])).toEqual([
+      ['github.private_key', 's:github.key', false],
+      ['secret_sources.s.age_key_file', f.keyFile, true],
+    ]);
   });
 
   it('reaches an item of a list by its index', async () => {
