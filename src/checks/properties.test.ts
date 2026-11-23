@@ -83,6 +83,19 @@ describe('the generators of the property tests, frozen with them (ORC-261)', () 
     ]);
   });
 
+  it('freezes the `__init__.py` of the test\'s folder and of each one above, which pytest runs, whatever the import', async () => {
+    const files = {
+      'tests/sub/test_orc_12_property_1.py': 'from ..arb import cells\n',
+      'tests/sub/__init__.py': '',
+      'tests/__init__.py': '',
+      'tests/arb.py': '',
+      'tests/test_orc_12_property_2.py': 'from strategies import rows\n',
+      'tests/strategies.py': '',
+    };
+    expect(await propertySupport(['tests/sub/test_orc_12_property_1.py'], view(files))).toEqual(['tests/__init__.py', 'tests/arb.py', 'tests/sub/__init__.py']);
+    expect(await propertySupport(['tests/test_orc_12_property_2.py'], view(files))).toEqual(['tests/__init__.py', 'tests/strategies.py']);
+  });
+
   it('keeps an import that follows a `#` in a string of the statement before it', async () => {
     const files = { 'tests/test_orc_12_property_1.py': 'COLOR = "#fff"; from .colors import palette\n', 'tests/colors.py': '' };
     expect(await propertySupport(['tests/test_orc_12_property_1.py'], view(files))).toEqual(['tests/colors.py']);

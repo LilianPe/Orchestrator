@@ -74,13 +74,14 @@ function ancestors(dir: string): string[] {
 /**
  * The repository paths a Python file's imports could be: `from .x import y`, `from . import x`, `from a.b import c` (`c` maybe a
  * submodule), `import a.b`, a parenthesized list across lines, with the `__init__.py` of each package on the way. An absolute module
- * is looked for from the file's folder up to the root.
+ * is looked for from the file's folder up to the root. Whatever it imports, the `__init__.py` of its own folder and of each one above
+ * it, which pytest runs before the file.
  */
 function pythonImports(path: string, source: string): string[] {
   const dir = posix.dirname(path);
-  const out: string[] = [];
-  const at = (base: string) => (dotted: string) => [...packages(dotted), ...pyModule(dotted)].map((rel) => under(base, rel));
   const roots = ancestors(dir);
+  const out: string[] = roots.map((d) => under(d, '__init__.py'));
+  const at = (base: string) => (dotted: string) => [...packages(dotted), ...pyModule(dotted)].map((rel) => under(base, rel));
   const absolute = (dotted: string) => roots.flatMap((d) => at(d)(dotted));
   const code = statements(source);
   for (const m of code.matchAll(/^\s*from(?:\s+|(?=\.))(\.*)([\w.]*)\s+import\s+(\([^)]*\)|[^\n]+)/gm)) {
@@ -92,7 +93,7 @@ function pythonImports(path: string, source: string): string[] {
       continue;
     }
     const base = posix.normalize(posix.join(dir, ...Array<string>(dots.length - 1).fill('..')));
-    out.push(under(base, '__init__.py'), ...dotted.flatMap(at(base)));
+    out.push(...dotted.flatMap(at(base)));
   }
   for (const m of code.matchAll(/^\s*import\s+([^\n]+)/gm)) out.push(...names(m[1]!).flatMap(absolute));
   return out;
