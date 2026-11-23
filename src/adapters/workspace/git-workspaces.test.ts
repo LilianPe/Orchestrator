@@ -621,7 +621,8 @@ describe('GitWorkspaces', () => {
     git(repo, 'add', '.');
     git(repo, 'commit', '-qm', 'lfs');
     expect(git(repo, 'cat-file', '-p', 'HEAD:big.bin')).toBe(pointer.trim());
-    git(repo, 'push', '-q', 'origin', 'main');
+    // Past the host's pre-push hook: Git LFS's would upload the object behind the pointer, which no store has.
+    git(repo, 'push', '-q', '--no-verify', 'origin', 'main');
     // As `git lfs install` on the host: a smudge that downloads, required, in the host's own config.
     const dir = mkdtempSync(join(tmpdir(), 'factory-git-'));
     const seen = join(dir, 'seen');
