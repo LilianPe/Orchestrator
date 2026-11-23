@@ -21,6 +21,7 @@ import { needsRefreeze, type ClassifiedDiff } from '../core/diff-class.js';
 import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
 import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import { isTestFile } from '../checks/test-files.js';
+import { propertySupport, propertyTests } from '../checks/properties.js';
 import { captureArtifactId, scenarioPath } from '../checks/visual-proof.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 import { factoryDefault } from '../presets/factory-default.js';
@@ -58,9 +59,10 @@ export abstract class DaemonChecks extends DaemonBase {
   /**
    * The `red` check of a finished `tests` run (ORC-123): the step's commits from the head it started on, read on the
    * factory's repository; its uncommitted files and its tests run in a sandbox of their own without network, on the
-   * host as `verify` without sandboxes. A check that cannot run gives no verdict on the tests: `infra`.
+   * host as `verify` without sandboxes. A check that cannot run gives no verdict on the tests: `infra`. The approved spec's
+   * properties each want their test (ORC-261), frozen with the generators it imports.
    */
-  protected async checkRed(project: ProjectRuntime, run: RunRecord, alreadyFrozen: boolean): Promise<RedResult & { frozen?: FrozenTests }> {
+  protected async checkRed(project: ProjectRuntime, run: RunRecord, t: TicketState): Promise<RedResult & { frozen?: FrozenTests }> {
     const sandboxes = this.d.sandboxes;
     const redRunId = `${run.id}-red`;
     let sandbox: Sandbox | undefined;
@@ -96,12 +98,14 @@ export abstract class DaemonChecks extends DaemonBase {
           return { exitCode: cappedExit(r.code, started), output: r.stdout + r.stderr };
         };
       }
-      const red = await checkRed(command, { ...diff, uncommitted, run: runTests });
+      const count = t.spec?.approval ? (t.spec.spec.properties?.length ?? 0) : 0;
+      const red = await checkRed(command, { ...diff, uncommitted, run: runTests, ...(count ? { properties: { ticketId: t.ticketId, count } } : {}) });
       // The freeze (ORC-131) on the same commit: the step's tests and the harness, whatever the red's verdict.
       // ponytail: committed files only; a test left uncommitted is not frozen (verify reads commits once ORC-151 lands).
       const tests = diff.changed.filter((f) => !f.deleted && isTestFile(f.path)).map((f) => f.path);
-      const read = await freezeTests(tests, diff);
-      return { ...red, frozen: alreadyFrozen ? newTestsOnly(read) : read };
+      // The generators of the property tests (ORC-261), whoever wrote them and whenever: what a property draws its inputs from.
+      const read = await freezeTests([...tests, ...(count ? await propertySupport(propertyTests(t.ticketId, count, tests), diff) : [])], diff);
+      return { ...red, frozen: t.frozenTests ? newTestsOnly(read) : read };
     } catch (err) {
       return { verified: false, cause: 'infra', command: '', exitCode: null, detail: `The red check could not run: ${(err as Error).message}` };
     } finally {

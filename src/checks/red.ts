@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { posix } from 'node:path';
 import { isRecord } from '../adapters/graphql-pages.js';
 import { ANSI } from './log-excerpt.js';
+import { missingProperties, propertyTestFiles } from './properties.js';
 import { isTestFile, isTestSpec, normalizePath } from './test-files.js';
 import { exportedNames, importedFrom, isPython, parse } from './ts-ast.js';
 
@@ -12,12 +13,13 @@ import { exportedNames, importedFrom, isPython, parse } from './ts-ast.js';
  * Why the red is verified or not. Verified: an `assertion`; a `missing_module` the build will create (absent at
  * baseSha); a `missing_export` of a module that exists, the symbol absent at baseSha. Not verified: a module that
  * exists at baseSha (`module_at_base`), a package (`missing_package`: the build installs none), a compilation or
- * load error, a runtime error, no test, tests that pass, a step outside the tests (`scope`). `infra`: the check
+ * load error, a runtime error, no test, tests that pass, a step outside the tests (`scope`), an approved property left
+ * without its test (`missing_property`, ORC-261). `infra`: the check
  * could not run, no verdict on the tests.
  */
 export type RedCause =
   | 'assertion' | 'missing_module' | 'missing_export'
-  | 'module_at_base' | 'missing_package' | 'compile' | 'error' | 'no_tests' | 'passing' | 'scope' | 'infra';
+  | 'module_at_base' | 'missing_package' | 'compile' | 'error' | 'no_tests' | 'passing' | 'scope' | 'missing_property' | 'infra';
 
 export const RED_VERIFIED: ReadonlySet<RedCause> = new Set<RedCause>(['assertion', 'missing_module', 'missing_export']);
 
@@ -313,6 +315,8 @@ export interface RedDeps {
   showAtBase(path: string): Promise<string | undefined>;
   /** A test file of the step, at its head. */
   showAtHead(path: string): Promise<string | undefined>;
+  /** The approved spec's « for any input » properties (ORC-261): each needs its test, in the file the factory names. */
+  properties?: { ticketId: string; count: number };
 }
 
 export interface RedResult {
@@ -340,6 +344,11 @@ export async function checkRed(repoCommand: string, deps: RedDeps): Promise<RedR
   if (outside.length > 0) return verdict('scope', `The tests step changed files that are not tests: ${[...new Set(outside)].join(', ')}.`);
   const tests = deps.changed.filter((f) => !f.deleted && isTestSpec(f.path)).map((f) => normalizePath(f.path));
   if (tests.length === 0) return verdict('no_tests', 'The tests step committed no test.');
+  const owed = deps.properties ? missingProperties(deps.properties.ticketId, deps.properties.count, tests) : [];
+  if (owed.length) {
+    const named = owed.map((n) => `property ${n}: \`${propertyTestFiles(deps.properties!.ticketId, n).ts}\` or \`${propertyTestFiles(deps.properties!.ticketId, n).py}\``);
+    return verdict('missing_property', `The tests step committed no test for an approved property, in the file the factory names: ${named.join('; ')}.`);
+  }
 
   const { line, runner } = await testCommand(repoCommand, deps);
   const ran = `${line} ${tests.map(quote).join(' ')}`;
@@ -419,7 +428,7 @@ async function judge(m: Missing, tests: readonly string[], deps: RedDeps): Promi
   return hasSymbol(existing, (await deps.showAtBase(existing)) ?? '', m.symbol) ? 'compile' : 'missing_export';
 }
 
-const DETAIL: Record<Exclude<RedCause, 'scope' | 'infra'>, string> = {
+const DETAIL: Record<Exclude<RedCause, 'scope' | 'missing_property' | 'infra'>, string> = {
   assertion: 'The tests fail on an assertion: red verified.',
   missing_module: 'The tests fail on a module the ticket has to create: red verified',
   missing_export: 'The tests fail on what an existing module does not export yet: red verified',

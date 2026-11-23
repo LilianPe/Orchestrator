@@ -115,6 +115,8 @@ export interface TicketMeasures {
   reviewRounds: { ai: number; human: number };
   /** The ticket's attempts, oldest first: what each cost and how long it ran (ORC-223). */
   runs: RunMeasure[];
+  /** Each version of the spec the factory published (`publish_spec` done), in order, with its count of « for any input » properties (ORC-261). */
+  specs: { version: number; properties: number }[];
 }
 
 /** One attempt as measured from its record (ORC-223): never its text. */
@@ -406,6 +408,7 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
     costUsd: runs.reduce((sum, r) => sum + r.costUsd, 0),
     reviewRounds: { ai: facts.runs.filter(reviewed).length, human: facts.effects.filter(handedToHuman).length },
     runs,
+    specs: facts.effects.flatMap((r) => (r.status === 'done' && r.effect.kind === 'publish_spec' ? [{ version: r.effect.version, properties: r.effect.spec.properties?.length ?? 0 }] : [])),
   };
 }
 

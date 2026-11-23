@@ -10,7 +10,7 @@ const tokens = (input: number) => ({ input, output: 0, cacheRead: 0, cacheCreati
 const measures = (ticketId: string, patch: Partial<TicketMeasures> = {}): TicketMeasures => ({
   projectId: 'p', ticketId, mergedAt: null, tokens: null, attempts: 1, attemptsWithoutTokens: 0, usageLimitShare: null, firstTry: null, reworks: [],
   humanReviewMinutes: null, revertedWithin14Days: null, revertWindowEndsAt: null, ciCost: null, messages: [], red: [], startedAt: null, leadTimeMs: null,
-  workMs: 0, costUsd: 0, reviewRounds: { ai: 0, human: 0 }, runs: [], ...patch,
+  workMs: 0, costUsd: 0, reviewRounds: { ai: 0, human: 0 }, runs: [], specs: [], ...patch,
 });
 const merged = (ticketId: string, at: number, patch: Partial<TicketMeasures> = {}) =>
   measures(ticketId, { mergedAt: at, startedAt: at - DAY, leadTimeMs: DAY, firstTry: true, ...patch });
@@ -71,6 +71,16 @@ describe('overview (ORC-299)', () => {
       measures('WIP', { red: [{ id: 'v4', verified: false, cause: 'compile' }] }),
     ]);
     expect(o).toMatchObject({ reverted: { yes: 1, known: 2 }, red: { verified: 2, wouldHaveBlocked: 1 } });
+  });
+
+  it('counts the delivered tickets with a spec, and those whose last published version had « for any input » properties (ORC-261)', () => {
+    const o = overview(PERIOD, [
+      merged('A', 11 * DAY, { specs: [{ version: 1, properties: 0 }, { version: 2, properties: 2 }] }),
+      merged('B', 12 * DAY, { specs: [{ version: 1, properties: 1 }, { version: 2, properties: 0 }] }),
+      merged('C', 13 * DAY),
+      measures('WIP', { specs: [{ version: 1, properties: 3 }] }),
+    ]);
+    expect(o.properties).toEqual({ specs: 2, withProperties: 1 });
   });
 
   it('says how many tickets it could not measure, and has no baseline until one is computed (ORC-230)', () => {

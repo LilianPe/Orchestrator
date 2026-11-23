@@ -206,6 +206,18 @@ describe('checkRed', () => {
     expect(none.commands).toEqual([]);
   });
 
+  it('refuses a step that left an approved property without its test, naming the file it is owed (ORC-261)', async () => {
+    const properties = { ticketId: 'ORC-12', count: 2 };
+    const d = { ...deps(['src/export.test.ts', 'src/orc-12.property-1.test.ts'], 1, VITEST_ASSERTION), properties };
+    const red = await checkRed('npx vitest run', d);
+    expect(red).toMatchObject({ verified: false, cause: 'missing_property' });
+    expect(red.detail).toContain('orc-12.property-2.test.ts');
+    expect(red.detail).toContain('test_orc_12_property_2.py');
+    expect(d.commands).toEqual([]);
+    const all = { ...deps(['src/orc-12.property-1.test.ts', 'tests/test_orc_12_property_2.py'], 1, VITEST_ASSERTION), properties };
+    expect(await checkRed('npx vitest run', all)).toMatchObject({ verified: true, cause: 'assertion' });
+  });
+
   it('fails the step when it touched a file that is not a test, committed or not, without running anything', async () => {
     const d = deps(['src/export.test.ts', 'src/export.ts'], 1, VITEST_ASSERTION);
     expect(await checkRed('npm test --', d)).toMatchObject({ verified: false, cause: 'scope', detail: expect.stringContaining('src/export.ts') });

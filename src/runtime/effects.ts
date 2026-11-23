@@ -290,7 +290,7 @@ export abstract class DaemonEffects extends DaemonChecks {
         if (planStepOfJob(job, project.workflow) === 'Build') await this.updatePlan(t, (plan) => advancePlan(plan, 'Verify'));
         this.withSlot(project, t.ticketId, job.queue, c.runId, async (now) => {
           if (job.red) {
-            const red = await this.checkRed(project, run, !!now.frozenTests);
+            const red = await this.checkRed(project, run, now);
             const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId, id: `check:${run.id}` };
             const failures = [{ command: red.command || 'factory/red', exitCode: red.exitCode, output: red.detail }];
             const common = { runId: run.id, job: job.name, red: red.cause, ...(red.frozen ? { frozen: red.frozen } : {}) };

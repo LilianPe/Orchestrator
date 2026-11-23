@@ -31,6 +31,7 @@ import { branchAnew, heldByOther, pendingOf, samePending } from '../core/reduce.
 import { advancePlan, planStepOfJob } from '../core/session-plan.js';
 import { startMove } from '../core/chain.js';
 import { formatSpec } from '../core/spec.js';
+import { propertyTestFiles } from '../checks/properties.js';
 import { type Blocker, type FeedbackItem, type InputKind, type InternalEvent, type PendingJob, type QueueName, type RelayedQuestion, type FactoryEvent, type TicketState, type VerifyFailure, TRUSTED } from '../core/types.js';
 import { runSealedSetup } from '../core/sealed-setup.js';
 import { servicesUnavailable } from '../core/clean-verify.js';
@@ -996,7 +997,7 @@ export abstract class DaemonLaunch extends DaemonEffects {
         ...(project.replayed?.history ? { history: project.replayed.history } : {}),
         branch: job.queue === 'dev' ? t.branch : undefined,
         prUrl: t.prUrl,
-        spec: specShown && t.spec ? { version: t.spec.version, approved: !!t.spec.approval, text: formatSpec(t.spec.spec) } : undefined,
+        spec: specShown && t.spec ? { version: t.spec.version, approved: !!t.spec.approval, text: formatSpec(t.spec.spec), ...(t.spec.approval && t.spec.spec.properties?.length ? { properties: t.spec.spec.properties.map((_, i) => propertyTestFiles(t.ticketId, i + 1)) } : {}) } : undefined,
         // What `clarify`'s answers decided (ORC-210), for the steps after the guard: intake reads them as its feedback.
         decisions: job.queue === 'dev' && job.step !== 'intake' && t.decisions?.length ? t.decisions : undefined,
         conventions,
