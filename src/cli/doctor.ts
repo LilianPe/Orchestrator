@@ -842,7 +842,8 @@ function unreadInstallation(error: unknown): InstallationReport {
  * installation, which cannot reach `github` then. Nothing without a pin: the daemon finds each repository's installation itself.
  */
 function otherInstallation(github: string, id: number, pinned: string | undefined): string | undefined {
-  if (pinned === undefined || String(id) === pinned) return undefined;
+  // Compared as numbers: a pin written `"042"` names installation 42.
+  if (pinned === undefined || (/^\d+$/.test(pinned) && Number(pinned) === id)) return undefined;
   return (
     `installation ${id} of the App covers ${github}, not the pinned installation ${pinned}: the daemon asks its tokens of ${pinned}, which cannot reach it. ` +
     `Either add ${github} to installation ${pinned} (Settings → Applications → Installed GitHub Apps → Configure → Repository access), ` +
@@ -850,14 +851,17 @@ function otherInstallation(github: string, id: number, pinned: string | undefine
   );
 }
 
-/** The installation's verdict, its id kept, refused when it is not the pinned one (ORC-489), whatever its permissions. */
+/**
+ * The installation's verdict, its id kept. Not the pinned one (ORC-489), it is refused alone: the daemon never uses its
+ * permissions, and the pinned installation's are unread.
+ */
 function judgeCovering(github: string, { id, permissions }: Installation, pinned: string | undefined): InstallationReport {
-  const report = { id, ...judgeInstallation(permissions) };
   const other = otherInstallation(github, id, pinned);
-  if (other === undefined) return report;
-  // Joined after one another: each after the first opens a sentence.
-  return { ...report, verdict: 'refused', reasons: [other, ...report.reasons.map((reason) => reason.charAt(0).toUpperCase() + reason.slice(1))] };
+  return other === undefined ? { id, ...judgeInstallation(permissions) } : { id, verdict: 'refused', reasons: [other] };
 }
+
+/** The result's refusal of a repository the pinned installation does not cover (ORC-489). */
+const uncoveredBy = (pinned: string | undefined, github: string) => `the pinned GitHub App installation ${pinned} does not cover ${github}`;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -878,8 +882,13 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   const installationRead = api.installation(github).then((installation) => judgeCovering(github, installation, options.installationId), unreadInstallation);
   const knowledgeRead = options.knowledge === undefined ? undefined : judgeKnowledge(api, options.knowledge, options.installationId);
   // Unreadable workflows or environments still tell the host's, the protection's, the installation's and the knowledge base's verdicts.
-  const failure = async (message: string) =>
-    doctorFailure(options, message, ignored, warnings, { host: options.host, branchProtection: await protectionRead, installation: await installationRead, ...(knowledgeRead ? { knowledge: await knowledgeRead } : {}) });
+  const failure = async (message: string) => {
+    const installation = await installationRead;
+    // The pinned installation's token cannot read a repository it does not cover (GitHub answers 422): that is the cause to say (ORC-489).
+    const uncovered = installation.id !== undefined && otherInstallation(github, installation.id, options.installationId) !== undefined;
+    const said = uncovered ? `Result: refused — ${uncoveredBy(options.installationId, github)}: its token cannot read the repository (${message}).` : message;
+    return doctorFailure(options, said, ignored, warnings, { host: options.host, branchProtection: await protectionRead, installation, ...(knowledgeRead ? { knowledge: await knowledgeRead } : {}) });
+  };
   let workflows: WorkflowSource[];
   try {
     workflows = await api.listWorkflows(github);
@@ -912,11 +921,11 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
     ...(protection.verdict === 'refused'
       ? [protection.branch === undefined ? "the default branch's protection cannot be read" : `the default branch${branch} is not protected`]
       : []),
-    ...(installation.verdict === 'refused' ? installationRefusals(installation, github, options.installationId) : []),
+    ...(installation.verdict === 'refused' ? [installationRefusal(installation, github, options.installationId)] : []),
     ...(knowledge?.verdict === 'refused'
       ? [
           knowledge.installation !== undefined && otherInstallation(knowledge.github, knowledge.installation, options.installationId)
-            ? `the pinned GitHub App installation ${options.installationId} does not cover the knowledge base ${knowledge.github}`
+            ? uncoveredBy(options.installationId, `the knowledge base ${knowledge.github}`)
             : `the GitHub App cannot push to the knowledge base ${knowledge.github}`,
         ]
       : []),
@@ -970,13 +979,10 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   return accepted ? 0 : 1;
 }
 
-/** The refusals of a refused installation: not the pinned one (ORC-489), holding forbidden permissions, or unread. */
-function installationRefusals({ id, permissions }: InstallationReport, github: string, pinned: string | undefined): string[] {
-  if (id === undefined || permissions === undefined) return ["the GitHub App installation's permissions cannot be read"];
-  return [
-    ...(otherInstallation(github, id, pinned) ? [`the pinned GitHub App installation ${pinned} does not cover ${github}`] : []),
-    ...(heldForbidden(permissions).length > 0 ? [installedWith(permissions)] : []),
-  ];
+/** The refusal of a refused installation: not the pinned one (ORC-489), holding forbidden permissions, or unread. */
+function installationRefusal({ id, permissions }: InstallationReport, github: string, pinned: string | undefined): string {
+  if (id !== undefined && otherInstallation(github, id, pinned) !== undefined) return uncoveredBy(pinned, github);
+  return permissions ? installedWith(permissions) : "the GitHub App installation's permissions cannot be read";
 }
 
 /** The refusal of an installation holding forbidden permissions, named. */

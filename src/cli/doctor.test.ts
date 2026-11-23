@@ -1727,7 +1727,24 @@ describe('the installation factory.yml pins (github.installation_id), which the 
     expect(result.code).toBe(1);
     const line = result.lines.find((l) => l.startsWith('GitHub App installation: refused'));
     for (const named of ['installation 77 of the App covers acme/app, not the pinned installation 42', 'add acme/app to installation 42', 'github.installation_id']) expect(line).toContain(named);
-    expect(result.text).toContain('Result: refused — the pinned GitHub App installation 42 does not cover acme/app');
+    expect(result.text).toContain('Result: refused — the pinned GitHub App installation 42 does not cover acme/app.');
+  });
+
+  it("names the pin as the cause when its token cannot read the repository's workflows, as GitHub answers then", async () => {
+    // The token of an installation that does not cover the repository: 422 on its request, so no workflow nor protection is read.
+    const fake = { installationId: 77, failWorkflows: true, failProtection: true, permissions: { administration: 'write' } };
+    const result = await doctor([], [], { pinned: '42', fake });
+    expect(result.code).toBe(1);
+    expect(result.lines.at(-1)).toBe('Result: refused — the pinned GitHub App installation 42 does not cover acme/app: its token cannot read the repository (Cannot read the workflows: 403 Resource not accessible).');
+    // That installation's permissions are none of the daemon's: not judged.
+    expect(result.text).not.toContain('Administration');
+    const json = JSON.parse((await doctor([], [], { json: true, pinned: '42', fake })).text) as { error: string; installation: object };
+    expect(json.error).toContain('the pinned GitHub App installation 42 does not cover acme/app');
+    expect(json.installation).toEqual({ id: 77, verdict: 'refused', reasons: [expect.stringContaining('installation 77 of the App covers acme/app')] });
+  });
+
+  it('takes a pin written with leading zeros for the installation it names', async () => {
+    expect((await doctor([], [], { knowledge: 'acme/notes', pinned: '042' })).code).toBe(0);
   });
 
   it('compares nothing without a pin: any installation of the App is the one the daemon finds', async () => {
