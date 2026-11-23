@@ -19,7 +19,7 @@ import { addedLines, isRepoRuleFile, REPO_RULES_DIR, REPO_RULES_TARGET, semgrepA
 import { isTestSpec } from '../checks/test-files.js';
 import { probeStart } from '../checks/preview-probe.js';
 import { brief, decideVisualProof, judgeShots, type CaptureGate, type Judged, type VisualProof } from '../checks/visual-proof.js';
-import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, setupOf, type RepoConfig } from '../config/repo-config.js';
+import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, setupOf, setupSecretsRefusal, type RepoConfig } from '../config/repo-config.js';
 import { BUNDLE_TARGET, extractWork, HARDENING, hostGitEnv, IN_SANDBOX, IN_SANDBOX_ENV } from '../publish/extract.js';
 import { recipeStart, type PreviewRecipe } from './agent-output.js';
 import { classifyBranch, type ClassifiedDiff } from './diff-class.js';
@@ -265,7 +265,8 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     // As the commit declares them, which the launch did not read: provided, or refused before any of its code runs (ORC-282).
     const unprovided = req.sandboxes.unprovided([...new Set(config.services)]);
     if (unprovided.length) throw new Error(servicesUnavailable(unprovided, true));
-    if (setup.length && config.setupSecrets.length) throw new Error(`${setupSecretsWithheld(config.setupSecrets)}. Reply here once setup_secrets is changed on the default branch.`);
+    const withheld = setupSecretsRefusal(setup, config.setupSecrets);
+    if (withheld) throw new Error(`${withheld}. Reply here once setup_secrets is changed on the default branch.`);
     // The repository's services (ORC-309), new for this check, never the agent's: filled by the setup, gone with the commands' sandbox.
     const withServices = { ...DEFAULT_REQUIREMENTS, services: config.services };
     await setUp('verify', cloneDir, config.services);
@@ -314,16 +315,6 @@ export function servicesUnavailable(missing: readonly string[], sandboxed: boole
   const [which, it] = missing.length === 1 ? [`The service ${missing[0]} is`, 'it'] : [`The services ${missing.join(', ')} are`, 'them'];
   const why = sandboxed ? `no sandbox backend of this factory provides ${it}` : 'this factory runs without sandboxes (FACTORY_CONTAINER_CLI), which provide none';
   return `${which} not available: .factory/config.yml declares ${it} under \`services\`, and ${why}. Nothing runs without ${it}: take ${it} out of \`services\` or give the factory a backend that provides ${it}, then reply here.`;
-}
-
-/**
- * A `verify`, or a dry run, refused for the `setup_secrets` the repository's setup declares (ORC-461): the commit `verify` checks
- * is beyond the default branch, which the launch's rule (`unreviewed`) takes as code nobody reviewed, and a setup on it gets no
- * secret. Said on the ticket, before the setup runs, rather than failing it without them.
- */
-export function setupSecretsWithheld(secrets: readonly string[]): string {
-  const them = secrets.length === 1 ? 'it' : 'them';
-  return `${REPO_CONFIG_PATH} declares setup_secrets (${secrets.join(', ')}) for its setup, and verify does not run such a setup: the commit it checks is ahead of the default branch, which nobody reviewed, and as at the launch a setup on such a commit gets no secret. If the setup passes without ${them}, take ${them} out of setup_secrets; if it needs ${them}, the repository cannot be verified by this factory yet`;
 }
 
 export const BASE = 'refs/factory/base';

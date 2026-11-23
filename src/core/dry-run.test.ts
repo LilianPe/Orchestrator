@@ -384,13 +384,7 @@ describe('dryRunHolds (ORC-409)', () => {
   });
 });
 
-describe('a dry run unverifiable without its secrets (ORC-453)', () => {
-  it('its verdict: green, red, or unverifiable when its setup failed without its secrets', () => {
-    expect(dryRunVerdict(runOf({ commands: ['npm test'] }))).toBe('green');
-    expect(dryRunVerdict(runOf({ ok: false, breaks: [{ ...unverified!, kind: 'failure' }] }))).toBe('red');
-    expect(dryRunVerdict(runOf({ unverified }))).toBe('unverifiable');
-  });
-
+describe('a dry run recorded unverifiable without its secrets, before ORC-461 (ORC-453)', () => {
   it('the main maturity card says it unverifiable, with the secrets its setup needs, never green', () => {
     expect(mainCardValue(runOf({ unverified }))).toBe(`unverifiable: the dry run of aaaaaaaaaaaa on 2026-11-20 14:03 UTC: its setup \`npm ci\` ${unverified!.detail}`);
   });

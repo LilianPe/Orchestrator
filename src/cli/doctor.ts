@@ -22,8 +22,7 @@ import { cliLinearTracker } from './linear.js';
 import { originGithub, sameGithub } from '../app/project-github.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
 import { browserImage, sandboxConfig, sandboxLimits, visualProofLine } from '../app/sandbox-wiring.js';
-import { setupSecretsWithheld } from '../core/clean-verify.js';
-import { ignoredWorkflowFiles, ignoredWorkflowWarning, testCommandWarnings, type RepoConfig } from '../config/repo-config.js';
+import { ignoredWorkflowFiles, ignoredWorkflowWarning, setupOf, setupSecretsRefusal, testCommandWarnings, type RepoConfig } from '../config/repo-config.js';
 import { branchNameOfType, branchSpaces, branchTypes, DEFAULT_BRANCH_NAMING, LEGACY_BRANCHES, legacyBranchName, type BranchNaming } from '../core/naming.js';
 
 /**
@@ -239,8 +238,8 @@ export interface DoctorOptions {
   naming?: BranchNaming;
   /** The repository's commands (`.factory/config.yml`): a warning without `test`, the red check's command (ORC-412). */
   commands?: Readonly<Record<string, string>>;
-  /** The repository's `setup_secrets` (`.factory/config.yml`): a warning when it declares some, as verify refuses its setup (ORC-461). */
-  setupSecrets?: readonly string[];
+  /** The repository's `setup` (`setupOf`) and `setup_secrets`: a warning when verify refuses the one for the other (ORC-461). */
+  setupSecrets?: { setup: readonly string[]; secrets: readonly string[] };
   /**
    * Whether this instance can take the visual proof (ORC-404), `browserImage`'s answer, for the JSON report, failures included:
    * never part of the verdict. In text, `runDoctorCommand` says it first.
@@ -872,8 +871,10 @@ function errorMessage(error: unknown): string {
 }
 
 /** Said whatever the verdict (ORC-461): a ticket's verify refuses a setup that declares `setup_secrets`, and the dry run is red on it. */
-const setupSecretsWarnings = (secrets: readonly string[] | undefined): string[] =>
-  secrets?.length ? [`Warning: ${setupSecretsWithheld(secrets)}. The dry run is red on it, and no ticket of the repository starts.`] : [];
+function setupSecretsWarnings(o: DoctorOptions['setupSecrets']): string[] {
+  const withheld = o && setupSecretsRefusal(o.setup, o.secrets);
+  return withheld ? [`Warning: ${withheld}. The dry run is red on it, and no ticket of the repository starts.`] : [];
+}
 
 export async function runDoctor(options: DoctorOptions): Promise<number> {
   const { checkout, github, api, out } = options;
@@ -1158,6 +1159,7 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   let states;
   let knowledge;
   let sealedYml: FactoryYml | undefined;
+  let workflowSetup: readonly string[];
   try {
     // The App's alone by default (ORC-448); `--secrets`, all of them, by the start's call (ORC-456).
     const { yml, sealed } = await loadSealedFactoryYml(options.home, env, options.secrets ? {} : { only: GITHUB_APP_SECRETS });
@@ -1177,7 +1179,7 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     githubApp = resolveGithubApp(instance, env);
     knowledge = instance.knowledge?.github;
     // factory.yml's step settings and statuses (ORC-382) the daemon refuses at load.
-    states = defaultWorkflow(stepSettings(yml)).states;
+    ({ states, workspace: { setup: workflowSetup } } = defaultWorkflow(stepSettings(yml)));
     // The Claude token (ORC-337). The active account's of a source other than env is unread here without `--secrets`: the start,
     // which reads it, never falls back to CLAUDE_CODE_OAUTH_TOKEN then, so neither is checked.
     const unread = yml?.claude && !activeClaudeAccount(yml)?.token;
@@ -1212,5 +1214,5 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   } catch (error) {
     return doctorFailure(report, `Cannot read the repository's branch naming: ${errorMessage(error)}`);
   }
-  return runDoctor({ ...report, github, ...(knowledge ? { knowledge } : {}), ...(githubApp.installationId ? { installationId: githubApp.installationId } : {}), api, host: await checkHost(env, options.exec), naming: config.branches, commands: config.commands, setupSecrets: config.setupSecrets });
+  return runDoctor({ ...report, github, ...(knowledge ? { knowledge } : {}), ...(githubApp.installationId ? { installationId: githubApp.installationId } : {}), api, host: await checkHost(env, options.exec), naming: config.branches, commands: config.commands, setupSecrets: { setup: setupOf(config, workflowSetup), secrets: config.setupSecrets } });
 }

@@ -7,9 +7,9 @@ import { SHA } from '../adapters/workspace/git-workspaces.js';
 import { runAndRerun, settle, type CommandRun, type KnownFlaky, type Standing } from '../checks/flaky.js';
 import { isLockfile } from '../checks/diff-size.js';
 import { ANSI, logExcerpt } from '../checks/log-excerpt.js';
-import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, setupOf, type RepoConfig } from '../config/repo-config.js';
+import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, setupOf, setupSecretsRefusal, type RepoConfig } from '../config/repo-config.js';
 import { IN_SANDBOX } from '../publish/extract.js';
-import { BASE, boxOpener, cloneGit, fetchFromForge, initHardenedClone, reportRun, setupSecretsWithheld, show, testCommands, verifyCommand, withDeadline, within, zFields, type CloneGit } from './clean-verify.js';
+import { BASE, boxOpener, cloneGit, fetchFromForge, initHardenedClone, reportRun, show, testCommands, verifyCommand, withDeadline, within, zFields, type CloneGit } from './clean-verify.js';
 import { MAIN_UNCHECKED } from './maturity.js';
 import { utc } from './prompt.js';
 import { RELEASE_AGE_DAYS, runSealedSetup, SetupFailure } from './sealed-setup.js';
@@ -391,9 +391,8 @@ export async function runDryRun(req: DryRunRequest): Promise<DryRun> {
     return dryRun([{ kind: 'service', step: 'config', command: REPO_CONFIG_PATH, detail, output: '' }], setup, []);
   }
   // A ticket's verify refuses this setup (ORC-461): said here, before the first ticket's build, never run without its secrets.
-  if (setup.length && config.setupSecrets.length) {
-    return dryRun([{ kind: 'secret', step: 'config', command: REPO_CONFIG_PATH, detail: setupSecretsWithheld(config.setupSecrets), output: '' }], setup, []);
-  }
+  const withheld = setupSecretsRefusal(setup, config.setupSecrets);
+  if (withheld) return dryRun([{ kind: 'secret', step: 'config', command: REPO_CONFIG_PATH, detail: withheld, output: '' }], setup, []);
   await inBox('prepare', cloneDir, [], async (id) => {
     // `-c`: the clone's config is ours.
     const out = await sandboxes.exec(id, ['git', ...IN_SANDBOX, 'checkout', '--quiet', '--detach', sha]);
@@ -442,9 +441,7 @@ export const dryRunHolds = (last: DryRun, now: { sha: string; fingerprint: DryRu
 /** What breaks a dry run, each kind in its command once (ORC-409, and the `main` maturity card of ORC-410). */
 export const dryRunBroke = (run: DryRun): string => [...new Set(run.breaks.map((b) => `${b.kind} in \`${b.command}\``))].join(', ');
 
-/** Green, red, or, on a dry run recorded before ORC-461, unverifiable: green but for a setup that failed without its secrets (ORC-453). */
-export const dryRunVerdict = (run: DryRun): 'green' | 'red' | 'unverifiable' =>
-  !run.ok ? 'red' : run.unverified ? 'unverifiable' : 'green';
+export const dryRunVerdict = (run: DryRun): 'green' | 'red' => (run.ok ? 'green' : 'red');
 
 /**
  * The `main` maturity card's value (ORC-410): the project's last dry run on its default branch, green, unverifiable without its
