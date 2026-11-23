@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { AuditList, AuditSheet, auditHash, auditTicketOf } from './Audit.js';
+import { AuditList, AuditSheet, auditHash, auditTicketOf, draftAfterKept } from './Audit.js';
 import type { AuditSheetView, ReviewDefectView } from './types.js';
 
 const tokens = { input: 1_000, output: 2_000, cacheRead: 30_000, cacheCreation: 4_000 };
@@ -90,6 +90,11 @@ describe('the audit sheet page (ORC-229)', () => {
     for (const v of ['serious', 'important', 'security', 'data', 'wrong_behavior', 'bypassed_control']) expect(html).toContain(`value="${v}"`);
     expect(html).toContain('Wrong behavior');
     expect(html.match(/<select[^>]*required/g)).toHaveLength(2);
+  });
+
+  it('clears the whole form but the PR once a defect is kept: the next one is not counted as seen by the last finding (ORC-378)', () => {
+    const typed = { prNumber: 3, description: 'Off by one.', level: 'serious', category: 'data', findingId: 'rv1:correctness:0', file: 'src/export.ts', line: '12' } as const;
+    expect(draftAfterKept(typed)).toEqual({ prNumber: 3, description: '', level: '', category: '', findingId: '', file: '', line: '' });
   });
 
   it('lists the PRs a human reviewed, each to its sheet', () => {
