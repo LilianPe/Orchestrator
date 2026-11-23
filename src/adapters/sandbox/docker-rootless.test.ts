@@ -18,7 +18,7 @@ const PODMAN_CLIENT = ok('{"APIVersion":"5.4.0","Version":"5.4.0","GoVersion":"g
  * A scripted engine: `answer` gets the args after the cli (and podman's global flag) and says what the cli prints. Its
  * `version`, out of `calls`, is `client`'s: by default Podman's for a cli named podman, Docker's otherwise.
  */
-function engine(answer: (args: string[], env?: Record<string, string>) => ExecResult, client?: ExecResult) {
+function engine(answer: (args: string[], env?: Record<string, string>) => ExecResult | Promise<ExecResult>, client?: ExecResult) {
   const calls: { cmd: string; args: string[]; env?: Record<string, string> }[] = [];
   const versions: string[][] = [];
   const exec: Exec = async (cmd, args, opts) => {
@@ -722,13 +722,40 @@ describe('ContainerSandboxProvider services (ORC-309)', () => {
     const p = new ContainerSandboxProvider({ ...opts, cli: 'podman', exec: e.exec });
     const agent = await p.create(req({ requirements: pg }));
     await p.destroy(agent.id);
-    expect(rms(e.calls)).toEqual([['rm', '-f', '-v', '--depend', agent.id], ['rm', '-f', '-v', '--depend', 'svc1']]);
+    expect(rms(e.calls)).toEqual([['rm', '-f', '-v', '--depend', '--time', '0', agent.id], ['rm', '-f', '-v', '--depend', '--time', '0', 'svc1']]);
   });
 
   it('removes with --depend under Podman even as the first command of a provider, before it asked anything else (ORC-348)', async () => {
     const e = engine(() => ok());
     await new ContainerSandboxProvider({ ...opts, cli: 'podman', exec: e.exec }).destroy('svc1');
-    expect(rms(e.calls)).toEqual([['rm', '-f', '-v', '--depend', 'svc1']]);
+    expect(rms(e.calls)).toEqual([['rm', '-f', '-v', '--depend', '--time', '0', 'svc1']]);
+  });
+
+  /** Three destroys at once: the most `rm` the engine had in flight together, in the order they ended, and how each destroy ended. */
+  async function destroyAtOnce(cli: string) {
+    let inFlight = 0;
+    let most = 0;
+    const removed: string[] = [];
+    const e = engine(async (a) => {
+      if (a[0] !== 'rm') return ok();
+      most = Math.max(most, ++inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight--;
+      removed.push(a.at(-1)!);
+      // One that fails does not hold the next ones back.
+      return a.at(-1) === 'c1' ? { stdout: '', stderr: 'boom', code: 1 } : ok();
+    });
+    const p = new ContainerSandboxProvider({ ...opts, cli, exec: e.exec });
+    const results = await Promise.allSettled(['c1', 'svc1', 'c2'].map((id) => p.destroy(id)));
+    return { most, removed, results: results.map((r) => r.status) };
+  }
+
+  it('removes one container at a time under Podman: two `rm --depend` at once, of a service and a container joining it, wedge it (ORC-491)', async () => {
+    expect(await destroyAtOnce('podman')).toEqual({ most: 1, removed: ['c1', 'svc1', 'c2'], results: ['rejected', 'fulfilled', 'fulfilled'] });
+  });
+
+  it('removes them all at once under Docker, which has no `--depend` to wedge', async () => {
+    expect((await destroyAtOnce('docker')).most).toBe(3);
   });
 
   it('list gives the services under the key they serve, so recover destroys those of dead attempts', async () => {
