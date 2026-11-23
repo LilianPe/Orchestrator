@@ -17,7 +17,7 @@ import json
 import sys
 from pathlib import Path
 
-from crapper.coverage import CoverageBundle, FileCoverage, parse_lcov
+from crapper.coverage import CoverageBundle, FileCoverage, normalize_path, parse_lcov
 from crapper.crap import crap_score
 from crapper.discover import is_test_file as crapper_test, iter_source_files as crapper_sources, language_of as crapper_language
 from crapper.languages import functions_in_file
@@ -59,24 +59,34 @@ def merge(into: FileCoverage, record: FileCoverage) -> None:
         into.branches[line] = (max(hit, was_hit), max(total, was_total))
 
 
-def lcov(coverage: Path) -> dict:
+def lcov_key(path: str, root: Path) -> str:
+    """A report's path for a file, spelt one way: crapper's normalisation, and relative to the root when under it."""
+
+    key = normalize_path(path)
+    p = Path(key)
+    return p.relative_to(root).as_posix() if p.is_absolute() and p.is_relative_to(root) else key
+
+
+def lcov(coverage: Path, root: Path) -> dict:
     merged: dict = {}
     for report in sorted(coverage.rglob("*")) if coverage.is_dir() else []:
         if (report.name == "lcov.info" or report.suffix == ".lcov") and report.is_file() and not report.is_symlink():
             for path, record in parse_lcov(report.read_text(encoding="utf-8", errors="replace")).items():
-                merge(merged.setdefault(path, FileCoverage()), record)
+                merge(merged.setdefault(lcov_key(path, root), FileCoverage()), record)
     return merged
 
 
 def functions(root: Path, files: list[Path], coverage: Path, covered: set[str]) -> list[dict]:
     sources = [(f.relative_to(root).as_posix(), f, crapper_language(f)) for f in files]
     sources = [s for s in sources if s[2] in LANGUAGES and not crapper_test(s[0])]
-    lines = lcov(coverage) if covered else {}
+    lines = lcov(coverage, root) if covered else {}
     # No report read: the coverage is not known, never 0 %.
     bundle = CoverageBundle(lcov=lines, root=root) if lines else None
     if bundle:
-        # Every source of the repository, as crapper binds them: a report's key is a file's only when no longer path owns it.
-        bundle.bind_sources([p.relative_to(root).as_posix() for p in crapper_sources([root]) if p.is_relative_to(root)])
+        # Every source of the repository, as crapper binds them, and the changed ones its walk skips (`build/`, `vendor/`…):
+        # a report's key is a file's only when no longer path bound owns it.
+        everywhere = [p.relative_to(root).as_posix() for p in crapper_sources([root]) if p.is_relative_to(root)]
+        bundle.bind_sources(list(dict.fromkeys(everywhere + [path for path, _, _ in sources])))
     out = []
     for path, file, language in sources:
         for fn in functions_in_file(language, file.read_text(encoding="utf-8", errors="replace"), path, str(root)):

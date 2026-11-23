@@ -147,7 +147,8 @@ describe.skipIf(!built)(`factory/qualité-diff in verify on the runner image (${
   }, 300_000);
 
   it('merges the reports of two commands, gives no file the coverage of another it shares a suffix with, and is not stopped by a language without a grammar', async () => {
-    // Two pytest commands, each covering half of grade (lines 1-4, then 5-8, of 12): merged, 8 of 12. Only the first names
+    // Two pytest commands, each covering half of grade (lines 1-4, then 5-8, of 12), the second spelling its path `./app/grade.py`:
+    // merged, 8 of 12. Only the first names
     // lib/util.py, whose path ends as src/util.py's does once its `src/` is cut: src/util.py, which no report names, stays unknown.
     const pytest = [
       '#!/bin/sh',
@@ -155,7 +156,7 @@ describe.skipIf(!built)(`factory/qualité-diff in verify on the runner image (${
       '[ -n "$out" ] || exit 9',
       'mkdir -p "$(dirname "$out")"',
       'case "$1" in one) from=1; to=4;; *) from=5; to=8;; esac',
-      '{ echo SF:app/grade.py; i=1; while [ $i -le 12 ]; do if [ $i -ge $from ] && [ $i -le $to ]; then echo "DA:$i,1"; else echo "DA:$i,0"; fi; i=$((i+1)); done; echo end_of_record',
+      '{ if [ "$1" = one ]; then echo SF:app/grade.py; else echo SF:./app/grade.py; fi; i=1; while [ $i -le 12 ]; do if [ $i -ge $from ] && [ $i -le $to ]; then echo "DA:$i,1"; else echo "DA:$i,0"; fi; i=$((i+1)); done; echo end_of_record',
       '  if [ "$1" = one ]; then echo SF:lib/util.py; i=1; while [ $i -le 8 ]; do echo "DA:$i,1"; i=$((i+1)); done; echo end_of_record; fi; } > "$out"',
       '',
     ].join('\n');
