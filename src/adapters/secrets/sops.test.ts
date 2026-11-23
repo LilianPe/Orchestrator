@@ -102,6 +102,15 @@ describe('sops secret source', () => {
     ]);
   });
 
+  it('decrypts once for the reads made together, and again for a later read: a value rotated since is read', async () => {
+    const f = fixture();
+    const source = sops(f);
+    expect(await Promise.all([source.read('github.key'), source.read('list.0'), source.describe!('github.key')])).toEqual(['pem-secret-value', 'first-value-x', { rotatedAt: ROTATED }]);
+    expect(calls(f)).toHaveLength(1);
+    expect(await source.read('github.key')).toBe('pem-secret-value');
+    expect(calls(f)).toHaveLength(2);
+  });
+
   it('reaches an item of a list by its index', async () => {
     const f = fixture();
     expect(await sops(f).read('list.0')).toBe('first-value-x');

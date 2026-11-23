@@ -75,11 +75,17 @@ export const sopsKind: SecretSourceKind = {
     const file = options['file'] as string;
     const keyFile = options['age_key_file'] as string | undefined;
     const sopsEnv: Record<string, string> = Object.fromEntries(Object.entries({ ...env, ...(keyFile ? { SOPS_AGE_KEY_FILE: keyFile } : {}) }).filter((e): e is [string, string] => e[1] !== undefined));
-    const value = async (path: string): Promise<unknown> => {
-      // The key opens every secret of the file: its owner's alone, as a `file` source's value.
-      if (keyFile) await checkCredentialFile(keyFile, 'age_key_file', 0o077, 'others than its owner: chmod 600 it');
-      return at(await decrypt(file, sopsEnv), path);
-    };
+    // The reads made together (a setup's, the start's) share one decryption, one KMS call; a later read decrypts again.
+    let pending: Promise<unknown> | undefined;
+    const document = (): Promise<unknown> =>
+      (pending ??= (async () => {
+        // The key opens every secret of the file: its owner's alone, as a `file` source's value.
+        if (keyFile) await checkCredentialFile(keyFile, 'age_key_file', 0o077, 'others than its owner: chmod 600 it');
+        return decrypt(file, sopsEnv);
+      })().finally(() => {
+        pending = undefined;
+      }));
+    const value = async (path: string): Promise<unknown> => at(await document(), path);
     return {
       read: async (path) => {
         const v = await value(path);
