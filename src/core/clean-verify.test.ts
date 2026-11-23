@@ -371,7 +371,7 @@ describe('runCleanVerify', () => {
         expect((await runCleanVerify(req)).ok).toBe(true);
       });
 
-      it("a commit the checks refuse keeps its verdict, the base's config read all the same: the agent dropping them changes nothing", async () => {
+      it('a commit the checks refuse keeps their verdict: it goes out before the refusal', async () => {
         const { repo, req } = setup({ commands: ['true'] }, SECRET);
         write(repo, '.factory/config.yml', CONFIG);
         commit(repo, 'the agent drops setup_secrets');
