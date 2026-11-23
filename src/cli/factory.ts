@@ -28,7 +28,8 @@ async function main(): Promise<number> {
   // Its own options, on the store and the projects; GitHub through the App, no running instance needed (ORC-231).
   if (process.argv[2] === 'ghost') return runGhostCommand(factoryHome(), process.argv.slice(3));
   // Its own options, `--json` and `--secrets` (ORC-456): the instance read by the check itself. Before the command too
-  // (`factory --json doctor`), as the shared parser took them; every option of the CLI is a flag, the first word the command.
+  // (`factory --json doctor`), as the shared parser took them: its options and doctor's are flags, so the first word that is not
+  // one is the command. The commands above, whose options take values, are found by the first word alone.
   const args = process.argv.slice(2);
   const command = args.findIndex((a) => !a.startsWith('-'));
   if (args[command] === 'doctor') return runDoctorCli(args.toSpliced(command, 1));
