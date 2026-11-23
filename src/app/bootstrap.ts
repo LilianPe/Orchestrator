@@ -38,7 +38,6 @@ import { claudeAccountReader, disabledControls, readCapsOf, specPublicationOf, s
 import { loadSealedFactoryYml } from '../config/server-secrets.js';
 import { startRefusals, type StartChecks } from '../config/start-refusals.js';
 import { ignoredWorkflowWarning } from '../config/repo-config.js';
-import { cloneAuth, httpsGithub } from './project-github.js';
 import { ignoredWorkflowFilesOn, makeDryRunFiles, makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint } from './repo-variables.js';
 import { currentProjectIds, daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens, sealSecretsAtRest, validatorWarnings } from '../config/instance.js';
 import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
@@ -161,8 +160,6 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const workflow = defaultWorkflow(settings);
   // The replay of closed tickets (ORC-231): driven by the fantome's own steps, with the instance's step settings.
   const ghost = presetWorkflow(fantome, settings);
-  // The knowledge base's clone, read by its path until ORC-471 part 4.
-  const knowledgeGithub = instance.knowledge ? await httpsGithub(instance.knowledge.repoPath) : undefined;
   // Without the App, no forge at all (ORC-181): every read says the App is missing, and nothing is published.
   const appForge = githubApp ? new GitHubAppForge({ ...githubApp, log }) : undefined;
   // The daemon's own git reads a private repository with the App's token (ORC-442); without the App, with the machine's credentials.
@@ -179,8 +176,6 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     workflow: isFantome(p) ? ghost : workflow,
     ...(projectEffects(p) ? { effects: 'none' as const } : {}),
   }));
-  // The knowledge base's clone fetches by its path until ORC-471 part 4, over HTTPS from GitHub with the App's token.
-  const clones = new Map(knowledgeGithub ? [[instance.knowledge!.repoPath, knowledgeGithub] as const] : []);
   for (const line of validatorWarnings(instance.projects)) log(line);
   // The projects that replay closed tickets (ORC-376): only the daemon's own delegations reach them, nothing of Linear, whose tickets
   // of the same team stay the other projects'.
@@ -268,7 +263,6 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const runner: Runner = sandboxes
       ? new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets, proxyHasToken: () => !!claudeTokenOf(), log, sandboxes })
       : Object.assign(new FakeRunner(), { submit: (runId: string, output: AgentOutput) => saveAgentOutput(store, runId, output) });
-    const clonesAuth = cloneAuth(gitAuth, clones);
     // Each mirror made or fetched in the background: a first clone can take minutes, and the server, its webhooks and /health do not
     // wait for it. A launch that comes meanwhile waits for it (`RepoMirrors.fetch`, one git at a time); a failure is logged and left to
     // the launches, which fetch it again.
@@ -304,7 +298,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       budgets: yml?.budgets,
     });
     for (const p of problems) log(`Invalid configuration, no run is launched until it is fixed and the factory restarted: ${p}`);
-    const kb = instance.knowledge ? new KnowledgeBase(instance.knowledge.repoPath, { auth: clonesAuth }) : undefined;
+    // The knowledge base's clone, the daemon's own (ORC-481): made from GitHub at its first pull, read and pushed with the App's token,
+    // as the mirrors are, never with a credential in its config.
+    const knowledge = instance.knowledge?.github;
+    const kb = knowledge ? new KnowledgeBase(paths.knowledge, { origin: mirrors.url(knowledge), auth: mirrors.authOf(knowledge) }) : undefined;
     // The roles of a human event's signed actor (ORC-186): Linear team members and GitHub rights, read
     // again past their TTL, and the designations of factory.yml.
     const roles = new CachedRoleResolver({

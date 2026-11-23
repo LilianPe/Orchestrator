@@ -17,7 +17,7 @@ export interface InstanceConfig {
   relay: Relay;
   dev?: boolean;
   projects: ProjectConfig[];
-  knowledge?: { repoPath: string };
+  knowledge?: { github: string };
   github?: FactoryYml['github'];
 }
 
@@ -57,6 +57,8 @@ export function homePaths(home: string) {
     workspaces: join(home, 'workspaces'),
     /** The daemon's bare mirror of each repository (ORC-479), `<owner>/<name>`: its git source, never mounted in a sandbox. */
     repos: join(home, 'repos'),
+    /** The daemon's clone of the knowledge base (ORC-481), not bare: it commits its notes there. Never mounted in a sandbox. */
+    knowledge: join(home, 'knowledge'),
     /** Each ticket's Claude session dir, mounted as `~/.claude` of its sandboxes (ORC-204). */
     sessions: join(home, 'sessions'),
     /** Each sandboxed run's own dir: its refusals log, its `~/.claude` out of the ticket session (ORC-217). */
@@ -162,7 +164,7 @@ export function saveInstance(home: string, cfg: Omit<InstanceConfig, 'github'>, 
     ['dev', 'dev', cfg.dev],
     ['relay', 'relay', cfg.relay],
     ['projects', 'repos', repoNodes(doc, cfg.projects)],
-    ['knowledge', 'knowledge', cfg.knowledge && { repo_path: cfg.knowledge.repoPath }],
+    ['knowledge', 'knowledge', cfg.knowledge && { github: cfg.knowledge.github }],
   ];
   for (const [key, yml, value] of keys) {
     if (isDeepStrictEqual(before[key], cfg[key])) continue;

@@ -22,20 +22,20 @@ type FactoryLimits = Pick<FactoryYml, 'budgets' | 'maxDiff' | 'tools'>;
  * when the file takes from the socle, is malformed or unreadable, when factory.yml gives a step a tool it may not have, or
  * when a budget is unset or exceeded, one line per violation; 0 otherwise.
  */
-export function runValidateCommand(opts: { repoPath: string; out: (line: string) => void; factoryYml: () => FactoryLimits | undefined }): number {
-  if (opts.repoPath.startsWith('-')) {
+export function runValidateCommand(opts: { checkout: string; out: (line: string) => void; factoryYml: () => FactoryLimits | undefined }): number {
+  if (opts.checkout.startsWith('-')) {
     opts.out('Usage: factory validate [repo] (no options)');
     return 1;
   }
   const refuse = (violations: string[]): number => list(opts.out, `${FILE} refused:`, violations);
-  if (existsSync(join(opts.repoPath, MISSPELT))) return refuse([`${MISSPELT}: rename it to ${FILE}, the only name the factory reads`]);
+  if (existsSync(join(opts.checkout, MISSPELT))) return refuse([`${MISSPELT}: rename it to ${FILE}, the only name the factory reads`]);
   // As the daemon reads it on the default branch (`makeRepoConfig`): through a link, git sees no file, and the launch refuses it.
   // `lstat`, not `existsSync`, which follows a link: a dangling one would read as no file at all.
   const entry = (p: string) => lstatSync(p, { throwIfNoEntry: false });
-  const path = join(opts.repoPath, FILE);
+  const path = join(opts.checkout, FILE);
   // A path it cannot look into (EACCES, ELOOP) is refused as unreadable, as the file itself is below.
   try {
-    const dir = entry(join(opts.repoPath, REPO_CONFIG_DIR));
+    const dir = entry(join(opts.checkout, REPO_CONFIG_DIR));
     if (dir && !dir.isDirectory()) return refuse([`${REPO_CONFIG_DIR}: a folder is expected, not a symbolic link or a file`]);
     if (entry(path)?.isSymbolicLink()) return refuse([`${FILE}: a file is expected, not a symbolic link`]);
   } catch (err) {

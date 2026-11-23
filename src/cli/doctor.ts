@@ -221,9 +221,11 @@ function judgeProtection(protection: BranchProtection): BranchProtectionReport {
 }
 
 export interface DoctorOptions {
-  repoPath: string;
+  checkout: string;
   /** Its repository on GitHub, `owner/name`: its entry's in factory.yml (ORC-480), else its checkout's origin's. */
   github: string;
+  /** The knowledge base's repository on GitHub (`knowledge.github`, ORC-481): the App must read and push it. */
+  knowledge?: string;
   api: DoctorApi;
   /** The host the daemon runs on (`checkHost`). */
   host: HostReport;
@@ -835,9 +837,9 @@ function errorMessage(error: unknown): string {
 }
 
 export async function runDoctor(options: DoctorOptions): Promise<number> {
-  const { repoPath, github, api, out } = options;
+  const { checkout, github, api, out } = options;
   // A workflow file an older factory read (ORC-388): named whatever the verdict, never read.
-  const ignored = ignoredWorkflowFiles(repoPath);
+  const ignored = ignoredWorkflowFiles(checkout);
   // Neither is part of the verdict: said whatever it is.
   const warnings = testCommandWarnings(options.commands);
   if (!options.json) for (const line of [...ignored.map(ignoredWorkflowWarning), ...warnings]) out(line);
@@ -847,9 +849,10 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
     reasons: [`Cannot read the protection of the default branch: ${errorMessage(error)}`],
   }));
   const installationRead = api.installationPermissions(github).then(judgeInstallation, unreadInstallation);
-  // Unreadable workflows or environments still tell the host's, the protection's and the installation's verdicts.
+  const knowledgeRead = options.knowledge === undefined ? undefined : judgeKnowledge(api, options.knowledge);
+  // Unreadable workflows or environments still tell the host's, the protection's, the installation's and the knowledge base's verdicts.
   const failure = async (message: string) =>
-    doctorFailure(options, message, ignored, warnings, { host: options.host, branchProtection: await protectionRead, installation: await installationRead });
+    doctorFailure(options, message, ignored, warnings, { host: options.host, branchProtection: await protectionRead, installation: await installationRead, ...(knowledgeRead ? { knowledge: await knowledgeRead } : {}) });
   let workflows: WorkflowSource[];
   try {
     workflows = await api.listWorkflows(github);
@@ -866,6 +869,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   }
   const protection = await protectionRead;
   const installation = await installationRead;
+  const knowledge = await knowledgeRead;
   const unchecked = installation.verdict === 'unchecked';
   const installationWarned = installation.warnings !== undefined;
   const { host } = options;
@@ -884,6 +888,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
     ...(installation.verdict === 'refused'
       ? [installation.permissions ? installedWith(installation.permissions) : "the GitHub App installation's permissions cannot be read"]
       : []),
+    ...(knowledge?.verdict === 'refused' ? [`the GitHub App cannot push to the knowledge base ${knowledge.github}`] : []),
     ...(refused > 0
       ? [
           `${refused} workflow(s) of ${reports.length} can expose secrets or a writable GITHUB_TOKEN to the factory's branches` +
@@ -896,9 +901,9 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   const accepted = refusals.length === 0;
 
   if (options.json) {
-    out(JSON.stringify({ repoPath, accepted, host, branchProtection: protection, installation, workflows: reports, ...notes(ignored, warnings), ...instanceReportOf(options) }, null, 2));
+    out(JSON.stringify({ repoPath: checkout, accepted, host, branchProtection: protection, installation, ...(knowledge ? { knowledge } : {}), workflows: reports, ...notes(ignored, warnings), ...instanceReportOf(options) }, null, 2));
   } else {
-    for (const line of verdictLines({ host, branchProtection: protection, installation })) out(line);
+    for (const line of verdictLines({ host, branchProtection: protection, installation, ...(knowledge ? { knowledge } : {}) })) out(line);
     if (reports.length === 0) out('No GitHub Actions workflow found.');
     else {
       out(`GitHub Actions workflows: ${reports.length}`);
@@ -946,10 +951,45 @@ interface Verdicts {
   host: HostReport;
   branchProtection: BranchProtectionReport;
   installation: InstallationReport;
+  knowledge?: KnowledgeReport;
 }
 
-/** The host's, the default branch's and the App installation's verdicts, in text, then a blank line. */
-function verdictLines({ host, branchProtection: protection, installation }: Verdicts): string[] {
+/** Whether the App can read and push the knowledge base's repository (ORC-481), as its installation there says. */
+export interface KnowledgeReport {
+  github: string;
+  verdict: Verdict;
+  reasons: string[];
+}
+
+/**
+ * The knowledge base's repository as the App's installation covers it (ORC-481): the daemon clones it, pulls it and pushes its
+ * notes with the installation's token, which needs Contents in write. An installation that cannot be read there refuses, whatever
+ * the cause: doctor cannot tell then that the push will go.
+ */
+async function judgeKnowledge(api: DoctorApi, github: string): Promise<KnowledgeReport> {
+  let contents: string | undefined;
+  try {
+    contents = (await api.installationPermissions(github))['contents'];
+  } catch (error) {
+    return {
+      github,
+      verdict: 'refused',
+      reasons: [`the App's installation on it cannot be read: ${errorMessage(error)}. Install the App on ${github} (Settings → Applications → Installed GitHub Apps → Configure → Repository access), then run doctor again.`],
+    };
+  }
+  if (contents === 'write') return { github, verdict: 'accepted', reasons: ["the App's installation covers it with Contents (write): the daemon clones it, pulls it and pushes its notes with its token"] };
+  return {
+    github,
+    verdict: 'refused',
+    reasons: [
+      `the App's installation holds Contents (${contents ?? 'none'}) on it: the daemon could not push its notes. In the App's settings (Permissions & events), set Repository permissions → Contents to Read and write and save, ` +
+        'then accept the change in the installation (Settings → Applications → Installed GitHub Apps → Configure).',
+    ],
+  };
+}
+
+/** The host's, the default branch's, the App installation's and the knowledge base's verdicts, in text, then a blank line. */
+function verdictLines({ host, branchProtection: protection, installation, knowledge }: Verdicts): string[] {
   const branch = protection.branch ? ` ${protection.branch}` : '';
   return [
     `Host: ${host.verdict} — ${host.reasons.join(' ')}`,
@@ -957,19 +997,20 @@ function verdictLines({ host, branchProtection: protection, installation }: Verd
     ...(protection.warnings ?? []).map((warning) => `  ${warning}`),
     `GitHub App installation: ${installation.verdict} — ${installation.reasons.join(' ')}`,
     ...(installation.warnings ?? []).map((warning) => `  ${warning}`),
+    ...(knowledge ? [`Knowledge base ${knowledge.github}: ${knowledge.verdict} — ${knowledge.reasons.join(' ')}`] : []),
     '',
   ];
 }
 
 function doctorFailure(
-  options: Pick<DoctorOptions, 'repoPath' | 'out' | 'json'> & InstanceReport,
+  options: Pick<DoctorOptions, 'checkout' | 'out' | 'json'> & InstanceReport,
   message: string,
   ignored: string[] = [],
   warnings: string[] = [],
   verdicts?: Verdicts,
 ): number {
   if (options.json) {
-    options.out(JSON.stringify({ repoPath: options.repoPath, accepted: false, error: message, ...verdicts, ...notes(ignored, warnings), ...instanceReportOf(options) }, null, 2));
+    options.out(JSON.stringify({ repoPath: options.checkout, accepted: false, error: message, ...verdicts, ...notes(ignored, warnings), ...instanceReportOf(options) }, null, 2));
   } else {
     if (verdicts) for (const line of verdictLines(verdicts)) options.out(line);
     options.out(message);
@@ -978,7 +1019,7 @@ function doctorFailure(
 }
 
 export interface DoctorCommandOptions {
-  repoPath: string;
+  checkout: string;
   home: string;
   env?: NodeJS.ProcessEnv;
   json?: boolean;
@@ -1043,13 +1084,14 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   let githubApp;
   // The entries of this repository (ORC-480), by the GitHub repository its checkout's origin names, as `factory init` wrote it. An
   // origin git cannot read, or not on GitHub, is said once the checks of the instance are said.
-  const origin = await originGithub(options.repoPath, options.exec).catch((error: unknown) => new Error(errorMessage(error)));
+  const origin = await originGithub(options.checkout, options.exec).catch((error: unknown) => new Error(errorMessage(error)));
   let validators: string[] = [];
   let startWarnings: string[] = [];
   // What every failure from here reports, the warnings said so far included: `--json` keeps its form whatever stops the check (ORC-449).
-  const reportOf = () => ({ repoPath: options.repoPath, out, visualProof, validatorWarnings: validators, startWarnings, ...(serverSecrets ? { serverSecrets } : {}), ...(options.json ? { json: true } : {}) });
+  const reportOf = () => ({ checkout: options.checkout, out, visualProof, validatorWarnings: validators, startWarnings, ...(serverSecrets ? { serverSecrets } : {}), ...(options.json ? { json: true } : {}) });
   let projects;
   let states;
+  let knowledge;
   try {
     const { yml, sealed } = await loadSealedFactoryYml(options.home, env, { only: GITHUB_APP_SECRETS });
     // Each refusal of the daemon's start, in its order and by the function it calls, with its message (ORC-448): the exposed
@@ -1062,6 +1104,7 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     validators = validatorWarnings(projects);
     if (!options.json) for (const line of validators) out(line);
     githubApp = resolveGithubApp(instance, env);
+    knowledge = instance.knowledge?.github;
     // factory.yml's step settings and statuses (ORC-382) the daemon refuses at load.
     states = defaultWorkflow(stepSettings(yml)).states;
     // The Claude token (ORC-337). The active account's of a source other than env is unread here: the start, which reads it, never
@@ -1094,9 +1137,9 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   let config: RepoConfig;
   try {
     // The checkout it runs in stands for the daemon's mirror (ORC-479): its `origin/HEAD`, never fetched.
-    config = await makeRepoConfig(options.exec ? { exec: options.exec } : {})({ mirror: options.repoPath }, { fetch: false });
+    config = await makeRepoConfig(options.exec ? { exec: options.exec } : {})({ mirror: options.checkout }, { fetch: false });
   } catch (error) {
     return doctorFailure(report, `Cannot read the repository's branch naming: ${errorMessage(error)}`);
   }
-  return runDoctor({ ...report, github, api, host: await checkHost(env, options.exec), naming: config.branches, commands: config.commands });
+  return runDoctor({ ...report, github, ...(knowledge ? { knowledge } : {}), api, host: await checkHost(env, options.exec), naming: config.branches, commands: config.commands });
 }

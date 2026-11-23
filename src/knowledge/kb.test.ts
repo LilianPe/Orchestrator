@@ -101,6 +101,40 @@ describe('KnowledgeBase', () => {
     expect(kb.readIndex().text).toBe('- one\n');
   });
 
+  // ORC-481: no human clone, the daemon keeps its own under <FACTORY_HOME>/knowledge.
+  describe('the clone the daemon keeps (ORC-481)', () => {
+    it('clones the repository when missing, on its default branch, its origin the forge without credentials, then commits and pushes there', async () => {
+      const { base, origin } = kbRepo();
+      const dir = join(base, 'home', 'knowledge');
+      const kb = new KnowledgeBase(dir, { origin, freshMs: 0 });
+      expect(await kb.pull()).toBeUndefined();
+      expect(kb.readIndex().text).toContain('agrégats');
+      expect(git(dir, 'branch', '--show-current').trim()).toBe('main');
+      expect(git(dir, 'config', 'remote.origin.url').trim()).toBe(origin);
+      expect(git(dir, 'rev-parse', '--is-bare-repository').trim()).toBe('false');
+      expect(await kb.commitNote('notes/preview/app.md', 'start\n', 'notes: app')).toBeUndefined();
+      expect(git(origin, 'show', 'main:notes/preview/app.md')).toBe('start\n');
+    });
+
+    it("sets its origin back to the forge's URL, a clone left there before or half made included", async () => {
+      const { base, origin, repo } = kbRepo();
+      git(repo, 'remote', 'set-url', 'origin', `${origin}-elsewhere`);
+      expect(await new KnowledgeBase(repo, { origin }).pull()).toBeUndefined();
+      expect(git(repo, 'config', 'remote.origin.url').trim()).toBe(origin);
+      const half = join(base, 'half');
+      git(base, 'init', '--quiet', half);
+      expect(await new KnowledgeBase(half, { origin }).pull()).toBeUndefined();
+      expect(new KnowledgeBase(half).readIndex().text).toContain('agrégats');
+    });
+
+    it('fails its pull, said in the warning, when the forge cannot be read, and reads nothing', async () => {
+      const { base, origin } = kbRepo();
+      const index = await new KnowledgeBase(join(base, 'knowledge'), { origin: `${origin}-gone` }).refresh();
+      expect(index).toMatchObject({ text: '', more: 0 });
+      expect(index.warning).toMatch(/^Knowledge base: not pulled, the agents read it as it is: the forge could not be read/);
+    });
+  });
+
   it('shares one refresh between launches that ask together, and with those right after it', async () => {
     const { repo } = kbRepo();
     let fetches = 0;

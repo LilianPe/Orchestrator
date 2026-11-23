@@ -181,9 +181,9 @@ export type GitAuth = (github: string) => Promise<Record<string, string>>;
 
 /**
  * `GitAuth` of the repository at a path: the token of the GitHub repository a daemon's mirror stands for (`RepoMirrors.auth`, ORC-479),
- * or the knowledge base's clone (`cloneAuth`, until ORC-471 part 4); `{}` for any other.
+ * or of one repository whatever the path (`RepoMirrors.authOf`: the knowledge base's clone, ORC-481); `{}` for any other.
  */
-export type CloneAuth = (repoPath: string) => Promise<Record<string, string>>;
+export type CloneAuth = (repo: string) => Promise<Record<string, string>>;
 
 export interface ForgeWriter {
   /**

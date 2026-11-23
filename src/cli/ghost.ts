@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -15,6 +16,7 @@ import { GITHUB_APP_SECRETS, loadSealedFactoryYml } from '../config/server-secre
 import { NO_SANDBOXES_REFUSED, SANDBOXES_META } from '../ghost/delegate.js';
 import { asRepository, cloneAtStart, knowledgeAt, startTime } from '../ghost/history.js';
 import { blindPairs, ghostReport, GRADE_LABELS, GRADES, parseThreshold, type GhostGrade, type GhostReplay, type GhostSide, type GhostTicket } from '../ghost/replay.js';
+import { KnowledgeBase } from '../knowledge/kb.js';
 import { isFantome } from '../presets/fantome.js';
 import { openStore } from '../store/open.js';
 import { cliGithubForge } from './github.js';
@@ -334,6 +336,17 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
     making.catch(() => ready.delete(github));
     return making;
   };
+  // The daemon's clone of the knowledge base (ORC-481), made from GitHub if the daemon has not made it yet, else read as it is: the
+  // daemon keeps it up to date, and a pull here could take its locks while it commits a note. Once per command; a failure is not kept.
+  let knowledgeClone: Promise<string> | undefined;
+  const knowledgeOf = async (github: string): Promise<string> => {
+    const dir = homePaths(home).knowledge;
+    if (existsSync(join(dir, '.git'))) return dir;
+    const why = await new KnowledgeBase(dir, { origin: mirrors.url(github), auth: mirrors.authOf(github) }).pull().catch((err: Error) => err.message);
+    if (why === undefined) return dir;
+    knowledgeClone = undefined;
+    throw new Error(`the knowledge base ${github} could not be cloned: ${why}`);
+  };
   try {
     let user = 'cli';
     try {
@@ -369,7 +382,7 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
         if (!memory || !instance.knowledge) return { start };
         // Transaction time: the knowledge base as it stood when the start commit was made.
         const at = await startTime({ dir: repo, sha: start });
-        const knowledge = await knowledgeAt({ repo: instance.knowledge.repoPath, before: at, dir: join(dir, 'knowledge') });
+        const knowledge = await knowledgeAt({ repo: await (knowledgeClone ??= knowledgeOf(instance.knowledge.github)), before: at, dir: join(dir, 'knowledge') });
         return { start, ...(knowledge ? { knowledge } : {}) };
       },
       ask: (q) => (rl ??= createInterface({ input: process.stdin, output: process.stdout })).question(q),

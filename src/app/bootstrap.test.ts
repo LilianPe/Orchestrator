@@ -254,6 +254,34 @@ describe('bootstrap', () => {
     expect(close).not.toHaveBeenCalled();
   });
 
+  it("keeps the knowledge base's clone under its home, made from GitHub at its first read, no human clone (ORC-481)", async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    const github = localGithub('acme/notes', { 'INDEX.md': '- [CI](notes/ci.md)\n' });
+    saveInstance(home, { port: 4177, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], knowledge: { github: 'acme/notes' } });
+    let deps: DaemonDeps | undefined;
+    const recover = vi.spyOn(Daemon.prototype, 'recover').mockImplementation(async function (this: Daemon) {
+      deps = (this as unknown as { d: DaemonDeps }).d;
+    });
+    try {
+      await (await startOnMemory({ home, fakeRunner: true, log: () => {}, env: {}, githubUrl: github.url })).stop();
+    } finally {
+      recover.mockRestore();
+    }
+    expect(await deps!.knowledgeIndex!()).toEqual({ text: '- [CI](notes/ci.md)\n', more: 0 });
+    const clone = join(home, 'knowledge');
+    expect(execFileSync('git', ['-C', clone, 'rev-parse', '--is-bare-repository'], { encoding: 'utf8' }).trim()).toBe('false');
+    expect(execFileSync('git', ['-C', clone, 'config', 'remote.origin.url'], { encoding: 'utf8' }).trim()).toBe(github.url('acme/notes'));
+  });
+
+  it('refuses to start on knowledge.repo_path, saying how to rewrite the section, before the store opens (ORC-481)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    writeFileSync(join(home, 'factory.yml'), 'knowledge:\n  repo_path: /home/moi/kb\n');
+    const store = new MemoryStore();
+    const close = vi.spyOn(store, 'close');
+    await expect(startFactory({ store, home, fakeRunner: true, log: () => {}, env: {} })).rejects.toThrow(/knowledge\.repo_path: no longer read \(ORC-481\).*`knowledge: \{ github: <owner>\/<name> \}`/);
+    expect(close).not.toHaveBeenCalled();
+  });
+
   it('refuses to start on a Claude token a header cannot carry, naming the variable (ORC-337)', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     saveInstance(home, { port: 4192, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });

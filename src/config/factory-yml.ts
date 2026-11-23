@@ -18,7 +18,7 @@ import type { StepSettings } from '../presets/workflow.js';
  * A repository (ORC-480), an entry of factory.yml's `repos`: its `id`, the key of its tickets, events and `repo:<id>` labels; its
  * repository on GitHub (`owner/name`), which the daemon fetches into its own mirror (ORC-479); its Linear team; its roles and its
  * kind; and the values of what its `.factory/config.yml` declares (ORC-211), `env` resolved, `secrets` as references read at the
- * setup (ORC-308). No local clone: `projects` and its `repo_path` are refused (`oldRepoKeys`).
+ * setup (ORC-308). No local clone: `projects`, its `repo_path` and the knowledge base's are refused (`oldRepoKeys`).
  */
 export interface ProjectConfig {
   id: string;
@@ -63,7 +63,8 @@ export interface FactoryYml {
   /** The development mode (ORC-444), written by `factory init --dev` alone: the daemon starts the Smee relay only in it. */
   dev?: boolean;
   relay?: Relay;
-  knowledge?: { repoPath: string };
+  /** The knowledge base's repository on GitHub (ORC-481), `owner/name`: the daemon keeps its own clone of it, `homePaths().knowledge`. */
+  knowledge?: { github: string };
   linear?: { clientId?: string; clientSecret?: string; webhookSecret?: string };
   /** `clientId` and `clientSecret`: the App's OAuth client, for the dashboard's GitHub sign-in (ORC-399). */
   github?: { appId: string; privateKey: string; installationId?: string; webhookSecret?: string; clientId?: string; clientSecret?: string };
@@ -239,8 +240,8 @@ function reposWithout(repos: unknown, keys: readonly string[]): unknown {
 /**
  * The repositories as factory.yml wrote them before ORC-480, refused by every read of the file with how to rewrite them, as the
  * start names a `config.yaml` left from before ORC-199: the `projects` list, joined to `repos` by team and clone, and any
- * `repo_path` of a target repository, a local clone the daemon no longer reads (its own mirror, ORC-479). `knowledge.repo_path`
- * stays, until the knowledge base has a mirror of its own (ORC-481).
+ * `repo_path` of a target repository, a local clone the daemon no longer reads (its own mirror, ORC-479), and `knowledge.repo_path`,
+ * the knowledge base's, for which the daemon keeps a clone of its own (ORC-481).
  */
 export function oldRepoKeys(r: Record<string, unknown>): string[] {
   const found: string[] = [];
@@ -258,6 +259,13 @@ export function oldRepoKeys(r: Record<string, unknown>): string[] {
     repos.forEach((entry: unknown, i) => {
       if (isRecord(entry) && 'repo_path' in entry) found.push(`repos[${i}].repo_path: no longer read (ORC-480): the daemon fetches the repository github names into a mirror of its own; delete it`);
     });
+  }
+  if (isRecord(r['knowledge']) && 'repo_path' in r['knowledge']) {
+    found.push(
+      'knowledge.repo_path: no longer read (ORC-481): the daemon keeps its own clone of the knowledge base under <FACTORY_HOME>/knowledge. ' +
+        "Rewrite the section as `knowledge: { github: <owner>/<name> }`, the GitHub repository of that clone's origin, and install the GitHub App " +
+        'on that repository with Contents: Read and write (it reads and pushes the notes with its token)',
+    );
   }
   return found;
 }
@@ -459,8 +467,9 @@ export function parseFactoryYml(
   if (dev !== undefined) out.dev = dev;
   const relay = shaped('relay', r['relay'], relaySchema);
   if (relay) out.relay = relay;
-  const knowledge = shaped('knowledge', r['knowledge'], z.strictObject({ repo_path: z.string().min(1) }));
-  if (knowledge) out.knowledge = { repoPath: knowledge.repo_path };
+  const knowledge = shaped('knowledge', r['knowledge'], z.strictObject({ github: z.string() }));
+  if (knowledge && !REPO.test(knowledge.github)) violations.push('knowledge.github: `<org>/<repo>` expected');
+  else if (knowledge) out.knowledge = { github: knowledge.github };
 
   const secretRefs: Record<string, SecretRef> = {};
   /** An `env:NAME` secret, resolved now as before ORC-398, its reference kept for `doctor` and the masking. */

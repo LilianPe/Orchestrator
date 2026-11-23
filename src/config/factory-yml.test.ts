@@ -139,6 +139,16 @@ describe('factory.yml (ORC-209, part B)', () => {
       ]);
     });
 
+    // ORC-481: the knowledge base is a clone the daemon keeps, as the repositories' mirrors.
+    it("refuses knowledge.repo_path, saying how to rewrite the section", () => {
+      expect(violations('knowledge: { repo_path: /home/moi/kb }\n')).toEqual([
+        'knowledge.repo_path: no longer read (ORC-481): the daemon keeps its own clone of the knowledge base under <FACTORY_HOME>/knowledge. ' +
+          "Rewrite the section as `knowledge: { github: <owner>/<name> }`, the GitHub repository of that clone's origin, and install the GitHub App " +
+          'on that repository with Contents: Read and write (it reads and pushes the notes with its token)',
+      ]);
+      expect(parseFactoryYml('knowledge: { github: org/notes }\n', ENV).knowledge).toEqual({ github: 'org/notes' });
+    });
+
     it('refuses them on every read of the file: the instance keys, the claude section, validate\'s limits', () => {
       const home = mkdtempSync(join(tmpdir(), 'factory-yml-old-'));
       try {
@@ -146,6 +156,9 @@ describe('factory.yml (ORC-209, part B)', () => {
         expect(() => loadFactoryLimits(home)).toThrow(REWRITE);
         expect(() => parseInstanceKeys(readFileSync(join(home, 'factory.yml'), 'utf8'))).toThrow(REWRITE);
         expect(() => claudeAccountReader(home, {})()).toThrow(REWRITE);
+        writeFileSync(join(home, 'factory.yml'), 'budgets: { per_step_tokens: off }\nknowledge: { repo_path: /kb }\n');
+        expect(() => loadFactoryLimits(home)).toThrow(/knowledge\.repo_path: no longer read \(ORC-481\)/);
+        expect(() => parseInstanceKeys(readFileSync(join(home, 'factory.yml'), 'utf8'))).toThrow(/knowledge\.repo_path: no longer read/);
       } finally {
         rmSync(home, { recursive: true, force: true });
       }
