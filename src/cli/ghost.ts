@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -336,16 +335,15 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
     making.catch(() => ready.delete(github));
     return making;
   };
-  // The daemon's clone of the knowledge base (ORC-481), made from GitHub if the daemon has not made it yet, else read as it is: the
-  // daemon keeps it up to date, and a pull here could take its locks while it commits a note. Once per command; a failure is not kept.
+  // The knowledge base (ORC-481): ghost's own clone, `<ghost>/.knowledge`, never the daemon's, which it would race for git's locks.
+  // Made from GitHub if missing, brought up to its default branch once per command; a failure is not kept, the next ticket tries again.
   let knowledgeClone: Promise<string> | undefined;
   const knowledgeOf = async (github: string): Promise<string> => {
-    const dir = homePaths(home).knowledge;
-    if (existsSync(join(dir, '.git'))) return dir;
+    const dir = join(homePaths(home).ghost, '.knowledge');
     const why = await new KnowledgeBase(dir, { origin: mirrors.url(github), auth: mirrors.authOf(github) }).pull().catch((err: Error) => err.message);
     if (why === undefined) return dir;
     knowledgeClone = undefined;
-    throw new Error(`the knowledge base ${github} could not be cloned: ${why}`);
+    throw new Error(`the knowledge base ${github} could not be pulled: ${why}`);
   };
   try {
     let user = 'cli';

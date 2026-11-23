@@ -263,7 +263,10 @@ describe('bootstrap', () => {
       deps = (this as unknown as { d: DaemonDeps }).d;
     });
     try {
-      await (await startOnMemory({ home, fakeRunner: true, log: () => {}, env: {}, githubUrl: github.url })).stop();
+      const app = await startOnMemory({ home, fakeRunner: true, log: () => {}, env: {}, githubUrl: github.url });
+      // Made in the background at the start, as the mirrors: no launch has asked for it yet.
+      await vi.waitFor(() => expect(existsSync(join(home, 'knowledge', 'INDEX.md'))).toBe(true));
+      await app.stop();
     } finally {
       recover.mockRestore();
     }

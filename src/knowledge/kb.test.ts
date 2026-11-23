@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { execCmd, type Exec } from '../adapters/exec.js';
+import { MIRROR_CLONE_DEADLINE_MS } from '../adapters/workspace/repo-mirrors.js';
 import { KB_INDEX_MAX, KnowledgeBase, knowledgePrompt } from './kb.js';
 
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8' });
@@ -125,6 +126,22 @@ describe('KnowledgeBase', () => {
       git(base, 'init', '--quiet', half);
       expect(await new KnowledgeBase(half, { origin }).pull()).toBeUndefined();
       expect(new KnowledgeBase(half).readIndex().text).toContain('agrégats');
+    });
+
+    it("fetches a clone with no commit yet (a first clone cut short) with the first clone's deadline, then a clone with one with the launch's", async () => {
+      const { base, origin } = kbRepo();
+      const dir = join(base, 'knowledge');
+      const deadlines: (number | undefined)[] = [];
+      const recording: Exec = (cmd, args, opts) => {
+        if (args.includes('fetch')) deadlines.push(opts?.timeoutMs);
+        return execCmd(cmd, args, opts);
+      };
+      // Cut short: made, but its fetch failed.
+      expect(await new KnowledgeBase(dir, { origin: `${origin}-gone` }).pull().catch(() => 'failed')).toBe('failed');
+      const kb = new KnowledgeBase(dir, { origin, exec: recording, freshMs: 0 });
+      expect(await kb.pull()).toBeUndefined();
+      expect(await kb.pull()).toBeUndefined();
+      expect(deadlines).toEqual([MIRROR_CLONE_DEADLINE_MS, 60_000]);
     });
 
     it('fails its pull, said in the warning, when the forge cannot be read, and reads nothing', async () => {

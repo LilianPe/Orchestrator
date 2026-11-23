@@ -76,16 +76,18 @@ export class KnowledgeBase {
    */
   async pull(): Promise<string | undefined> {
     const git = (a: string[], opts?: ExecOpts) => this.git('git', ['-C', this.dir, ...a], opts);
-    const made = this.origin ? await this.cloneAt(this.origin) : false;
-    if (!this.origin && !(await git(['remote'])).stdout.trim()) return 'no remote: it is never pulled, the agents read it as it is';
-    // Its first fetch brings the whole history, as a mirror's: a stalled transfer is aborted all the same.
-    await fetchOrigin(this.git, this.dir, { deadlineMs: made ? MIRROR_CLONE_DEADLINE_MS : FETCH_DEADLINE_MS, auth: this.auth });
+    if (this.origin) await this.cloneAt(this.origin);
+    else if (!(await git(['remote'])).stdout.trim()) return 'no remote: it is never pulled, the agents read it as it is';
+    // No commit yet, a clone just made or one whose first fetch was cut short: that fetch brings the whole history, as a mirror's
+    // first, with its deadline. A stalled transfer is aborted all the same.
+    const born = (await git(['rev-parse', '--verify', '--quiet', 'HEAD'])).code === 0;
+    await fetchOrigin(this.git, this.dir, { deadlineMs: born ? FETCH_DEADLINE_MS : MIRROR_CLONE_DEADLINE_MS, auth: this.auth });
     // In full, never a tag of its name (ORC-354). A clone without origin/HEAD asks the remote its default branch.
     let head = await originHeadOf(this.git, this.dir);
     if (!head.set && (await git(['remote', 'set-head', 'origin', '--auto'], { env: await this.remoteEnv(), timeoutMs: FETCH_DEADLINE_MS })).code === 0) head = await originHeadOf(this.git, this.dir);
     const branch = head.name.replace(/^origin\//, '');
-    // A clone just made has no commit yet: on the default branch, which the merge below brings.
-    if ((await git(['rev-parse', '--verify', '--quiet', 'HEAD'])).code !== 0) await mustExec(this.git, 'git', ['-C', this.dir, 'symbolic-ref', 'HEAD', `refs/heads/${branch}`]);
+    // A clone without a commit yet: on the default branch, which the merge below brings.
+    if (!born) await mustExec(this.git, 'git', ['-C', this.dir, 'symbolic-ref', 'HEAD', `refs/heads/${branch}`]);
     const current = (await git(['branch', '--show-current'])).stdout.trim();
     if (current !== branch) return `on ${current || 'a detached HEAD'}, not on its default branch ${branch}: not pulled, the agents read it as it is`;
     await mustExec(this.git, 'git', ['-C', this.dir, 'merge', '--ff-only', head.ref]);
@@ -112,16 +114,13 @@ export class KnowledgeBase {
   /**
    * The clone the daemon keeps (ORC-481): a repository made at `dir` when missing (not bare: the factory commits there), its
    * `origin` set to the forge's `url` whenever it names another (a clone left there before, a creation cut short), and what it
-   * fetches every branch. No credential in its config: the App's token reaches git in its environment alone (`auth`). True when
-   * it was just made.
+   * fetches every branch. No credential in its config: the App's token reaches git in its environment alone (`auth`).
    */
-  private async cloneAt(url: string): Promise<boolean> {
-    const made = !existsSync(join(this.dir, '.git'));
-    if (made) await mustExec(this.git, 'git', ['init', '--quiet', '--template=', this.dir]);
+  private async cloneAt(url: string): Promise<void> {
+    if (!existsSync(join(this.dir, '.git'))) await mustExec(this.git, 'git', ['init', '--quiet', '--template=', this.dir]);
     const config = (key: string) => this.git('git', ['-C', this.dir, 'config', '--get', key]).then((r) => r.stdout.trim());
     if ((await config('remote.origin.url')) !== url) await mustExec(this.git, 'git', ['-C', this.dir, 'config', 'remote.origin.url', url]);
     if (!(await config('remote.origin.fetch'))) await mustExec(this.git, 'git', ['-C', this.dir, 'config', 'remote.origin.fetch', ORIGIN_REFSPEC]);
-    return made;
   }
 
   private remoteEnv(): Promise<Record<string, string>> {

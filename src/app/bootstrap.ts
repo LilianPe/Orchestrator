@@ -302,6 +302,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     // as the mirrors are, never with a credential in its config.
     const knowledge = instance.knowledge?.github;
     const kb = knowledge ? new KnowledgeBase(paths.knowledge, { origin: mirrors.url(knowledge), auth: mirrors.authOf(knowledge) }) : undefined;
+    // Cloned or pulled in the background, as the mirrors: a first clone can take minutes, and a launch that comes meanwhile shares it.
+    void kb?.refresh().then((index) => index.warning && log(`Warning: ${index.warning}`));
     // The roles of a human event's signed actor (ORC-186): Linear team members and GitHub rights, read
     // again past their TTL, and the designations of factory.yml.
     const roles = new CachedRoleResolver({
