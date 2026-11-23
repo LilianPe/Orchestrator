@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, request, type Server } from 'node:http';
 import type { Server as HttpsServer } from 'node:https';
 import { connect, type AddressInfo, type Socket } from 'node:net';
@@ -160,6 +160,21 @@ describe('EgressProxy', () => {
     expect(existsSync(dirname(path))).toBe(true);
     await proxy.close('run-1');
     expect(existsSync(dirname(path))).toBe(false);
+  });
+
+  it('loads the CA again at the next open after a load that failed, the opens during one load sharing it (ORC-484)', async () => {
+    // A file where the CA's folder goes: the load fails, as on EACCES, but the same for root.
+    const caDir = join(dir, 'blocked');
+    writeFileSync(caDir, '');
+    const blocked = new EgressProxy({ dir: join(dir, 'blocked-runs'), caDir });
+    const opens = await Promise.allSettled([blocked.open('run-1', { level: 'none', allow: [] }), blocked.open('run-2', { level: 'none', allow: [] })]);
+    expect(opens.map((o) => o.status)).toEqual(['rejected', 'rejected']);
+    const [first, second] = opens as PromiseRejectedResult[];
+    expect(second!.reason).toBe(first!.reason);
+    rmSync(caDir);
+    await blocked.open('run-1', { level: 'none', allow: [] });
+    expect(existsSync(blocked.caCertPath)).toBe(true);
+    await blocked.closeAll();
   });
 
   it('refuses a tunnel the policy refuses, and journals it', async () => {

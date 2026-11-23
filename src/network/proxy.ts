@@ -156,7 +156,7 @@ export function egressJournalPath(dir: string, runId: string): string {
  */
 export class EgressProxy {
   private readonly runs = new Map<string, Run>();
-  /** The CA and its leaves, made at the first open. */
+  /** The CA and its leaves, made at the first open; again at the next one if that load failed. */
   private tlsReady?: Promise<void>;
   private tls?: { ca: FactoryCa; issuer: LeafIssuer };
   /** Model calls held, all runs together (ORC-337), against `CLAUDE_READS_MAX`. */
@@ -239,10 +239,14 @@ export class EgressProxy {
   }
 
   private async listen(run: Run, path: string): Promise<void> {
+    // The opens during one load share it; a failed one (EACCES on the folder...) is dropped, so the next open tries again (ORC-484).
     this.tlsReady ??= (async () => {
       const ca = loadOrCreateCa(this.o.caDir, this.o.log);
       this.tls = { ca: await ca, issuer: await LeafIssuer.create(ca) };
-    })();
+    })().catch((err: unknown) => {
+      this.tlsReady = undefined;
+      throw err;
+    });
     await this.tlsReady;
     if (!PIPE) {
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
