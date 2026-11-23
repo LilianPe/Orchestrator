@@ -224,9 +224,18 @@ export function secretsText(home: string): string | undefined {
 
 function parseSecrets(text: string | undefined, key?: string): Secrets {
   if (text === undefined) return {};
-  if (!isSealed(text)) return JSON.parse(text) as Secrets;
+  if (!isSealed(text)) return secretsJson(text);
   if (!key) throw new Error('secrets.json is encrypted at rest: it is read with the key secrets_key of factory.yml names, which the daemon reads at its start');
-  return JSON.parse(openSecretsFile(text, key)) as Secrets;
+  return secretsJson(openSecretsFile(text, key));
+}
+
+/** The file's JSON, refused without JSON.parse's message (ORC-456): it quotes the text around the error, a token's characters among it. */
+function secretsJson(text: string): Secrets {
+  try {
+    return JSON.parse(text) as Secrets;
+  } catch {
+    throw new Error('secrets.json is not valid JSON (its text left unquoted: it holds secrets)');
+  }
 }
 
 /** The secret values of the secrets file (identifiers left out): masked in run transcripts. */

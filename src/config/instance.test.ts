@@ -255,6 +255,16 @@ describe('secrets.json encrypted at rest (ORC-398)', () => {
     expect(loadSecrets(h, KEY)).toEqual({ linear });
   });
 
+  // ORC-456: JSON.parse's message quotes the text around the error, a token's characters among it; doctor and the start say it.
+  it('refuses a secrets.json in clear that is not JSON without quoting any of it', () => {
+    const h = home();
+    writeFileSync(homePaths(h).secrets, '{"linear": {"accessToken": lin_oauth_witness-value-456"}}');
+    for (const read of [() => loadSecrets(h), () => sealSecretsAtRest(h, KEY)]) {
+      expect(read).toThrow('secrets.json is not valid JSON');
+      expect(() => read()).not.toThrow(/witness|lin_oauth/);
+    }
+  });
+
   it('refuses to read a sealed file without its key, naming secrets_key', () => {
     const h = home();
     saveSecrets(h, { linear }, KEY);
