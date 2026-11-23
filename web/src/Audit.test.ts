@@ -62,6 +62,11 @@ describe('the audit sheet page (ORC-229)', () => {
     expect(html).toContain('Serious · No category');
   });
 
+  it('reads a defect from an older server, with no level nor category, as serious with no category (ORC-378)', () => {
+    const { level: _l, category: _c, ...older } = defect();
+    expect(render(sheet({ defects: [older] }))).toContain('Serious · No category');
+  });
+
   it('says when the finding a defect is linked to is no longer kept: its lens read the commit again', () => {
     expect(render(sheet({ defects: [defect({ findingId: 'rv0:correctness:0' })] }))).toContain('seen by finding rv0:correctness:0 (no longer kept)');
   });

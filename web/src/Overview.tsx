@@ -67,7 +67,7 @@ function missRateTile(m: MissRateView): Tile {
  * threshold on defects is to read (ORC-143).
  */
 function missRateByLevel(m: MissRateView): Tile[] {
-  if (!m.counted) return [];
+  if (!m.counted || !m.levels) return [];
   const share = (c: MissCount) => `${orDash(c.rate, percent)} (${c.missed} of ${c.defects})`;
   return m.levels.map((l) => ({
     label: `AI reviewers’ miss rate · ${LEVEL_LABELS[l.level]}`,

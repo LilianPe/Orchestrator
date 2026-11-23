@@ -177,7 +177,7 @@ function Defects({ sheet, onDefect, notice }: { sheet: AuditSheetView; onDefect:
         <ul>
           {sheet.defects.map((d) => (
             <li key={d.id}>
-              {time(d.at)} · <strong>{LEVEL_LABELS[d.level]} · {categoryLabel(d.category)}</strong> · PR #{d.prNumber}{d.file ? ` · ${d.file}${d.line ? `:${d.line}` : ''}` : ''}: {d.description}{' '}
+              {time(d.at)} · <strong>{LEVEL_LABELS[d.level ?? 'serious']} · {categoryLabel(d.category ?? null)}</strong> · PR #{d.prNumber}{d.file ? ` · ${d.file}${d.line ? `:${d.line}` : ''}` : ''}: {d.description}{' '}
               <em>{d.findingId === null ? 'missed by the AI reviewers' : `seen by finding ${d.findingId}${kept.has(d.findingId) ? '' : ' (no longer kept)'}`}</em>
               <span className="note"> · {d.enteredBy}{standing(d, sheet.definition)}</span>
             </li>

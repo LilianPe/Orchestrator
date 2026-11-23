@@ -62,6 +62,14 @@ describe("the AI reviewers' miss rate (ORC-229)", () => {
     // Not counted: no figure by level either.
     expect(tile(view({ aiReviewMisses: { counted: false, why: 'no definition' } }), 'AI reviewers’ miss rate · Serious')).toBeUndefined();
   });
+
+  it('shows the total and no level from an older server, whose miss rate has no levels (ORC-378)', () => {
+    const { levels: _, ...older } = counted({ defects: 2, missed: 1, rate: 0.5 });
+    const o = view({ aiReviewMisses: older });
+    expect(tile(o, 'AI reviewers’ miss rate')?.value).toBe('50%');
+    expect(overviewTiles(o).filter((t) => t.label.startsWith('AI reviewers’ miss rate ·'))).toEqual([]);
+    expect(() => renderToStaticMarkup(createElement(Overview, { overview: o }))).not.toThrow();
+  });
 });
 
 describe('overviewTiles (ORC-299)', () => {

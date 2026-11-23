@@ -1,5 +1,5 @@
 import type { BlockCause, BlockKind, ParetoCause } from '../../src/core/block-cause.js';
-import type { DefectCategory, DefectLevel, MissRate } from '../../src/core/serious-defect.js';
+import type { DefectCategory, DefectLevel, LevelMiss, MissRate } from '../../src/core/serious-defect.js';
 
 export interface RunView {
   id: string;
@@ -172,8 +172,10 @@ export interface OverviewView {
   aiReviewMisses?: MissRateView;
 }
 
-/** `MissRate` of src/core/serious-defect.ts (ORC-229). */
-export type MissRateView = MissRate;
+/** `MissRate` of src/core/serious-defect.ts (ORC-229); `levels` absent from a server older than ORC-378. */
+export type MissRateView =
+  | Extract<MissRate, { counted: false }>
+  | (Omit<Extract<MissRate, { counted: true }>, 'levels'> & { levels?: LevelMiss[] });
 
 /** `ReviewDefect` of src/core/audit.ts (ORC-229): a defect a human found in review, linked to an AI finding or not. */
 export interface ReviewDefectView {
@@ -185,8 +187,9 @@ export interface ReviewDefectView {
   findingId: string | null;
   file?: string;
   line?: number;
-  level: DefectLevel;
-  category: DefectCategory | null;
+  /** Absent from a server older than ORC-378, as for a defect entered before it: serious, with no category. */
+  level?: DefectLevel;
+  category?: DefectCategory | null;
   definition: string | null;
   enteredBy: string;
   at: number;
