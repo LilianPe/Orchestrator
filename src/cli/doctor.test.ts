@@ -1304,7 +1304,7 @@ describe('doctor --secrets', () => {
     { what: 'its key', drop: (f: Record<string, unknown>) => ({ ...f, key: { iv: (f['key'] as { iv: string }).iv } }) },
   ])('refuses a sealed secrets.json without $what as the start does, naming the file', async ({ what, drop }) => {
     const home = sealedHome();
-    saveSecrets(home, { linear: { clientId: 'cid', clientSecret: '', webhookSecret: '', accessToken: `${WITNESS}-token` } }, files['secrets.key']);
+    saveSecrets(home, { linear: { clientId: 'cid', clientSecret: '', webhookSecret: '', accessToken: `${WITNESS}-token` } }, files['secrets.key'] ?? '');
     const path = join(home, 'secrets.json');
     writeFileSync(path, JSON.stringify(drop(JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>)));
     const message = await startRefusal(home);
