@@ -85,3 +85,60 @@ describe.skipIf(!built)(`semgrep in verify on the runner image (${cli})`, () => 
     expect(res.failures[0]!.output).not.toContain('old.js');
   }, 300_000);
 });
+
+/** ORC-280, criteria 1 to 3: the image's crapper and dryer in `verify`, without network, on a TypeScript and a Python repository. */
+describe.skipIf(!built)(`factory/qualité-diff in verify on the runner image (${cli})`, () => {
+  const { provider } = useSandboxes('verify-quality');
+  const base = mkdtempSync(join(tmpdir(), 'factory-quality-'));
+  const BRANCH = 'factory/iso-280';
+  const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+  const commit = (cwd: string, files: Record<string, string>, message: string) => {
+    for (const [path, content] of Object.entries(files)) {
+      mkdirSync(dirname(join(cwd, path)), { recursive: true });
+      writeFileSync(join(cwd, path), content);
+    }
+    git(cwd, 'add', '.');
+    git(cwd, 'commit', '-q', '-m', message);
+  };
+
+  /** A repository whose base holds `old`, and a branch that adds `added`: `verify` with the measure, one command that passes. */
+  const measure = async (name: string, old: Record<string, string>, added: Record<string, string>) => {
+    const origin = join(base, name, 'origin');
+    mkdirSync(origin, { recursive: true });
+    git(origin, 'init', '-q', '-b', 'main');
+    for (const c of [['user.email', 't@t'], ['user.name', 't']] as const) git(origin, 'config', ...c);
+    commit(origin, old, 'base');
+    const repo = join(base, name, 'repo');
+    git(base, 'clone', '-q', origin, repo);
+    for (const c of [['user.email', 't@t'], ['user.name', 't']] as const) git(repo, 'config', ...c);
+    git(repo, 'checkout', '-q', '-b', BRANCH);
+    commit(repo, added, 'work');
+    const workDir = join(base, name, 'work');
+    mkdirSync(workDir);
+    return runCleanVerify({
+      sandboxes: provider, runId: `isolation-verify-quality-${name}-${Date.now()}`, ticketId: 'ISO-280', branch: BRANCH, worktree: repo, originUrl: origin, workDir,
+      gitleaks: false, semgrep: false, quality: true, setup: [], commands: ['true'], env: async () => ({}), log: () => {},
+    });
+  };
+
+  afterAll(() => rmSync(base, { recursive: true, force: true }));
+
+  it('lists, on a TypeScript repository, the complex function the branch adds and the function it copies', async () => {
+    const total = (name: string) => `export function ${name}(items: number[]): number {\n  let sum = 0;\n  for (const it of items) {\n    if (it > 0) {\n      sum += it * 2;\n    }\n  }\n  return sum;\n}\n`;
+    const grade = 'export function grade(n: number, b?: number): string {\n  const s = n + (b ?? 0);\n  if (s > 90 && n > 0) return "A";\n  else if (s > 80) return "B";\n  else if (s > 70 || n < 0) return "C";\n  for (let i = 0; i < 3; i++) { if (i === s) return "D"; }\n  return "F";\n}\n';
+    const res = await measure('ts', { 'src/old.ts': total('total') }, { 'src/new.ts': `${grade}${total('amount')}` });
+    expect(res).toMatchObject({ ok: true, failures: [] });
+    expect(res.quality?.unavailable).toBeUndefined();
+    expect(res.quality!.functions).toEqual([expect.objectContaining({ path: 'src/new.ts', name: 'grade', cc: 9, coverage: null })]);
+    expect(res.quality!.pairs).toEqual([expect.objectContaining({ score: 1, left: expect.objectContaining({ path: 'src/new.ts' }), right: expect.objectContaining({ path: 'src/old.ts' }) })]);
+  }, 300_000);
+
+  it('lists the same on a Python repository', async () => {
+    const total = (name: string) => `def ${name}(items):\n    out = 0\n    for it in items:\n        if it > 0:\n            out += it * 2\n    return out\n`;
+    const grade = 'def grade(n, b=None):\n    s = n + (b or 0)\n    if s > 90 and n > 0:\n        return "A"\n    elif s > 80:\n        return "B"\n    elif s > 70 or n < 0:\n        return "C"\n    for i in range(3):\n        if i == s:\n            return "D"\n    return "F"\n';
+    const res = await measure('py', { 'app/old.py': total('total') }, { 'app/new.py': `${grade}\n\n${total('amount')}` });
+    expect(res.quality?.unavailable).toBeUndefined();
+    expect(res.quality!.functions).toEqual([expect.objectContaining({ path: 'app/new.py', name: 'grade', coverage: null })]);
+    expect(res.quality!.pairs).toEqual([expect.objectContaining({ left: expect.objectContaining({ path: 'app/new.py' }), right: expect.objectContaining({ path: 'app/old.py' }) })]);
+  }, 300_000);
+});
