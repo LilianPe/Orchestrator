@@ -4,7 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { execCmd, mustExec, type Exec } from '../exec.js';
 import type { CloneAuth, GitAuth } from '../forge/types.js';
 import { repoRef } from '../forge/github-app.js';
-import { fetchOrigin, ORIGIN_REFSPEC, originHeadOf, remoteGitEnv, type FetchOrigin } from './git-workspaces.js';
+import { fetchOrigin, ORIGIN_REFSPEC, remoteGitEnv, type FetchOrigin } from './git-workspaces.js';
 
 /**
  * The first fetch of a mirror brings the whole history: longer than a launch's (`FETCH_DEADLINE_MS`). A transfer that stalls is
@@ -30,8 +30,6 @@ export class RepoMirrors {
   private readonly repos = new Map<string, string>();
   /** The repositories whose mirror has no `origin/HEAD` yet, said once. */
   private readonly headless = new Set<string>();
-  /** The mirrors whose `origin/HEAD` is set: never read again, as it never changes once set. */
-  private readonly headed = new Set<string>();
   /** The last fetch of each mirror, which the next one waits for. */
   private readonly turns = new Map<string, Promise<unknown>>();
 
@@ -114,8 +112,6 @@ export class RepoMirrors {
       await fetchOrigin(this.exec, making, { deadlineMs: MIRROR_CLONE_DEADLINE_MS, auth: this.tokenOf(github), ...(log ? { log } : {}) });
       await this.setHead(github, making);
       if (!renamed(making, path)) {
-        // Another process's mirror is the one: its `origin/HEAD` is read again, not taken from this copy.
-        this.headed.delete(github);
         await rm(making, { recursive: true, force: true });
       }
     } catch (err) {
@@ -130,17 +126,15 @@ export class RepoMirrors {
   }
 
   /**
-   * `origin/HEAD` from the forge's default branch while the mirror has none (a repository empty when it was made): never changed
-   * once set, as a clone's. `branchReader` reads the forge's own `HEAD` where it matters (ORC-358).
+   * `origin/HEAD` from the forge's default branch while the mirror has none (a repository empty when it was made), or while
+   * the branch it names is gone: a fetch prunes it once the forge renamed its default branch (ORC-486). Else never changed, as
+   * a clone's. `branchReader` reads the forge's own `HEAD` where it matters (ORC-358).
    */
   private async setHead(github: string, repo: string, deadlineMs = MIRROR_CLONE_DEADLINE_MS): Promise<void> {
-    if (this.headed.has(github)) return;
-    if (!(await originHeadOf(this.exec, repo)).set) {
-      const env = await remoteGitEnv(this.tokenOf(github), repo, deadlineMs);
-      const r = await this.exec('git', ['-C', repo, 'remote', 'set-head', 'origin', '--auto'], { env, timeoutMs: deadlineMs });
-      if (r.code !== 0) return this.sayHeadless(github, r.stderr);
-    }
-    this.headed.add(github);
+    if ((await this.exec('git', ['-C', repo, 'rev-parse', '--verify', '--quiet', 'refs/remotes/origin/HEAD'])).code === 0) return;
+    const env = await remoteGitEnv(this.tokenOf(github), repo, deadlineMs);
+    const r = await this.exec('git', ['-C', repo, 'remote', 'set-head', 'origin', '--auto'], { env, timeoutMs: deadlineMs });
+    if (r.code !== 0) this.sayHeadless(github, r.stderr);
   }
 
   /** An empty repository has no default branch yet: `origin/main` is assumed until it has one, said once. */

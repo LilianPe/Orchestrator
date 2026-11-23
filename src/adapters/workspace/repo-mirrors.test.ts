@@ -72,9 +72,22 @@ describe('RepoMirrors (ORC-479)', () => {
     expect(git(mirror, 'rev-parse', 'refs/remotes/origin/main')).toBe(git(f.work, 'rev-parse', 'main'));
     // Even once the mirror drops what no ref reaches any more: the workspace's objects are its own.
     git(mirror, 'gc', '--quiet', '--prune=now');
+    expect(() => git(mirror, 'cat-file', '-e', sha)).toThrow();
     expect(git(w.path, 'log', '-1', '--format=%H %s')).toBe(`${sha} the agent`);
     expect(await ws.head(w.path)).toBe(sha);
-    expect(await ws.ticketDiff(mirror, w.path)).toBeDefined();
+    expect(await ws.ticketDiff(mirror, w.path)).toBe('(no change against the trunk)');
+  });
+
+  it('sets origin/HEAD again when the forge renamed its default branch and the fetch pruned the old one (ORC-486)', async () => {
+    const f = forge();
+    const mirrors = new RepoMirrors({ root: f.root, url: f.url });
+    const mirror = await mirrors.ready('acme/app');
+    git(f.work, 'push', '--quiet', 'origin', 'main:trunk');
+    git(f.base, '--git-dir', f.url('acme/app'), 'symbolic-ref', 'HEAD', 'refs/heads/trunk');
+    git(f.work, 'push', '--quiet', 'origin', '--delete', 'main');
+    await mirrors.fetch(mirror);
+    expect(git(mirror, 'symbolic-ref', 'refs/remotes/origin/HEAD')).toBe('refs/remotes/origin/trunk');
+    expect(git(mirror, 'rev-parse', 'refs/remotes/origin/HEAD')).toBe(git(f.work, 'rev-parse', 'HEAD'));
   });
 
   it('makes a missing mirror at its first fetch, whoever asks: a workspace from a mirror the start could not make', async () => {
