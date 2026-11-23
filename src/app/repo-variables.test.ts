@@ -8,7 +8,7 @@ import { parseRepoConfig, RepoConfigError } from '../config/repo-config.js';
 import { NO_REPO_VARIABLES } from '../config/repo-variables.js';
 import { ignoredWorkflowFilesOn, makeDryRunFiles, makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint, pyprojectStart } from './repo-variables.js';
 
-const YML = { repos: [{ linearTeam: 'REL', github: 'Org/App', env: { NODE_ENV: 'test' }, secrets: { REGISTRY_TOKEN: { source: 'env', path: 'ORG_REGISTRY_TOKEN' } } }] };
+const YML = { repos: [{ id: 'p', linearTeamKey: 'REL', github: 'Org/App', env: { NODE_ENV: 'test' }, secrets: { REGISTRY_TOKEN: { source: 'env', path: 'ORG_REGISTRY_TOKEN' } } }] };
 const CONFIG = 'env: [NODE_ENV]\nsetup_secrets: [REGISTRY_TOKEN]\n';
 
 /** A repository: its origin, its default branch, the config committed on it. */
@@ -223,21 +223,15 @@ describe('makeRepoConfig (ORC-209 C)', () => {
 });
 
 describe('makeRepoVariables (ORC-211)', () => {
-  const RUNTIME = { id: 'p', github: 'org/app', teamKey: 'REL' };
+  const RUNTIME = { id: 'p' };
 
-  it("takes the entry of the project's team that names its repository, whatever the case, and the declaration it is given", async () => {
-    for (const github of ['org/app', 'ORG/App']) {
-      const vars = await makeRepoVariables({ yml: YML, log: () => {} })({ ...RUNTIME, github }, DECLARED);
-      expect(vars).toEqual({ env: { NODE_ENV: 'test' }, setupSecrets: { REGISTRY_TOKEN: { source: 'env', path: 'ORG_REGISTRY_TOKEN' } }, missing: [] });
-    }
+  it("takes the env and secrets of the project's own entry, by its id (ORC-480), and the declaration it is given", async () => {
+    const vars = await makeRepoVariables({ yml: YML, log: () => {} })(RUNTIME, DECLARED);
+    expect(vars).toEqual({ env: { NODE_ENV: 'test' }, setupSecrets: { REGISTRY_TOKEN: { source: 'env', path: 'ORG_REGISTRY_TOKEN' } }, missing: [] });
   });
 
-  it('gives nothing to a project of another team, though its repository has an entry', async () => {
-    expect(await makeRepoVariables({ yml: YML, log: () => {} })({ ...RUNTIME, teamKey: 'OTHER' }, DECLARED)).toEqual(NO_REPO_VARIABLES);
-  });
-
-  it('gives nothing to a repository with no entry in factory.yml', async () => {
-    expect(await makeRepoVariables({ yml: YML, log: () => {} })({ ...RUNTIME, github: 'org/other' }, DECLARED)).toEqual(NO_REPO_VARIABLES);
+  it("gives nothing of another entry's, though it names the same repository and team", async () => {
+    expect(await makeRepoVariables({ yml: YML, log: () => {} })({ id: 'other' }, DECLARED)).toEqual(NO_REPO_VARIABLES);
   });
 
   it('gives nothing without factory.yml', async () => {

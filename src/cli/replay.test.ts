@@ -52,7 +52,7 @@ describe('factory replay (ORC-174)', () => {
 
   it('refuses to export without the instance database: Postgres only (ORC-178), its export tests in test/integration/replay-export-pg.test.ts', async () => {
     const home = tmp();
-    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', repoPath: '/repo', linearTeamKey: 'REL' }] });
+    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', github: 'acme/app', linearTeamKey: 'REL' }] });
     await expect(run(['--export', 'REL-1'], { FACTORY_HOME: home })).rejects.toThrow(/FACTORY_DATABASE_URL is not set/);
   });
 

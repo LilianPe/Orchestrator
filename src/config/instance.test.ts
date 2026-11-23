@@ -33,12 +33,12 @@ describe('instance config', () => {
     expect(loadInstance(home)).toEqual({ port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
     const cfg = {
       port: 4100, host: '127.0.0.1', relay: { kind: 'smee' as const, url: 'https://smee.io/abc' }, dev: true,
-      projects: [{ id: 'perso', repoPath: '/code/perso', linearTeamKey: 'REL', effects: 'none' as const }],
+      projects: [{ id: 'perso', github: 'org/perso', linearTeamKey: 'REL', effects: 'none' as const }],
       knowledge: { repoPath: join(home, 'knowledge') },
     };
     saveInstance(home, cfg);
     expect(loadInstance(home)).toEqual(cfg);
-    expect(readFileSync(homePaths(home).factoryYml, 'utf8')).toContain('repo_path: /code/perso\n    linear_team_key: REL');
+    expect(readFileSync(homePaths(home).factoryYml, 'utf8')).toContain('repos:\n  - id: perso\n    github: org/perso\n    linear_team: REL\n    effects: none\n');
   });
 
   it('never reads config.yaml: its keys are not the instance (ORC-199)', () => {
@@ -58,10 +58,31 @@ describe('instance config', () => {
 
   it("reads a project's authorization designations and its Linear → GitHub logins (ORC-186), with defaults for what is left out", () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-home-'));
-    writeFileSync(join(home, 'factory.yml'), 'projects:\n  - { id: perso, repo_path: /code/perso, linear_team_key: REL, authz: { validators: [user-v], github_logins: { user-v: v-gh } } }\n');
+    writeFileSync(join(home, 'factory.yml'), 'repos:\n  - { id: perso, github: org/perso, linear_team: REL, authz: { validators: [user-v], github_logins: { user-v: v-gh } } }\n');
     expect(loadInstance(home).projects[0]!.authz).toEqual({ maintainers: [], validators: ['user-v'], githubLogins: { 'user-v': 'v-gh' } });
-    const project = { id: 'perso', repoPath: '/code/perso', linearTeamKey: 'REL', authz: { maintainers: [''], validators: [], githubLogins: {} } };
-    expect(() => saveInstance(home, { port: 4100, host: 'h', relay: { kind: 'none' }, projects: [project] })).toThrow(/projects\[0\]\.authz\.maintainers\[0\]/);
+    const project = { id: 'perso', github: 'org/perso', linearTeamKey: 'REL', authz: { maintainers: [''], validators: [], githubLogins: {} } };
+    expect(() => saveInstance(home, { port: 4100, host: 'h', relay: { kind: 'none' }, projects: [project] })).toThrow(/repos\[0\]\.authz\.maintainers\[0\]/);
+  });
+
+  it("writes each repository's entry with the env and secrets the file holds, as references, never a value read from them (ORC-480)", () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-home-'));
+    const env = '    env:\n      NODE_ENV: test\n      API_URL: env:ORG_API_URL\n    secrets:\n      NPM_TOKEN: env:ORG_NPM_TOKEN\n';
+    writeFileSync(join(home, 'factory.yml'), `repos:\n  - id: app\n    github: org/app\n    linear_team: REL\n${env}`);
+    const yml = loadFactoryYml(home, { ORG_API_URL: 'https://api', ORG_NPM_TOKEN: 'npm-secret-value' })!;
+    // What the daemon resolved, handed back as init would: none of its values is written.
+    const [app] = effectiveInstance(yml).projects;
+    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ ...app!, linearTeamKey: 'ENG' }, { id: 'site', github: 'org/site', linearTeamKey: 'ENG' }] });
+    const text = readFileSync(homePaths(home).factoryYml, 'utf8');
+    expect(text).toBe(`repos:\n  - id: app\n    github: org/app\n    linear_team: ENG\n${env}  - id: site\n    github: org/site\n    linear_team: ENG\n`);
+    expect(text).not.toContain('npm-secret-value');
+    expect(text).not.toContain('https://api');
+  });
+
+  it('refuses to read or write the instance of a factory.yml that still lists projects, saying how to rewrite it (ORC-480)', () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-home-'));
+    writeFileSync(join(home, 'factory.yml'), 'projects:\n  - { id: perso, repo_path: /code/perso, linear_team_key: REL }\n');
+    expect(() => loadInstance(home)).toThrow(/projects: replaced by repos \(ORC-480\)/);
+    expect(() => saveInstance(home, { port: 4100, host: 'h', relay: { kind: 'none' }, projects: [] })).toThrow(/projects: replaced by repos/);
   });
 
   // Windows has no POSIX mode bits: Node reports 0o666 whatever chmod asked. The file takes its folder's ACL there,
@@ -82,7 +103,7 @@ describe('instance config', () => {
 
   it('rejects an invalid instance key with its path, and an unknown one', () => {
     expect(() => parseFactoryYml('port: -1\n')).toThrow(/port: a positive integer is expected/);
-    expect(() => parseFactoryYml('projects: [{ id: a, repoPath: /a, linear_team_key: A }]\n')).toThrow(/projects\[0\]\.repo_path: .*\n- projects\[0\]: .*repoPath/s);
+    expect(() => parseFactoryYml('repos: [{ id: a, githb: org/a, linear_team: A }]\n')).toThrow(/repos\[0\]\.github: .*\n- repos\[0\]: .*githb/s);
     expect(() => parseFactoryYml('relay: { kind: smee }\n')).toThrow(/relay\.url/);
     expect(() => parseFactoryYml('limits: {}\n')).toThrow(/limits: unknown key/);
     expect(() => parseFactoryYml('knowledge: {}\n')).toThrow(/knowledge\.repo_path: /);
@@ -179,7 +200,7 @@ describe('factory.yml and secrets.json (ORC-209, part B)', () => {
   });
 
   it("masks a repository's env secrets from the start, a restart included, never its plain variables (ORC-211, ORC-308)", () => {
-    const h = home('repos: [{ linear_team: REL, github: org/app, env: { NODE_ENV: test-value }, secrets: { NPM_TOKEN: env:ORG_NPM_TOKEN, UNSET: env:ORG_UNSET, SEED: alias:ORG_SEED } }]\nsecret_sources: { alias: { kind: env } }\n');
+    const h = home('repos: [{ id: app, linear_team: REL, github: org/app, env: { NODE_ENV: test-value }, secrets: { NPM_TOKEN: env:ORG_NPM_TOKEN, UNSET: env:ORG_UNSET, SEED: alias:ORG_SEED } }]\nsecret_sources: { alias: { kind: env } }\n');
     const daemonEnv = { ...env, ORG_NPM_TOKEN: 'npm-secret-value', ORG_SEED: 'seed-secret-value' };
     const values = daemonSecretValues(h, loadFactoryYml(h, daemonEnv), daemonEnv);
     expect(values).toEqual(expect.arrayContaining(['npm-secret-value', 'seed-secret-value']));

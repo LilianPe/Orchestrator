@@ -127,7 +127,7 @@ describe('the replay of a closed ticket, from its start to its collection (ORC-3
     const lines: string[] = [];
     const ghost = (args: string[], over: Partial<GhostOptions> = {}) => runGhost({
       args, store: h.store, print: (l) => void lines.push(l), now: () => h.clock.now(), user: 'armand', newId: () => 'pilot', dir,
-      projects: [{ id: 'p', repoPath: '/repo', fantome: true }],
+      projects: [{ id: 'p', github: 'acme/app', fantome: true }],
       sandboxes: async () => true,
       humanPr: async (_repo, n) => ({ number: n, url: `https://github.test/pr/${n}`, author: 'lilian', mergeSha: 'merge12', commits: ['Export CSV'] }),
       humanDiff: async () => 'diff --git a/src/export.ts b/src/export.ts',

@@ -31,14 +31,18 @@ function scriptedIO(answers: string[]): InitIO & { printed: string[] } {
   };
 }
 
-/** git for init: the repository's top, and its `.factory/config.yml` on the default branch as the working copy has it, unless `uncommitted`. */
+/**
+ * git for init: the repository's top, its origin on GitHub (`acme/pilot` by default), and its `.factory/config.yml` on the default
+ * branch as the working copy has it, unless `uncommitted`.
+ */
 const gitTop =
-  (repo: string, o: { uncommitted?: boolean } = {}): Exec =>
+  (repo: string, o: { uncommitted?: boolean; origin?: string } = {}): Exec =>
   async (cmd, args) => {
     const ok = (stdout: string) => ({ stdout, stderr: '', code: 0 });
     const file = join(repo, '.factory/config.yml');
     if (cmd !== 'git') return ok('');
     if (args[0] === 'rev-parse') return ok(`${repo}\n`);
+    if (args.includes('get-url')) return ok(`${o.origin ?? 'https://github.com/acme/pilot.git'}\n`);
     if (args.includes('symbolic-ref')) return ok('refs/remotes/origin/main\n');
     if (args.includes('ls-tree')) return ok(o.uncommitted || !existsSync(file) ? '' : args.at(-1) === '.factory' ? '040000 tree 1a\t.factory\0' : '100644 blob 2b\t.factory/config.yml\0');
     if (args.includes('cat-file')) return ok(readFileSync(file, 'utf8'));
@@ -75,6 +79,7 @@ describe('factory init', () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
     const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
     execFileSync('git', ['init', '-q'], { cwd: repo });
+    execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:acme/pilot.git'], { cwd: repo });
     writeFileSync(join(repo, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run' } }));
     writeFileSync(join(repo, 'package-lock.json'), '{}');
     const realExec: Exec = async (cmd, args, opts) => {
@@ -89,7 +94,8 @@ describe('factory init', () => {
 
     const cfg = loadInstance(home);
     expect(cfg.relay).toEqual({ kind: 'smee', url: 'https://smee.io/abc' });
-    expect(cfg.projects).toEqual([{ id: expect.any(String), repoPath: repo, linearTeamKey: 'REL' }]);
+    // The repository by its GitHub name, from its origin (ORC-480): no local path.
+    expect(cfg.projects).toEqual([{ id: expect.any(String), github: 'acme/pilot', linearTeamKey: 'REL' }]);
     expect((await secretsOf(home)).linear).toEqual({ clientId: 'cid', clientSecret: 'csecret', webhookSecret: 'whsecret' });
     expect(existsSync(join(repo, '.factory'))).toBe(false);
     const out = io.printed.join('\n');
@@ -189,17 +195,38 @@ describe('factory init', () => {
     expect((await secretsOf(home)).linear?.webhookSecret).toBe('whsecret');
   });
 
-  it("replaces the repo's entry written in another form (git's `C:/x`, a trailing slash, another case on Windows), and stores a typed path resolved", async () => {
+  it("finds the repository's entry by the GitHub repository its origin names, whatever its case, from a typed path (ORC-480)", async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
     const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
-    const old = `${repo.replaceAll('\\', '/')}/`;
-    const project = { id: 'old', repoPath: process.platform === 'win32' ? old.toUpperCase() : old, linearTeamKey: 'OLD' };
-    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [project] });
-    const exec: Exec = async (cmd, args) =>
-      cmd === 'git' && args[0] === 'rev-parse' ? { stdout: '', stderr: 'not a git repository', code: 128 } : { stdout: '', stderr: '', code: 0 };
+    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'old', github: 'Acme/Pilot', linearTeamKey: 'OLD' }] });
+    const typed: string[][] = [];
+    const exec: Exec = async (cmd, args) => {
+      if (cmd === 'git' && args[0] === 'rev-parse') return { stdout: '', stderr: 'not a git repository', code: 128 };
+      if (args.includes('get-url')) typed.push(args);
+      return { stdout: args.includes('get-url') ? 'https://github.com/acme/pilot\n' : '', stderr: '', code: 0 };
+    };
     const io = scriptedIO([`${repo}/`, 'REL', 'cid', 'csecret', 'whsecret']);
     await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec });
-    expect(loadInstance(home).projects).toEqual([{ id: expect.any(String), repoPath: repo, linearTeamKey: 'REL' }]);
+    expect(typed).toEqual([['-C', repo, 'remote', 'get-url', 'origin']]);
+    expect(loadInstance(home).projects).toEqual([{ id: 'old', github: 'Acme/Pilot', linearTeamKey: 'REL' }]);
+  });
+
+  it('refuses a repository whose origin is not on GitHub, before it asks or writes anything (ORC-480)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+    const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
+    const asked: string[] = [];
+    const io: InitIO = {
+      ask: async (q) => {
+        asked.push(q);
+        return '';
+      },
+      print: () => {},
+    };
+    await expect(runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec: gitTop(repo, { origin: '/srv/git/pilot.git' }) })).rejects.toThrow(
+      /^the origin remote of .* is not a GitHub repository: set it to https:\/\/github\.com\/<owner>\/<name>/,
+    );
+    expect(asked).toEqual([]);
+    expect(existsSync(join(home, 'factory.yml'))).toBe(false);
   });
 });
 
@@ -522,13 +549,14 @@ describe('factory init: the GitHub App and factory.yml (ORC-411)', () => {
     expect(text).not.toMatch(/^(host|relay):/m);
   });
 
-  it('replaces every entry of the repository an older init wrote in another form, keeping the first one\'s fields', async () => {
+  it("updates the repository's entry, keeping its fields, and leaves its replay of closed tickets and the other repositories as they are (ORC-480)", async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
-    const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
     const authz = { maintainers: [], validators: ['v'], githubLogins: {} };
-    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'a', repoPath: `${repo}/`, linearTeamKey: 'OLD', authz }, { id: 'b', repoPath: repo, linearTeamKey: 'OLD' }] });
-    await initOnce({ home, repo });
-    expect(loadInstance(home).projects).toEqual([{ id: 'a', repoPath: repo, linearTeamKey: 'REL', authz }]);
+    const ghost = { id: 'ghost', github: 'acme/pilot', linearTeamKey: 'OLD', preset: 'factory/fantome' as const };
+    const other = { id: 'b', github: 'acme/other', linearTeamKey: 'OLD' };
+    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [ghost, { id: 'a', github: 'acme/pilot', linearTeamKey: 'OLD', authz }, other] });
+    await initOnce({ home });
+    expect(loadInstance(home).projects).toEqual([ghost, { id: 'a', github: 'acme/pilot', linearTeamKey: 'REL', authz }, other]);
   });
 
   it('leaves the GitHub App of factory.yml in place, and prints no App steps for it', async () => {
@@ -565,7 +593,7 @@ describe('factory init: the GitHub App and factory.yml (ORC-411)', () => {
     expect(readFileSync(join(home, 'factory.yml'), 'utf8')).toBe(before.yml);
     expect(loadSecrets(home, key)).toEqual(before.secrets);
     expect(loadInstance(home)).toEqual(before.config);
-    expect(out).toContain('factory.yml: its projects and webhook relay written, the rest kept as it is.');
+    expect(out).toContain('factory.yml: its repositories and webhook relay written, the rest kept as it is.');
   });
 
   it('a new value replaces the stored one; another client ID keeps nothing of the old application', async () => {

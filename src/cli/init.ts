@@ -7,14 +7,16 @@ import { isRecord } from '../adapters/graphql-pages.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { factoryYmlText } from '../config/factory-yml.js';
 import { fileSecretKind } from '../adapters/secrets/file.js';
-import { isLoopbackHost, loadInstance, loadSecrets, samePath, saveInstance, saveSecrets, secretsText, type SecretsKeyFile } from '../config/instance.js';
+import { isLoopbackHost, loadInstance, loadSecrets, saveInstance, saveSecrets, secretsText, type SecretsKeyFile } from '../config/instance.js';
 import { isSealed, LINEAR_NEEDS_SECRETS_KEY, MIN_SECRETS_KEY_LENGTH, SECRETS_KEY_REQUIRED } from '../config/secrets-file.js';
 import { readSecretsKey } from '../config/server-secrets.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
+import { originGithub, sameGithub } from '../app/project-github.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning, REPO_CONFIG_PATH, testCommandWarnings } from '../config/repo-config.js';
 import { repoRoot } from '../app/root.js';
 import { RECONCILE_MS } from '../core/engine.js';
 import { slugify } from '../core/naming.js';
+import { isFantome } from '../presets/fantome.js';
 import { SONNET } from '../presets/factory-default.js';
 import { PRODUCT_NAME } from '../product.js';
 import { DATABASE_URL_ENV, openStore } from '../store/open.js';
@@ -324,6 +326,8 @@ export async function runInit(d: InitDeps): Promise<void> {
   const top = await d.exec('git', ['rev-parse', '--show-toplevel'], { cwd: d.cwd });
   // One form whatever gave the path: git writes `C:/x` on Windows, a typed one may be relative or end with `/`.
   const repoPath = resolve(top.code === 0 ? top.stdout.trim() : await io.ask(`Path of the git repository to hand to ${PRODUCT_NAME}`));
+  // What its entry names (ORC-480): the daemon fetches it from GitHub into a mirror of its own, never from this checkout.
+  const github = await originGithub(repoPath, d.exec);
   const cfg = loadInstance(d.home);
   const ymlPath = join(d.home, 'factory.yml');
   // Before init writes one with its App's references, its own left unread.
@@ -340,13 +344,16 @@ export async function runInit(d: InitDeps): Promise<void> {
   if (asksLinear && !key) throw new Error(`${LINEAR_NEEDS_SECRETS_KEY}.`);
   // Without Linear's application, the instance never ran: its first setup gets the App's steps and references.
   const firstSetup = !secrets.linear;
-  const previous = cfg.projects.find((p) => samePath(p.repoPath, repoPath));
+  // The repository's entry (ORC-480), found by the GitHub repository its origin names: the one the daemon mirrors. A replay of
+  // closed tickets of the same repository (ORC-231) is another entry, left as it is.
+  const previous = cfg.projects.find((p) => sameGithub(p.github, github) && !isFantome(p));
   // An empty answer keeps what is there (ORC-83): the project's team key, the stored Linear values.
   const teamKey = (await io.ask('Linear team key (e.g. REL)', previous?.linearTeamKey)).toUpperCase();
 
-  // The project's other fields (its roles, written by hand) stay.
-  const id = previous?.id ?? slugify(basename(repoPath), 30);
-  cfg.projects = [...cfg.projects.filter((p) => !samePath(p.repoPath, repoPath)), { ...previous, id, repoPath, linearTeamKey: teamKey }];
+  // The project's other fields (its id, its roles, written by hand) stay.
+  const entry = { ...previous, id: previous?.id ?? slugify(basename(repoPath), 30), github: previous?.github ?? github, linearTeamKey: teamKey };
+  const { id } = entry;
+  cfg.projects = previous ? cfg.projects.map((p) => (p === previous ? entry : p)) : [...cfg.projects, entry];
   // Smee only on demand (ORC-411): a public channel, for a workstation; a server has its public URL, and --dev changes nothing
   // there, even beside an old channel. The development mode is what --dev writes (ORC-444): the daemon's leave to start the
   // relay, a channel written before included.
@@ -383,7 +390,7 @@ export async function runInit(d: InitDeps): Promise<void> {
   // An App factory.yml already has is set up: its steps would only add noise.
   if (firstSetup && !appDeclared) io.print(githubAppSteps(cfg.publicUrl, d.home, !written));
   if (!written) {
-    io.print(`${ymlPath}: its projects and webhook relay written, the rest kept as it is.`);
+    io.print(`${ymlPath}: its repositories and webhook relay written, the rest kept as it is.`);
   } else {
     io.print(
       [

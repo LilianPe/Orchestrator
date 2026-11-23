@@ -13,10 +13,15 @@ import { GITHUB_LOGIN, type DashboardAccess } from '../adapters/forge/github-log
 import type { Effort } from '../presets/preset.js';
 import type { StepSettings } from '../presets/workflow.js';
 
-/** A project (ORC-199, from config.yaml): one local repository and one Linear team, its roles and its kind, in factory.yml's `projects`. */
+/**
+ * A repository (ORC-480), an entry of factory.yml's `repos`: its `id`, the key of its tickets, events and `repo:<id>` labels; its
+ * repository on GitHub (`owner/name`), which the daemon fetches into its own mirror (ORC-479); its Linear team; its roles and its
+ * kind; and the values of what its `.factory/config.yml` declares (ORC-211), `env` resolved, `secrets` as references read at the
+ * setup (ORC-308). No local clone: `projects` and its `repo_path` are refused (`oldRepoKeys`).
+ */
 export interface ProjectConfig {
   id: string;
-  repoPath: string;
+  github: string;
   linearTeamKey: string;
   /**
    * The roles of a project no source gives (ORC-186), by Linear user id, until `.factory/config.yml` (ORC-209): designated
@@ -28,6 +33,9 @@ export interface ProjectConfig {
   effects?: 'none';
   /** The preset its runs follow (ORC-231): `factory/fantome` replays closed tickets, at the Rapide level, always without effects. */
   preset?: typeof FANTOME;
+  /** Never read by `loadInstance`, nor written by `saveInstance`, which keeps the file's as written. */
+  env?: Record<string, string>;
+  secrets?: Record<string, SecretRef>;
 }
 
 /** The preset of the replay of closed tickets (ORC-231), named here without loading the presets: `isFantome` reads `fantome.name`. */
@@ -38,7 +46,7 @@ export type Relay = z.infer<typeof relaySchema>;
 
 /**
  * `<FACTORY_HOME>/factory.yml` (ORC-209, part B): the server's configuration, required since ORC-199, which retired
- * `config.yaml` into its instance keys (`port`, `host`, `public_url`, `dev`, `relay`, `projects`, `knowledge`). Every secret is
+ * `config.yaml` into its instance keys (`port`, `host`, `public_url`, `dev`, `relay`, `repos`, `knowledge`). Every secret is
  * a reference `<source>:<path>`, never kept in the file: the server's are read at its start, `env:NAME` from the environment
  * (ORC-398); a repository's at each `setup` (ORC-308).
  * The daemon only reads it; `factory init` writes its instance keys alone (`saveInstance`), the rest of the file kept.
@@ -51,7 +59,6 @@ export interface FactoryYml {
   /** The development mode (ORC-444), written by `factory init --dev` alone: the daemon starts the Smee relay only in it. */
   dev?: boolean;
   relay?: Relay;
-  projects?: ProjectConfig[];
   knowledge?: { repoPath: string };
   linear?: { clientId?: string; clientSecret?: string; webhookSecret?: string };
   /** `clientId` and `clientSecret`: the App's OAuth client, for the dashboard's GitHub sign-in (ORC-399). */
@@ -78,11 +85,8 @@ export interface FactoryYml {
   tools?: { perStep?: Record<string, string[]> };
   /** `off` disables the baseline of `factory/taille-du-diff` (ORC-381): only a repository's own `max_diff` bounds its diffs. */
   maxDiff?: 'off';
-  /**
-   * `projects[].repo_path` stays the working copy until the runner clones (ORC-204). `env` holds the values of
-   * what the repository's `.factory/config.yml` declares (ORC-211); `secrets` their references, read at the setup (ORC-308).
-   */
-  repos?: { linearTeam: string; github: string; env?: Record<string, string>; secrets?: Record<string, SecretRef> }[];
+  /** The repositories (ORC-480): an instance key, but for each entry's `env` and `secrets`, the daemon's alone. */
+  repos?: ProjectConfig[];
   /** The secret managers a reference may name besides `env` (ORC-308), each validated against its adapter. */
   secretSources?: Record<string, SecretSourceDecl>;
   /** The key `secrets.json` is encrypted with at rest (ORC-398), read through its reference; without it, the file stays in clear. */
@@ -216,8 +220,48 @@ function parseSection(text: string, keys: string[], env?: NodeJS.ProcessEnv, sea
     throw new FactoryYmlError([`unreadable YAML: ${(err as Error).message}`]);
   }
   const record = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
-  const kept = Object.fromEntries(keys.map((k) => [k, record[k]]).filter(([, v]) => v !== undefined && v !== null));
+  // Whatever keys are read: no command runs on repositories written as before ORC-480.
+  const old = oldRepoKeys(record);
+  if (old.length) throw new FactoryYmlError(old);
+  const kept = Object.fromEntries(keys.map((k) => [k, k === 'repos' ? instanceRepos(record[k]) : record[k]]).filter(([, v]) => v !== undefined && v !== null));
   return Object.keys(kept).length === 0 ? undefined : parseFactoryYml(stringify(kept), env, SECRET_SOURCE_KINDS, sealed);
+}
+
+/** The instance's part of each `repos` entry (ORC-480), the only one a section reads: its `env` and `secrets` are the daemon's, read with its environment and sources. */
+function instanceRepos(repos: unknown): unknown {
+  return Array.isArray(repos) ? repos.map((r: unknown) => (isEntry(r) ? Object.fromEntries(Object.entries(r).filter(([k]) => k !== 'env' && k !== 'secrets')) : r)) : repos;
+}
+
+/** `repos` without the `repo_path` its entries may still hold, which `oldRepoKeys` refuses with its own message. */
+function withoutRepoPath(repos: unknown): unknown {
+  return Array.isArray(repos) ? repos.map((r: unknown) => (isEntry(r) ? Object.fromEntries(Object.entries(r).filter(([k]) => k !== 'repo_path')) : r)) : repos;
+}
+
+const isEntry = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * The repositories as factory.yml wrote them before ORC-480, refused by every read of the file with how to rewrite them, as the
+ * start names a `config.yaml` left from before ORC-199: the `projects` list, joined to `repos` by team and clone, and any
+ * `repo_path` of a target repository, a local clone the daemon no longer reads (its own mirror, ORC-479). `knowledge.repo_path`
+ * stays, until the knowledge base has a mirror of its own (ORC-481).
+ */
+export function oldRepoKeys(r: Record<string, unknown>): string[] {
+  const found: string[] = [];
+  if (r['projects'] != null) {
+    found.push(
+      'projects: replaced by repos (ORC-480), one entry per repository: `{ id, github, linear_team, authz, preset, effects, env, secrets }`. ' +
+        'Move each project into repos: keep its id, authz, preset and effects, rename linear_team_key to linear_team, replace repo_path by github: ' +
+        "<owner>/<name> (the GitHub repository of that clone's origin), and move in the env and secrets of the repos entry of its team and repository, " +
+        'then delete projects and the old repos entries',
+    );
+  }
+  const repos = r['repos'];
+  if (Array.isArray(repos)) {
+    repos.forEach((entry: unknown, i) => {
+      if (isEntry(entry) && 'repo_path' in entry) found.push(`repos[${i}].repo_path: no longer read (ORC-480): the daemon fetches the repository github names into a mirror of its own; delete it`);
+    });
+  }
+  return found;
 }
 
 /**
@@ -268,7 +312,6 @@ const SECTIONS: Record<string, string[]> = {
   public_url: [],
   dev: [],
   relay: [],
-  projects: [],
   knowledge: [],
   linear: ['app_client_id', 'client_secret', 'webhook_secret'],
   github: ['app_id', 'private_key', 'installation_id', 'webhook_secret', 'client_id', 'client_secret'],
@@ -290,11 +333,11 @@ const SECTIONS: Record<string, string[]> = {
   spec: ['publish', 'threshold'],
 };
 /** The instance keys (ORC-199): what `loadInstance` reads and `saveInstance` writes, without the rest of the file. */
-const INSTANCE_KEYS = ['port', 'host', 'public_url', 'dev', 'relay', 'projects', 'knowledge'];
-const projectSchema = z.strictObject({
+const INSTANCE_KEYS = ['port', 'host', 'public_url', 'dev', 'relay', 'repos', 'knowledge'];
+const repoSchema = z.strictObject({
   id: z.string().min(1),
-  repo_path: z.string().min(1),
-  linear_team_key: z.string().min(1),
+  github: z.string(),
+  linear_team: z.string().min(1),
   authz: z
     .strictObject({
       maintainers: z.array(z.string().min(1)).default([]),
@@ -304,6 +347,8 @@ const projectSchema = z.strictObject({
     .optional(),
   effects: z.literal('none').optional(),
   preset: z.literal(FANTOME).optional(),
+  env: z.record(z.string(), z.unknown()).optional(),
+  secrets: z.record(z.string(), z.unknown()).optional(),
 });
 const relaySchema = z.discriminatedUnion('kind', [z.strictObject({ kind: z.literal('smee'), url: z.string().url() }), z.strictObject({ kind: z.literal('none') })]);
 const effort = z.enum(['low', 'medium', 'high']);
@@ -318,7 +363,7 @@ export function loadFactoryYml(home: string, env: NodeJS.ProcessEnv = process.en
   return text === undefined ? undefined : parseFactoryYml(text, env);
 }
 
-/** The instance keys of a factory.yml's text alone (ORC-199), validated as the daemon validates them, its `env:` secrets left unresolved. */
+/** The instance keys of a factory.yml's text alone (ORC-199), validated as the daemon validates them, without each repository's `env` and `secrets` (ORC-480). */
 export function parseInstanceKeys(text: string): FactoryYml {
   return parseSection(text, INSTANCE_KEYS) ?? {};
 }
@@ -357,7 +402,8 @@ export function parseFactoryYml(
   const violations: string[] = [];
   const out: FactoryYml = {};
 
-  for (const key of Object.keys(r)) if (!(key in SECTIONS)) violations.push(`${key}: unknown key`);
+  // `projects`: refused with how to rewrite it (`oldRepoKeys`).
+  for (const key of Object.keys(r)) if (!(key in SECTIONS) && key !== 'projects') violations.push(`${key}: unknown key`);
   const section = (key: string): Record<string, unknown> | undefined => {
     const v = r[key];
     if (v === undefined || v === null) return undefined;
@@ -393,7 +439,7 @@ export function parseFactoryYml(
     return res.success ? res.data : undefined;
   };
 
-  /** A value of a nested shape: each fault named by its own path (`projects[0].repo_path`). */
+  /** A value of a nested shape: each fault named by its own path (`repos[0].linear_team`). */
   const shaped = <T>(path: string, v: unknown, schema: z.ZodType<T>): T | undefined => {
     if (v === undefined || v === null) return undefined;
     const res = schema.safeParse(v);
@@ -413,15 +459,6 @@ export function parseFactoryYml(
   if (dev !== undefined) out.dev = dev;
   const relay = shaped('relay', r['relay'], relaySchema);
   if (relay) out.relay = relay;
-  const projects = shaped('projects', r['projects'], z.array(projectSchema));
-  if (projects) {
-    out.projects = projects.map(({ repo_path, linear_team_key, authz, ...p }) => ({
-      ...p,
-      repoPath: repo_path,
-      linearTeamKey: linear_team_key,
-      ...(authz ? { authz: { maintainers: authz.maintainers, validators: authz.validators, githubLogins: authz.github_logins } } : {}),
-    }));
-  }
   const knowledge = shaped('knowledge', r['knowledge'], z.strictObject({ repo_path: z.string().min(1) }));
   if (knowledge) out.knowledge = { repoPath: knowledge.repo_path };
 
@@ -603,28 +640,32 @@ export function parseFactoryYml(
   }
   const perStepTools = leaf('tools.per_step', section('tools')?.['per_step'], z.record(z.string(), z.array(z.string().min(1))), '`step: [tool, …]` expected');
   if (perStepTools) out.tools = { perStep: perStepTools };
-  const repos = leaf(
-    'repos',
-    r['repos'],
-    z.array(z.strictObject({ linear_team: z.string().min(1), github: z.string(), env: z.record(z.string(), z.unknown()).optional(), secrets: z.record(z.string(), z.unknown()).optional() })),
-    '`[{ linear_team, github, env, secrets }]` expected',
-  );
+  const old = oldRepoKeys(r);
+  violations.push(...old);
+  // Before ORC-480, `repos` held only the env and secrets of a project's repository: its refusal above says how to merge them.
+  const repos = 'projects' in r ? undefined : shaped('repos', withoutRepoPath(r['repos']), z.array(repoSchema));
   if (repos) {
-    out.repos = repos.map((repo, i) => {
+    const ids = new Map<string, number>();
+    out.repos = repos.map(({ linear_team, authz, env, secrets, ...repo }, i) => {
       if (!REPO.test(repo.github)) violations.push(`repos[${i}].github: \`<org>/<repo>\` expected`);
-      const read = <T>(key: 'env' | 'secrets', one: (path: string, v: unknown) => T | undefined): Record<string, T> => {
+      // The key of its tickets and labels: two entries of one id would share them.
+      const first = ids.get(repo.id);
+      if (first !== undefined) violations.push(`repos[${i}].id: ${repo.id} is already the id of repos[${first}]`);
+      else ids.set(repo.id, i);
+      const read = <T>(key: 'env' | 'secrets', from: Record<string, unknown>, one: (path: string, v: unknown) => T | undefined): Record<string, T> => {
         const out: Record<string, T> = {};
-        for (const [name, v] of Object.entries(repo[key] ?? {})) {
+        for (const [name, v] of Object.entries(from)) {
           const got = one(`repos[${i}].${key}.${name}`, v);
           if (got !== undefined) out[name] = got;
         }
         return out;
       };
       return {
-        linearTeam: repo.linear_team,
-        github: repo.github,
-        ...(repo.env ? { env: read('env', (path, v) => value(path, v)) } : {}),
-        ...(repo.secrets ? { secrets: read('secrets', reference) } : {}),
+        ...repo,
+        linearTeamKey: linear_team,
+        ...(authz ? { authz: { maintainers: authz.maintainers, validators: authz.validators, githubLogins: authz.github_logins } } : {}),
+        ...(env ? { env: read('env', env, (path, v) => value(path, v)) } : {}),
+        ...(secrets ? { secrets: read('secrets', secrets, reference) } : {}),
       };
     });
   }

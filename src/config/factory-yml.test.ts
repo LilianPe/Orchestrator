@@ -1,10 +1,10 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { fakeSecretKind } from '../adapters/secrets/fake.js';
 import { SECRET_SOURCE_KINDS } from '../adapters/secrets/registry.js';
-import { activeClaudeToken, claudeAccountReader, claudeToken, disabledControls, FactoryYmlError, loadFactoryLimits, loadFactoryYml, parseFactoryYml, readCapsOf, SPEC_PUBLICATION, specPublicationOf, stepSettings, ticketCapOf } from './factory-yml.js';
+import { activeClaudeToken, claudeAccountReader, claudeToken, disabledControls, FactoryYmlError, loadFactoryLimits, loadFactoryYml, parseFactoryYml, parseInstanceKeys, readCapsOf, SPEC_PUBLICATION, specPublicationOf, stepSettings, ticketCapOf } from './factory-yml.js';
 import { READ_CAPS } from '../network/reads.js';
 
 const PEM = '-----BEGIN RSA PRIVATE KEY-----\\nabc\\n-----END RSA PRIVATE KEY-----';
@@ -38,7 +38,7 @@ budgets:
   max_turns: { build: 150, fix: 60, review: 25 }
   on_usage_limit: wait
 repos:
-  - { linear_team: ORC, github: LilianPe/Orchestrator }
+  - { id: app, linear_team: ORC, github: LilianPe/Orchestrator }
 `;
 
 function violations(yaml: string, env: NodeJS.ProcessEnv = ENV): string[] {
@@ -60,7 +60,7 @@ describe('factory.yml (ORC-209, part B)', () => {
     expect(c.claude?.accounts).toEqual([{ name: 'compte-1', token: 'tok-1' }, { name: 'compte-2', token: 'tok-2' }]);
     expect(c.concurrency).toBe(1);
     expect(c.budgets).toEqual({ maxTurns: { build: 150, fix: 60, review: 25 }, onUsageLimit: 'wait' });
-    expect(c.repos).toEqual([{ linearTeam: 'ORC', github: 'LilianPe/Orchestrator' }]);
+    expect(c.repos).toEqual([{ id: 'app', linearTeamKey: 'ORC', github: 'LilianPe/Orchestrator' }]);
   });
 
   it('names the key whose variable is missing', () => {
@@ -109,7 +109,57 @@ describe('factory.yml (ORC-209, part B)', () => {
   });
 
   it('refuses a repository that is not org/name', () => {
-    expect(violations('repos: [{ linear_team: ORC, github: Orchestrator }]\n')).toEqual(['repos[0].github: `<org>/<repo>` expected']);
+    expect(violations('repos: [{ id: app, linear_team: ORC, github: Orchestrator }]\n')).toEqual(['repos[0].github: `<org>/<repo>` expected']);
+  });
+
+  describe('one list of repositories (ORC-480)', () => {
+    const OLD = 'projects:\n  - { id: app, repo_path: /code/app, linear_team_key: ORC }\nrepos:\n  - { linear_team: ORC, github: org/app, env: { NODE_ENV: test } }\n';
+    const REWRITE = /projects: replaced by repos \(ORC-480\), one entry per repository: `\{ id, github, linear_team, authz, preset, effects, env, secrets \}`\. .*rename linear_team_key to linear_team, replace repo_path by github: <owner>\/<name>.*env and secrets of the repos entry of its team and repository/;
+
+    it('reads each entry whole: its id, repository, team, roles, kind and values', () => {
+      const c = parseFactoryYml(
+        'repos:\n  - id: app\n    github: org/app\n    linear_team: ORC\n    authz: { validators: [v1, v2], github_logins: { v1: octo } }\n    env: { NODE_ENV: test }\n  - { id: ghost, github: org/app, linear_team: ORC, preset: factory/fantome, effects: none }\n',
+        ENV,
+      );
+      expect(c.repos).toEqual([
+        { id: 'app', github: 'org/app', linearTeamKey: 'ORC', authz: { maintainers: [], validators: ['v1', 'v2'], githubLogins: { v1: 'octo' } }, env: { NODE_ENV: 'test' } },
+        { id: 'ghost', github: 'org/app', linearTeamKey: 'ORC', preset: 'factory/fantome', effects: 'none' },
+      ]);
+    });
+
+    it('refuses projects, saying how to rewrite it into repos, and nothing of the old repos entries', () => {
+      const said = violations(OLD);
+      expect(said).toHaveLength(1);
+      expect(said[0]).toMatch(REWRITE);
+    });
+
+    it("refuses a target repository's repo_path, the daemon reading its own mirror", () => {
+      expect(violations('repos: [{ id: app, github: org/app, linear_team: ORC, repo_path: /code/app }]\n')).toEqual([
+        'repos[0].repo_path: no longer read (ORC-480): the daemon fetches the repository github names into a mirror of its own; delete it',
+      ]);
+    });
+
+    it('refuses them on every read of the file: the instance keys, the claude section, validate\'s limits', () => {
+      const home = mkdtempSync(join(tmpdir(), 'factory-yml-old-'));
+      try {
+        writeFileSync(join(home, 'factory.yml'), `budgets: { per_step_tokens: off }\n${OLD}`);
+        expect(() => loadFactoryLimits(home)).toThrow(REWRITE);
+        expect(() => parseInstanceKeys(readFileSync(join(home, 'factory.yml'), 'utf8'))).toThrow(REWRITE);
+        expect(() => claudeAccountReader(home, {})()).toThrow(REWRITE);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it('requires the id, the key of tickets and labels, once per entry', () => {
+      expect(violations('repos: [{ github: org/app, linear_team: ORC }]\n').join()).toContain('repos[0].id');
+      expect(violations('repos: [{ id: app, github: org/app, linear_team: ORC }, { id: app, github: org/site, linear_team: OPS }]\n')).toEqual(['repos[1].id: app is already the id of repos[0]']);
+    });
+
+    it("leaves out each entry's env and secrets from the instance keys, which a shell without the daemon's variables reads", () => {
+      const yml = parseInstanceKeys('secret_sources: { vault: { kind: env } }\nrepos:\n  - { id: app, github: org/app, linear_team: ORC, env: { API: env:UNSET_HERE }, secrets: { T: vault:X } }\n');
+      expect(yml.repos).toEqual([{ id: 'app', github: 'org/app', linearTeamKey: 'ORC' }]);
+    });
   });
 
   it('reads the threshold of the full-read refusal (ORC-279)', () => {
@@ -203,25 +253,25 @@ describe('factory.yml (ORC-209, part B)', () => {
     const env = { ...ENV, ORG_REGISTRY_TOKEN: 'registry-secret-1', API: 'https://api.exemple.com' };
 
     it('reads its variables, in clear or env:NAME, and its secrets as references, unread (ORC-308)', () => {
-      const c = parseFactoryYml('repos:\n  - linear_team: ORC\n    github: org/app\n    env: { NODE_ENV: test, API_URL: env:API }\n    secrets: { REGISTRY_TOKEN: env:ORG_REGISTRY_TOKEN }\n', env);
-      expect(c.repos).toEqual([{ linearTeam: 'ORC', github: 'org/app', env: { NODE_ENV: 'test', API_URL: 'https://api.exemple.com' }, secrets: { REGISTRY_TOKEN: { source: 'env', path: 'ORG_REGISTRY_TOKEN' } } }]);
+      const c = parseFactoryYml('repos:\n  - id: app\n    linear_team: ORC\n    github: org/app\n    env: { NODE_ENV: test, API_URL: env:API }\n    secrets: { REGISTRY_TOKEN: env:ORG_REGISTRY_TOKEN }\n', env);
+      expect(c.repos).toEqual([{ id: 'app', linearTeamKey: 'ORC', github: 'org/app', env: { NODE_ENV: 'test', API_URL: 'https://api.exemple.com' }, secrets: { REGISTRY_TOKEN: { source: 'env', path: 'ORG_REGISTRY_TOKEN' } } }]);
     });
 
     it('refuses a secret written in the file', () => {
-      expect(violations('repos: [{ linear_team: ORC, github: org/app, secrets: { REGISTRY_TOKEN: en-clair-123 } }]\n', env)).toEqual([
+      expect(violations('repos: [{ id: app, linear_team: ORC, github: org/app, secrets: { REGISTRY_TOKEN: en-clair-123 } }]\n', env)).toEqual([
         'repos[0].secrets.REGISTRY_TOKEN: a reference `<source>:<path>` is expected (`env:NAME`), never a secret in clear in factory.yml',
       ]);
     });
 
     it('checks the syntax of a reference only: a variable not set is read, and refused, at the setup (ORC-308)', () => {
-      expect(violations('repos: [{ linear_team: ORC, github: org/app, secrets: { REGISTRY_TOKEN: env:NOPE, SHORT: env:SHORT } }]\n', { ...env, SHORT: 'abc' })).toEqual([]);
-      expect(violations('repos: [{ linear_team: ORC, github: org/app, secrets: { REGISTRY_TOKEN: "env:not a name" } }]\n', env)).toEqual([
+      expect(violations('repos: [{ id: app, linear_team: ORC, github: org/app, secrets: { REGISTRY_TOKEN: env:NOPE, SHORT: env:SHORT } }]\n', { ...env, SHORT: 'abc' })).toEqual([]);
+      expect(violations('repos: [{ id: app, linear_team: ORC, github: org/app, secrets: { REGISTRY_TOKEN: "env:not a name" } }]\n', env)).toEqual([
         'repos[0].secrets.REGISTRY_TOKEN: "not a name" does not name a variable (`env:NAME`)',
       ]);
     });
 
     it('still resolves env:NAME of its variables at load', () => {
-      expect(violations('repos: [{ linear_team: ORC, github: org/app, env: { API_URL: env:NOPE } }]\n', env).join()).toContain('NOPE');
+      expect(violations('repos: [{ id: app, linear_team: ORC, github: org/app, env: { API_URL: env:NOPE } }]\n', env).join()).toContain('NOPE');
     });
   });
 
@@ -239,19 +289,19 @@ describe('factory.yml (ORC-209, part B)', () => {
     };
 
     it('reads a declared source and the references to it', () => {
-      const c = parse('secret_sources:\n  coffre: { kind: fake, name: coffre }\nrepos:\n  - linear_team: ENG\n    github: org/app\n    secrets:\n      NPM_TOKEN: env:NPM_TOKEN\n      DB_SEED_KEY: coffre:kv/app#seed_key\n');
+      const c = parse('secret_sources:\n  coffre: { kind: fake, name: coffre }\nrepos:\n  - id: app\n    linear_team: ENG\n    github: org/app\n    secrets:\n      NPM_TOKEN: env:NPM_TOKEN\n      DB_SEED_KEY: coffre:kv/app#seed_key\n');
       expect(c.secretSources).toEqual({ coffre: { kind: 'fake', options: { name: 'coffre' } } });
       expect(c.repos?.[0]?.secrets).toEqual({ NPM_TOKEN: { source: 'env', path: 'NPM_TOKEN' }, DB_SEED_KEY: { source: 'coffre', path: 'kv/app#seed_key' } });
     });
 
     it('refuses a reference to a source that is not declared, naming the path of its key', () => {
-      expect(faults('repos:\n  - { linear_team: ENG, github: org/app, secrets: { DB_SEED_KEY: "coffre:kv/app#seed_key" } }\n')).toEqual([
+      expect(faults('repos:\n  - { id: app, linear_team: ENG, github: org/app, secrets: { DB_SEED_KEY: "coffre:kv/app#seed_key" } }\n')).toEqual([
         'repos[0].secrets.DB_SEED_KEY: its source is neither `env` nor declared under secret_sources',
       ]);
     });
 
     it('refuses a path its source does not accept, through its adapter', () => {
-      expect(faults('secret_sources: { coffre: { kind: fake, name: coffre } }\nrepos:\n  - { linear_team: ENG, github: org/app, secrets: { K: "coffre:no-hash" } }\n')).toEqual([
+      expect(faults('secret_sources: { coffre: { kind: fake, name: coffre } }\nrepos:\n  - { id: app, linear_team: ENG, github: org/app, secrets: { K: "coffre:no-hash" } }\n')).toEqual([
         'repos[0].secrets.K: "no-hash" is not `<path>#<key>`',
       ]);
     });
@@ -267,23 +317,23 @@ describe('factory.yml (ORC-209, part B)', () => {
     });
 
     it('refuses a declared source of an unknown adapter once, not again at each reference to it', () => {
-      expect(faults('secret_sources: { coffre: { kind: vault } }\nrepos:\n  - { linear_team: ENG, github: org/app, secrets: { K: "coffre:kv/app#k" } }\n')).toEqual([
+      expect(faults('secret_sources: { coffre: { kind: vault } }\nrepos:\n  - { id: app, linear_team: ENG, github: org/app, secrets: { K: "coffre:kv/app#k" } }\n')).toEqual([
         'secret_sources.coffre.kind: no adapter vault (env, systemd-creds, file, fake)',
       ]);
     });
 
     it('skips a secret written without a value, as repos[].env does, and refuses an empty text', () => {
-      const yml = parseFactoryYml('repos:\n  - { linear_team: ENG, github: org/app, secrets: { NPM_TOKEN: , K: env:NPM_TOKEN } }\n', ENV);
+      const yml = parseFactoryYml('repos:\n  - { id: app, linear_team: ENG, github: org/app, secrets: { NPM_TOKEN: , K: env:NPM_TOKEN } }\n', ENV);
       expect(yml.repos![0]!.secrets).toEqual({ K: { source: 'env', path: 'NPM_TOKEN' } });
-      expect(violations('repos:\n  - { linear_team: ENG, github: org/app, secrets: { NPM_TOKEN: "" } }\n')).toEqual(['repos[0].secrets.NPM_TOKEN: a non-empty text is expected']);
+      expect(violations('repos:\n  - { id: app, linear_team: ENG, github: org/app, secrets: { NPM_TOKEN: "" } }\n')).toEqual(['repos[0].secrets.NPM_TOKEN: a non-empty text is expected']);
     });
 
     it('names the key of a source or a kind that only an object prototype holds, never a crash', () => {
-      expect(violations('repos:\n  - { linear_team: ENG, github: org/app, secrets: { K: "constructor:foo" } }\n')).toEqual([
+      expect(violations('repos:\n  - { id: app, linear_team: ENG, github: org/app, secrets: { K: "constructor:foo" } }\n')).toEqual([
         'repos[0].secrets.K: its source is neither `env` nor declared under secret_sources',
       ]);
       expect(violations('secret_sources: { a: { kind: toString } }\n')).toEqual(['secret_sources.a.kind: no adapter toString (env, systemd-creds, file)']);
-      expect(violations('secret_sources: { __proto__: { kind: env } }\nrepos:\n  - { linear_team: ENG, github: org/app, secrets: { K: "__proto__:FOO" } }\n')).toEqual([
+      expect(violations('secret_sources: { __proto__: { kind: env } }\nrepos:\n  - { id: app, linear_team: ENG, github: org/app, secrets: { K: "__proto__:FOO" } }\n')).toEqual([
         'secret_sources.__proto__: not a name a source can take',
         'repos[0].secrets.K: its source is neither `env` nor declared under secret_sources',
       ]);

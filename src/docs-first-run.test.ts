@@ -1,7 +1,10 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { githubAppSteps } from './cli/init.js';
+import { parseInstanceKeys } from './config/factory-yml.js';
+import { saveInstance } from './config/instance.js';
 
 // The first-run guide (ORC-429) must not drift from the CLI: every `factory` command it quotes, with its flags, is one
 // src/cli/factory.ts dispatches and src/cli/usage.ts lists in its usage.
@@ -101,5 +104,22 @@ describe('docs/first-run.md', () => {
     // The text block of step 2 that opens on the App's steps, up to the `Wrote … factory.yml` that follows them.
     const block = /^```text\n(GitHub App of [\s\S]*?)\n\nWrote /m.exec(guide)?.[1];
     expect(block).toBe(githubAppSteps(undefined, '/home/<user>/.factory', false).trim());
+  });
+
+  it("quotes the repository's entry as factory init writes it, in the one list repos (ORC-480)", () => {
+    const written = /^```yaml\n(# Written by factory init[\s\S]*?)^```/m.exec(guide)?.[1];
+    const [entry] = parseInstanceKeys(written ?? '').repos ?? [];
+    expect(entry).toEqual({ id: 'pilot', github: 'acme/pilot', linearTeamKey: 'PIL' });
+    const home = mkdtempSync(join(tmpdir(), 'docs-first-run-'));
+    try {
+      saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [entry!] });
+      const repos = /^repos:\n(?: {2}.*\n)*/m.exec(readFileSync(join(home, 'factory.yml'), 'utf8'))?.[0];
+      expect(written).toContain(repos);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+    // The roles added by hand, under the same entry.
+    const roles = /^Now add by hand[\s\S]*?^```yaml\n([\s\S]*?)^```/m.exec(guide)?.[1];
+    expect(roles).toMatch(/^repos:\n {2}- id: pilot\n {4}github: acme\/pilot\n {4}linear_team: PIL\n {4}authz:\n/);
   });
 });

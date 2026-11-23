@@ -42,14 +42,6 @@ function localGithub(github: string, files: Record<string, string> = { 'README.m
   return { url: (repo) => join(root, `${repo}.git`) };
 }
 
-/** A clone whose origin is `origin`, the GitHub repository `acme/app` by default: a project's repository (ORC-478). */
-function githubClone(origin = 'https://github.com/acme/app.git'): string {
-  const dir = mkdtempSync(join(tmpdir(), 'factory-repo-'));
-  execFileSync('git', ['init', '--quiet', dir]);
-  execFileSync('git', ['-C', dir, 'remote', 'add', 'origin', origin]);
-  return dir;
-}
-
 /** The daemon's `secrets_key`, from its environment: Linear's tokens are never written in clear (ORC-470). */
 const KEY_ENV = { FACTORY_SECRETS_KEY: 'k'.repeat(44) };
 /** Linear's values in `home`'s secrets.json, sealed with the `secrets_key` factory.yml names, read from `KEY_ENV`. */
@@ -195,13 +187,9 @@ describe('bootstrap', () => {
 
   it("runs a project on the factory/default workflow, its repository's .factory/workflow.yml ignored and said, as its mirror's default branch has it (ORC-388, ORC-479)", async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    // No local clone: `repo_path` names an origin, nothing more; the file is on the forge's default branch alone.
-    const repo = githubClone();
+    // No local clone (ORC-480): the file is on the forge's default branch alone.
     const github = localGithub('acme/app', { '.factory/workflow.yml': 'version: 1\nlimits: { verify_attempts: 9 }\njobs:\n  dev:\n    model: opus\n' });
-    // In the working tree only: not what the runs start from, not said.
-    mkdirSync(join(repo, '.relais')); // transition, à retirer
-    writeFileSync(join(repo, '.relais/workflow.yml'), 'version: 1\n'); // transition, à retirer
-    saveInstance(home, { port: 4178, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', repoPath: repo, linearTeamKey: 'REL' }] });
+    saveInstance(home, { port: 4178, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', github: 'acme/app', linearTeamKey: 'REL' }] });
     appendFileSync(join(home, 'factory.yml'), 'budgets: { max_turns: { build: 40 } }\n');
     let deps: DaemonDeps | undefined;
     const recover = vi.spyOn(Daemon.prototype, 'recover').mockImplementation(async function (this: Daemon) {
@@ -225,7 +213,7 @@ describe('bootstrap', () => {
 
   it('starts when a mirror cannot be made, saying so: its launches fetch it again (ORC-479)', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    saveInstance(home, { port: 4181, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', repoPath: githubClone(), linearTeamKey: 'REL' }] });
+    saveInstance(home, { port: 4181, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', github: 'acme/app', linearTeamKey: 'REL' }] });
     const logs: string[] = [];
     const app = await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
     await vi.waitFor(() => expect(logs).toContainEqual(expect.stringMatching(/^Warning: p: the mirror of acme\/app could not be fetched, its launches fetch it again: the forge could not be read/)));
@@ -233,14 +221,13 @@ describe('bootstrap', () => {
     expect(existsSync(join(home, 'repos', 'acme', 'app'))).toBe(false);
   });
 
-  it("knows each project's repository on GitHub from the start: its team's factory.yml entry, else its origin (ORC-478)", async () => {
+  it("knows each project's repository on GitHub from its entry in factory.yml, no clone read (ORC-480)", async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     const projects = [
-      { id: 'app', repoPath: githubClone('git@github.com:acme/app.git'), linearTeamKey: 'REL' },
-      { id: 'tool', repoPath: githubClone('https://github.com/acme/tool'), linearTeamKey: 'REL' },
+      { id: 'app', github: 'Acme/App', linearTeamKey: 'REL' },
+      { id: 'tool', github: 'acme/tool', linearTeamKey: 'REL' },
     ];
     saveInstance(home, { port: 4179, host: '127.0.0.1', relay: { kind: 'none' }, projects });
-    appendFileSync(join(home, 'factory.yml'), 'repos:\n  - linear_team: REL\n    github: Acme/App\n');
     let deps: DaemonDeps | undefined;
     const recover = vi.spyOn(Daemon.prototype, 'recover').mockImplementation(async function (this: Daemon) {
       deps = (this as unknown as { d: DaemonDeps }).d;
@@ -250,19 +237,20 @@ describe('bootstrap', () => {
     } finally {
       recover.mockRestore();
     }
-    expect(deps!.projects.map((p) => p.github)).toEqual(['Acme/App', 'acme/tool']);
-    // `verify` reads the forge at that URL, whatever the clone's config says afterwards.
-    execFileSync('git', ['-C', projects[0]!.repoPath, 'remote', 'set-url', 'origin', 'https://evil.example/forged.git']);
+    expect(deps!.projects.map((p) => [p.id, p.github, p.mirror])).toEqual([
+      ['app', 'Acme/App', join(home, 'repos', 'acme', 'app')],
+      ['tool', 'acme/tool', join(home, 'repos', 'acme', 'tool')],
+    ]);
+    // `verify` reads the forge at that URL.
     expect(await deps!.originUrl!(deps!.projects[0]!)).toBe('https://github.com/Acme/App');
   });
 
-  it('refuses to start on a project whose origin is not a GitHub repository, naming it, before the store opens (ORC-478)', async () => {
+  it('refuses to start on a factory.yml that still lists projects, saying how to rewrite it, before the store opens (ORC-480)', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    const projects = [{ id: 'web', repoPath: githubClone('https://gitlab.example.com/acme/web.git'), linearTeamKey: 'REL' }];
-    saveInstance(home, { port: 4180, host: '127.0.0.1', relay: { kind: 'none' }, projects });
+    writeFileSync(join(home, 'factory.yml'), 'projects:\n  - { id: web, repo_path: /code/web, linear_team_key: REL }\n');
     const store = new MemoryStore();
     const close = vi.spyOn(store, 'close');
-    await expect(startFactory({ store, home, fakeRunner: true, log: () => {}, env: {} })).rejects.toThrow(/^web: the origin remote of .* is not a GitHub repository: set it to https:\/\/github\.com\/<owner>\/<name>/);
+    await expect(startFactory({ store, home, fakeRunner: true, log: () => {}, env: {} })).rejects.toThrow(/projects: replaced by repos \(ORC-480\), one entry per repository: .*rename linear_team_key to linear_team, replace repo_path by github/);
     expect(close).not.toHaveBeenCalled();
   });
 
@@ -313,7 +301,7 @@ describe('bootstrap', () => {
 
   it('plans the reconciliation of each project in the store at start, once, and drops a removed project\'s (ORC-185)', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    const project = (id: string, key: string) => ({ id, repoPath: githubClone(), linearTeamKey: key });
+    const project = (id: string, key: string) => ({ id, github: 'acme/app', linearTeamKey: key });
     // The same store at each start, as the instance's database is.
     const store = new MemoryStore();
     const planned = async () => {
@@ -338,7 +326,7 @@ describe('bootstrap', () => {
   // ORC-200: nothing pauses or resumes the queue any more; a pause left from before would hold every launch for good.
   it('lifts a pause of the queue left from before the global pause was removed, and says so', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    saveInstance(home, { port: 4177, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', repoPath: githubClone(), linearTeamKey: 'REL' }] });
+    saveInstance(home, { port: 4177, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', github: 'acme/app', linearTeamKey: 'REL' }] });
     const store = new MemoryStore();
     await store.setMeta('paused', '1');
     const logs: string[] = [];
@@ -467,14 +455,13 @@ describe('bootstrap', () => {
 
   it('warns at startup of each project whose spec gate no validator can pass: none designated, or a lone one (ORC-421)', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    const repo = () => githubClone();
-    const authz = (validators: string[]) => ({ maintainers: [], validators, githubLogins: {} });
+        const authz = (validators: string[]) => ({ maintainers: [], validators, githubLogins: {} });
     const projects = [
-      { id: 'none', repoPath: repo(), linearTeamKey: 'AAA' },
-      { id: 'lone', repoPath: repo(), linearTeamKey: 'BBB', authz: authz(['u-1']) },
-      { id: 'two', repoPath: repo(), linearTeamKey: 'CCC', authz: authz(['u-1', 'u-2']) },
+      { id: 'none', github: 'acme/app', linearTeamKey: 'AAA' },
+      { id: 'lone', github: 'acme/app', linearTeamKey: 'BBB', authz: authz(['u-1']) },
+      { id: 'two', github: 'acme/app', linearTeamKey: 'CCC', authz: authz(['u-1', 'u-2']) },
       // The replay of closed tickets approves its own specs.
-      { id: 'ghost', repoPath: repo(), linearTeamKey: 'DDD', preset: 'factory/fantome' as const },
+      { id: 'ghost', github: 'acme/app', linearTeamKey: 'DDD', preset: 'factory/fantome' as const },
     ];
     saveInstance(home, { port: 4172, host: '127.0.0.1', relay: { kind: 'none' }, projects });
     const logs: string[] = [];

@@ -11,14 +11,14 @@ import { UnreadableAnswerError, type HttpClient } from '../adapters/forge/github
 import { resolveGithubApp } from '../config/github-app.js';
 import { GITHUB_APP_OPTIONAL_PERMISSIONS, GITHUB_APP_PERMISSIONS } from './init.js';
 import { GITHUB_APP_SECRETS, LINEAR_SECRETS, loadSealedFactoryYml, serverSecretLines, serverSecretReport, type SecretReport } from '../config/server-secrets.js';
-import { effectiveInstance, samePath, validatorWarnings, type ProjectConfig } from '../config/instance.js';
+import { effectiveInstance, validatorWarnings, type ProjectConfig } from '../config/instance.js';
 import type { Workflow } from '../core/workflow.js';
 import { isFantome } from '../presets/fantome.js';
 import { defaultWorkflow, missingStatusWarning } from '../presets/workflow.js';
 import { activeClaudeAccount, claudeAccountReader, stepSettings } from '../config/factory-yml.js';
 import { startRefusals } from '../config/start-refusals.js';
 import { cliLinearTracker } from './linear.js';
-import { projectGithub } from '../app/project-github.js';
+import { originGithub, sameGithub } from '../app/project-github.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
 import { browserImage, sandboxConfig, sandboxLimits, visualProofLine } from '../app/sandbox-wiring.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning, testCommandWarnings, type RepoConfig } from '../config/repo-config.js';
@@ -223,7 +223,7 @@ function judgeProtection(protection: BranchProtection): BranchProtectionReport {
 
 export interface DoctorOptions {
   repoPath: string;
-  /** Its repository on GitHub, `owner/name`, as the daemon resolves it at its start (`projectGithub`, ORC-478). */
+  /** Its repository on GitHub, `owner/name`: its entry's in factory.yml (ORC-480), else its checkout's origin's. */
   github: string;
   api: DoctorApi;
   /** The host the daemon runs on (`checkHost`). */
@@ -1042,13 +1042,13 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   }
   if (!options.json && serverSecrets) for (const line of serverSecretLines(serverSecrets)) out(line);
   let githubApp;
+  let origin: string | Error;
   let validators: string[] = [];
   let startWarnings: string[] = [];
   // What every failure from here reports, the warnings said so far included: `--json` keeps its form whatever stops the check (ORC-449).
   const reportOf = () => ({ repoPath: options.repoPath, out, visualProof, validatorWarnings: validators, startWarnings, ...(serverSecrets ? { serverSecrets } : {}), ...(options.json ? { json: true } : {}) });
   let projects;
   let states;
-  let repos;
   try {
     const { yml, sealed } = await loadSealedFactoryYml(options.home, env, { only: GITHUB_APP_SECRETS });
     // Each refusal of the daemon's start, in its order and by the function it calls, with its message (ORC-448): the exposed
@@ -1056,8 +1056,11 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     const instance = effectiveInstance(yml);
     startWarnings = startRefusals(options.home, instance, yml, env).warnings;
     if (!options.json) for (const line of startWarnings) out(line);
-    projects = instance.projects.filter((p) => samePath(p.repoPath, options.repoPath));
-    repos = yml?.repos;
+    // The entries of this repository (ORC-480), by the GitHub repository its checkout's origin names, as `factory init` wrote it. An
+    // origin git cannot read, or not on GitHub, is said once the checks of the instance are said.
+    origin = await originGithub(options.repoPath, options.exec).catch((error: unknown) => new Error(errorMessage(error)));
+    const named = origin;
+    projects = typeof named === 'string' ? instance.projects.filter((p) => sameGithub(p.github, named)) : [];
     // The project of this repository whose spec gate no validator can pass (ORC-421): a warning, never the verdict.
     validators = validatorWarnings(projects);
     if (!options.json) for (const line of validators) out(line);
@@ -1082,13 +1085,10 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
         'to read the workflows and the environments.',
     );
   }
-  // The repository on GitHub as the daemon resolves it at its start, refused alike when its origin is not on GitHub (ORC-478).
-  let github: string;
-  try {
-    ({ github } = await projectGithub({ repoPath: options.repoPath, teamKey: projects[0]?.linearTeamKey, repos, ...(options.exec ? { exec: options.exec } : {}) }));
-  } catch (error) {
-    return doctorFailure(report, errorMessage(error));
-  }
+  // Refused alike when its origin is not on GitHub, before any call to GitHub (ORC-478).
+  if (origin instanceof Error) return doctorFailure(report, origin.message);
+  // Its repository on GitHub, as its entry in factory.yml names it, else as its origin does.
+  const github = projects[0]?.github ?? origin;
   const api = new GitHubAppApi({
     ...githubApp,
     ...(options.http ? { http: options.http } : {}),
