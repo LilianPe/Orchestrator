@@ -150,7 +150,6 @@ const protectedEnvironment: EnvironmentProtection = { name: 'ci-protected', requ
 
 const tempDirs: string[] = [];
 
-/** A home with its factory.yml, empty: without one, doctor refuses as the start does (ORC-199). */
 /** A loopback instance without projects: what the start accepts when nothing else refuses. */
 const local: InstanceConfig = { port: 4160, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] };
 
@@ -167,6 +166,7 @@ function startRefusal(home: string, env: NodeJS.ProcessEnv = {}): Promise<string
   );
 }
 
+/** A home with its factory.yml, empty: without one, doctor refuses as the start does (ORC-199). */
 function tempHome(): string {
   const dir = mkdtempSync(join(tmpdir(), 'factory-doctor-'));
   tempDirs.push(dir);
@@ -1198,7 +1198,10 @@ describe('doctor --secrets', () => {
     const dir = join(home, 'sealed');
     mkdirSync(dir);
     for (const [name, value] of Object.entries({ ...files, ...o.values })) {
-      if (name !== o.drop) writeFileSync(join(dir, name), value, { mode: name === o.open ? 0o644 : 0o600 });
+      if (name === o.drop) continue;
+      // chmod, not writeFileSync's mode, which the umask filters: under 077 the open file would be 0600.
+      writeFileSync(join(dir, name), value);
+      chmodSync(join(dir, name), name === o.open ? 0o644 : 0o600);
     }
     appendFileSync(
       join(home, 'factory.yml'),
@@ -1232,7 +1235,8 @@ describe('doctor --secrets', () => {
     { file: { drop: 'secrets.key' }, key: 'secrets_key (sealed:secrets.key)' },
     { file: { drop: 'linear-secret' }, key: 'linear.client_secret (sealed:linear-secret)' },
     { file: { drop: 'claude' }, key: 'claude.accounts[0].token (sealed:claude)' },
-    { file: { open: 'linear-secret' }, key: 'linear.client_secret (sealed:linear-secret)' },
+    // A file readable by others: no mode bits on Windows, as in the file source's own tests.
+    ...(process.platform === 'win32' ? [] : [{ file: { open: 'linear-secret' }, key: 'linear.client_secret (sealed:linear-secret)' }]),
   ])("fails with the start's message, in text as in --json, for $file", async ({ file, key }) => {
     const home = sealedHome(file);
     const message = await startRefusal(home);

@@ -8,10 +8,14 @@ import { COMMANDS, USAGE, usageCommands } from './usage.js';
 // ORC-200: the `factory` CLI has the commands of docs/cli.md, and no others; `plan`, `pause` and `resume` are gone.
 const root = join(import.meta.dirname, '../..');
 
-/** `factory <args>` as an operator runs it, on an empty FACTORY_HOME: no instance is read before the help. */
+/**
+ * `factory <args>` as an operator runs it, on an empty FACTORY_HOME: no instance is read before the help. Without the shell's
+ * other variables: doctor would inspect the capture image of a FACTORY_BROWSER_IMAGE set there before it refuses.
+ */
 function factory(...args: string[]): Promise<{ code: number | null; out: string }> {
   const home = mkdtempSync(join(tmpdir(), 'factory-cli-'));
-  const child = spawn(process.execPath, ['--import', 'tsx', join(root, 'src/cli/factory.ts'), ...args], { cwd: root, env: { ...process.env, FACTORY_HOME: home } });
+  const env = { PATH: process.env['PATH'], HOME: process.env['HOME'], FACTORY_HOME: home };
+  const child = spawn(process.execPath, ['--import', 'tsx', join(root, 'src/cli/factory.ts'), ...args], { cwd: root, env });
   let out = '';
   child.stdout.on('data', (c: Buffer) => (out += c.toString()));
   child.stderr.on('data', (c: Buffer) => (out += c.toString()));
