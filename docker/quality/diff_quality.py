@@ -17,9 +17,9 @@ import json
 import sys
 from pathlib import Path
 
-from crapper.coverage import CoverageBundle, parse_lcov
+from crapper.coverage import CoverageBundle, FileCoverage, parse_lcov
 from crapper.crap import crap_score
-from crapper.discover import is_test_file as crapper_test, language_of as crapper_language
+from crapper.discover import is_test_file as crapper_test, iter_source_files as crapper_sources, language_of as crapper_language
 from crapper.languages import functions_in_file
 from dryer.discover import is_test_file as dryer_test, iter_source_files, language_of as dryer_language
 from dryer.scan import scan_files
@@ -28,6 +28,9 @@ from dryer.shape import jaccard
 # dryer's defaults for the forms too small to be worth a pair.
 MIN_LINES = 4
 MIN_NODES = 20
+# The languages whose grammars docker/runner.Dockerfile fetches: any other would make tree-sitter download its grammar, and
+# the sandbox has no network. Their files are neither scored nor compared.
+LANGUAGES = {"typescript", "python"}
 
 
 def r1(x: float | None) -> float | None:
@@ -46,22 +49,34 @@ def own_files(root: Path, paths: list[str]) -> list[Path]:
     return found
 
 
+def merge(into: FileCoverage, record: FileCoverage) -> None:
+    """Two reports of one file (two commands' tests): a line or a branch is covered when either covers it."""
+
+    for line, (hit, total) in record.items():
+        into[line] = (max(hit, into.get(line, (0, 0))[0]), total)
+    for line, (hit, total) in record.branches.items():
+        was_hit, was_total = into.branches.get(line, (0, 0))
+        into.branches[line] = (max(hit, was_hit), max(total, was_total))
+
+
 def lcov(coverage: Path) -> dict:
     merged: dict = {}
     for report in sorted(coverage.rglob("*")) if coverage.is_dir() else []:
         if (report.name == "lcov.info" or report.suffix == ".lcov") and report.is_file() and not report.is_symlink():
-            merged.update(parse_lcov(report.read_text(encoding="utf-8", errors="replace")))
+            for path, record in parse_lcov(report.read_text(encoding="utf-8", errors="replace")).items():
+                merge(merged.setdefault(path, FileCoverage()), record)
     return merged
 
 
 def functions(root: Path, files: list[Path], coverage: Path, covered: set[str]) -> list[dict]:
     sources = [(f.relative_to(root).as_posix(), f, crapper_language(f)) for f in files]
-    sources = [s for s in sources if s[2] and not crapper_test(s[0])]
+    sources = [s for s in sources if s[2] in LANGUAGES and not crapper_test(s[0])]
     lines = lcov(coverage) if covered else {}
     # No report read: the coverage is not known, never 0 %.
     bundle = CoverageBundle(lcov=lines, root=root) if lines else None
     if bundle:
-        bundle.bind_sources([path for path, _, _ in sources])
+        # Every source of the repository, as crapper binds them: a report's key is a file's only when no longer path owns it.
+        bundle.bind_sources([p.relative_to(root).as_posix() for p in crapper_sources([root]) if p.is_relative_to(root)])
     out = []
     for path, file, language in sources:
         for fn in functions_in_file(language, file.read_text(encoding="utf-8", errors="replace"), path, str(root)):
@@ -72,10 +87,10 @@ def functions(root: Path, files: list[Path], coverage: Path, covered: set[str]) 
 
 
 def pairs(root: Path, files: list[Path], similarity: float) -> list[dict]:
-    changed = {f.relative_to(root).as_posix() for f in files if dryer_language(f) and not dryer_test(f.relative_to(root))}
+    changed = {f.relative_to(root).as_posix() for f in files if dryer_language(f) in LANGUAGES and not dryer_test(f.relative_to(root))}
     if not changed:
         return []
-    corpus = {p.resolve() for p in iter_source_files([root])} | {(root / p).resolve() for p in changed}
+    corpus = {p.resolve() for p in iter_source_files([root]) if dryer_language(p) in LANGUAGES} | {(root / p).resolve() for p in changed}
     every, _ = scan_files(sorted(corpus), root, MIN_LINES, MIN_NODES)
     by_language: dict[str, list] = {}
     for e in every:

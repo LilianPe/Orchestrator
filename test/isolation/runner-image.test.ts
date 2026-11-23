@@ -146,6 +146,32 @@ describe.skipIf(!built)(`factory/qualité-diff in verify on the runner image (${
     expect(graded.crap).toBeGreaterThan(10);
   }, 300_000);
 
+  it('merges the reports of two commands, gives no file the coverage of another it shares a suffix with, and is not stopped by a language without a grammar', async () => {
+    // Two pytest commands, each covering half of grade (lines 1-4, then 5-8, of 12): merged, 8 of 12. Only the first names
+    // lib/util.py, whose path ends as src/util.py's does once its `src/` is cut: src/util.py, which no report names, stays unknown.
+    const pytest = [
+      '#!/bin/sh',
+      'for a in "$@"; do case "$a" in --cov-report=lcov:*) out="${a#--cov-report=lcov:}";; esac; done',
+      '[ -n "$out" ] || exit 9',
+      'mkdir -p "$(dirname "$out")"',
+      'case "$1" in one) from=1; to=4;; *) from=5; to=8;; esac',
+      '{ echo SF:app/grade.py; i=1; while [ $i -le 12 ]; do if [ $i -ge $from ] && [ $i -le $to ]; then echo "DA:$i,1"; else echo "DA:$i,0"; fi; i=$((i+1)); done; echo end_of_record',
+      '  if [ "$1" = one ]; then echo SF:lib/util.py; i=1; while [ $i -le 8 ]; do echo "DA:$i,1"; i=$((i+1)); done; echo end_of_record; fi; } > "$out"',
+      '',
+    ].join('\n');
+    const grade = 'def grade(n, b=None):\n    s = n + (b or 0)\n    if s > 90 and n > 0:\n        return "A"\n    elif s > 80:\n        return "B"\n    elif s > 70 or n < 0:\n        return "C"\n    for i in range(3):\n        if i == s:\n            return "D"\n    return "F"\n';
+    const route = 'def route(n):\n    if n > 1 and n < 9:\n        return 1\n    elif n > 20 or n < -3:\n        return 2\n    elif n == 15:\n        return 3\n    return 4\n';
+    // A Go file: the image carries no grammar for it, and tree-sitter would fetch one through the network the sandbox lacks.
+    const old = { 'requirements.txt': 'pytest-cov==6.0\n', 'bin/pytest': pytest, 'lib/util.py': route, 'tools/gen.go': 'package main\n\nfunc main() {\n}\n' };
+    const res = await measure('merge', old, { 'app/grade.py': grade, 'src/util.py': route }, ['sh bin/pytest one', 'sh bin/pytest two']);
+    expect(res).toMatchObject({ ok: true, failures: [] });
+    expect(res.quality?.unavailable).toBeUndefined();
+    expect(res.quality!.functions).toEqual([
+      expect.objectContaining({ path: 'app/grade.py', name: 'grade', cc: 9, coverage: 66.7 }),
+      expect.objectContaining({ path: 'src/util.py', name: 'route', coverage: null, crap: null }),
+    ]);
+  }, 300_000);
+
   it('lists the same on a Python repository', async () => {
     const total = (name: string) => `def ${name}(items):\n    out = 0\n    for it in items:\n        if it > 0:\n            out += it * 2\n    return out\n`;
     const grade = 'def grade(n, b=None):\n    s = n + (b or 0)\n    if s > 90 and n > 0:\n        return "A"\n    elif s > 80:\n        return "B"\n    elif s > 70 or n < 0:\n        return "C"\n    for i in range(3):\n        if i == s:\n            return "D"\n    return "F"\n';
