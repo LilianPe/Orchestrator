@@ -12,7 +12,7 @@ import { UnreadableAnswerError, type HttpClient } from '../adapters/forge/github
 import { resolveGithubApp } from '../config/github-app.js';
 import { GITHUB_APP_OPTIONAL_PERMISSIONS, GITHUB_APP_PERMISSIONS } from './init.js';
 import { GITHUB_APP_SECRETS, LINEAR_SECRETS, loadSealedFactoryYml, serverSecretLines, serverSecretReport, type SecretReport } from '../config/server-secrets.js';
-import { effectiveInstance, secretsInClear, validatorWarnings, type ProjectConfig } from '../config/instance.js';
+import { effectiveInstance, loadSecrets, validatorWarnings, type ProjectConfig } from '../config/instance.js';
 import type { Workflow } from '../core/workflow.js';
 import { isFantome } from '../presets/fantome.js';
 import { defaultWorkflow, missingStatusWarning } from '../presets/workflow.js';
@@ -1160,9 +1160,9 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     const instance = effectiveInstance(yml);
     startWarnings = startRefusals(options.home, instance, yml, env).warnings;
     if (!options.json) for (const line of startWarnings) out(line);
-    // With its secrets_key read, the start encrypts a secrets.json in clear, and stops on one it cannot read: `--secrets`
-    // reads it so, writing nothing (ORC-456).
-    if (options.secrets && yml?.secretsKey) secretsInClear(options.home);
+    // secrets.json, as the start reads it (ORC-456): encrypted with secrets_key when in clear, then read to connect Linear, it
+    // stops on one it cannot parse or open. `--secrets` reads it so, writing nothing, saying nothing of it.
+    if (options.secrets) loadSecrets(options.home, yml?.secretsKey);
     projects = typeof origin === 'string' ? instance.projects.filter((p) => sameGithub(p.github, origin)) : [];
     // The project of this repository whose spec gate no validator can pass (ORC-421): a warning, never the verdict.
     validators = validatorWarnings(projects);

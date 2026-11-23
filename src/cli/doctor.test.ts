@@ -1,5 +1,5 @@
 import { generateKeyPairSync } from 'node:crypto';
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -13,7 +13,7 @@ import { GITHUB_APP_PERMISSIONS } from './init.js';
 import { startFactory } from '../app/bootstrap.js';
 import { MemoryStore } from '../store/memory-store.js';
 import { OLD_DATABASES, oldDatabaseWarnings } from '../store/old-databases.js';
-import { oldInstanceFileWarnings, saveInstance, type InstanceConfig } from '../config/instance.js';
+import { oldInstanceFileWarnings, saveInstance, saveSecrets, type InstanceConfig } from '../config/instance.js';
 
 interface FakeOptions {
   failWorkflows?: boolean;
@@ -1266,6 +1266,23 @@ describe('doctor --secrets', () => {
     const doctor = await doctorBoth(home, true);
     expect({ code: doctor.code, said: doctor.lines.includes(message!), jsonCode: doctor.jsonCode, error: doctor.error }).toEqual({ code: 1, said: true, jsonCode: 1, error: message });
     expect(await doctorBoth(home)).toMatchObject({ last: NO_APP, error: NO_APP });
+  });
+
+  it('refuses a sealed secrets.json its secrets_key cannot open as the start does, when it connects Linear', async () => {
+    const home = sealedHome();
+    saveSecrets(home, { linear: { clientId: 'cid', clientSecret: '', webhookSecret: '', accessToken: `${WITNESS}-token` } }, `another-key-${'x'.repeat(32)}`);
+    const message = await startRefusal(home);
+    expect(message).toMatch(/^secrets\.json could not be decrypted/);
+    const doctor = await doctorBoth(home, true);
+    expect({ code: doctor.code, said: doctor.lines.includes(message!), jsonCode: doctor.jsonCode, error: doctor.error }).toEqual({ code: 1, said: true, jsonCode: 1, error: message });
+  });
+
+  it('writes nothing to a secrets.json in clear it reads: the start encrypts it, not doctor', async () => {
+    const home = sealedHome();
+    const clear = JSON.stringify({ linear: { clientId: 'cid', clientSecret: '', webhookSecret: '', accessToken: `${WITNESS}-token` } });
+    writeFileSync(join(home, 'secrets.json'), clear);
+    await doctorBoth(home, true);
+    expect(readFileSync(join(home, 'secrets.json'), 'utf8')).toBe(clear);
   });
 });
 

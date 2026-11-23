@@ -318,19 +318,10 @@ export function saveLinearTokens(home: string, patch: Partial<Omit<LinearSecrets
 
 /** Encrypts a plaintext `secrets.json` with `key`, at the daemon's start (ORC-398): whether there was one to encrypt. */
 export function sealSecretsAtRest(home: string, key: string): boolean {
-  const clear = secretsInClear(home);
-  if (!clear) return false;
-  saveSecrets(home, clear, key);
-  return true;
-}
-
-/**
- * The plaintext `secrets.json` the start encrypts, undefined when there is none or it is sealed already; one that cannot be
- * read throws as the start then does. Writes nothing: `factory doctor --secrets` reads it so (ORC-456).
- */
-export function secretsInClear(home: string): Secrets | undefined {
   const text = secretsText(home);
-  return text === undefined || isSealed(text) ? undefined : parseSecrets(text);
+  if (text === undefined || isSealed(text)) return false;
+  saveSecrets(home, parseSecrets(text), key);
+  return true;
 }
 
 /**
