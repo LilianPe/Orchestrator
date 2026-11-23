@@ -9,10 +9,7 @@ const REQUEST_TIMEOUT_MS = 10_000;
 /** What a header value holds; fetch quotes any other value in its error, the token with it. */
 const TOKEN = /^[\x21-\x7e]+$/;
 
-const segments = (path: string): string[] | undefined => {
-  const parts = path.split('/');
-  return parts.every((p) => SEGMENT.test(p) && p !== '.' && p !== '..') ? parts : undefined;
-};
+const validPath = (path: string): boolean => path.split('/').every((p) => SEGMENT.test(p) && p !== '.' && p !== '..');
 
 /** `<path>#<field>`, or undefined when `ref` is not one. */
 function split(ref: string): { path: string; field: string } | undefined {
@@ -20,7 +17,7 @@ function split(ref: string): { path: string; field: string } | undefined {
   if (hash < 0) return undefined;
   const path = ref.slice(0, hash);
   const field = ref.slice(hash + 1);
-  return segments(path) && FIELD.test(field) ? { path, field } : undefined;
+  return validPath(path) && FIELD.test(field) ? { path, field } : undefined;
 }
 
 /** https, or http on the loopback, where the token never crosses a network. */
@@ -37,6 +34,7 @@ function addressFault(v: unknown): string | undefined {
     return 'address: the server alone is expected (`https://<host>:<port>`), no path, query or credentials';
   }
   if (url.protocol === 'https:') return undefined;
+  // URL lowercases the host and keeps IPv6 in brackets.
   const loopback = url.hostname === 'localhost' || url.hostname === '[::1]' || /^127\.\d+\.\d+\.\d+$/.test(url.hostname);
   return url.protocol === 'http:' && loopback ? undefined : fault;
 }
@@ -45,21 +43,22 @@ const KNOWN = new Set(['address', 'token', 'token_file', 'mount', 'namespace']);
 
 /**
  * `kind: vault` (ORC-418): a field of a secret of HashiCorp Vault's KV v2 engine (`GET /v1/<mount>/data/<path>`), read at each `read`
- * with a token: `token` (written `env:NAME`, resolved at the start and masked), or `token_file`, re-read at each read, where a Vault
+ * with a token: `token` (written `env:NAME`, resolved at the start and masked, refused in clear), or `token_file`, re-read at each read, where a Vault
  * Agent keeps a renewed one. The rotation date is the creation of the secret's current version.
  */
 export const vaultKind: SecretSourceKind = {
   checkPath: (path) => (split(path) ? undefined : `"${path}" is not \`<path>#<field>\` of a Vault secret`),
+  credentialOptions: ['token'],
   checkOptions: (options) => {
     const faults: string[] = [];
     const address = addressFault(options['address']);
     if (address) faults.push(address);
     const { token, token_file: tokenFile, mount, namespace } = options;
     if (token !== undefined && tokenFile !== undefined) faults.push('token: token or token_file, not both');
-    else if (tokenFile !== undefined) {
-      if (typeof tokenFile !== 'string' || !isAbsolute(tokenFile)) faults.push('token_file: an absolute path is expected');
-    } else if (typeof token !== 'string' || token === '') faults.push(token === undefined ? 'token: required, or token_file' : 'token: a non-empty text is expected');
-    if (mount !== undefined && (typeof mount !== 'string' || !segments(mount))) faults.push('mount: a mount path is expected (`secret`, `team/kv`)');
+    else if (tokenFile !== undefined && (typeof tokenFile !== 'string' || !isAbsolute(tokenFile))) faults.push('token_file: an absolute path is expected');
+    else if (tokenFile === undefined && token === undefined) faults.push('token: required, or token_file');
+    else if (tokenFile === undefined && (typeof token !== 'string' || token === '')) faults.push('token: a non-empty text is expected');
+    if (mount !== undefined && (typeof mount !== 'string' || !validPath(mount))) faults.push('mount: a mount path is expected (`secret`, `team/kv`)');
     if (namespace !== undefined && (typeof namespace !== 'string' || namespace === '')) faults.push('namespace: a non-empty text is expected');
     faults.push(...Object.keys(options).filter((key) => !KNOWN.has(key)).map((key) => `${key}: unknown key`));
     return faults;

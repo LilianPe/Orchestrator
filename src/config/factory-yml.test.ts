@@ -320,8 +320,8 @@ describe('factory.yml (ORC-209, part B)', () => {
     });
 
     it('refuses an unknown adapter, a missing kind, options its adapter refuses, and a source named env', () => {
-      expect(faults('secret_sources:\n  a: { kind: aws-kms }\n  b: { name: x }\n  c: { kind: fake }\n  env: { kind: fake, name: x }\n  d: fake\n')).toEqual([
-        'secret_sources.a.kind: no adapter aws-kms (env, systemd-creds, file, sops, vault, fake)',
+      expect(faults('secret_sources:\n  a: { kind: nope }\n  b: { name: x }\n  c: { kind: fake }\n  env: { kind: fake, name: x }\n  d: fake\n')).toEqual([
+        'secret_sources.a.kind: no adapter nope (env, systemd-creds, file, sops, vault, fake)',
         'secret_sources.b.kind: required (env, systemd-creds, file, sops, vault, fake)',
         'secret_sources.c.name: required',
         'secret_sources.env: built in, it is not declared',
@@ -330,8 +330,8 @@ describe('factory.yml (ORC-209, part B)', () => {
     });
 
     it('refuses a declared source of an unknown adapter once, not again at each reference to it', () => {
-      expect(faults('secret_sources: { coffre: { kind: aws-kms } }\nrepos:\n  - { id: app, linear_team: ENG, github: org/app, secrets: { K: "coffre:kv/app#k" } }\n')).toEqual([
-        'secret_sources.coffre.kind: no adapter aws-kms (env, systemd-creds, file, sops, vault, fake)',
+      expect(faults('secret_sources: { coffre: { kind: nope } }\nrepos:\n  - { id: app, linear_team: ENG, github: org/app, secrets: { K: "coffre:kv/app#k" } }\n')).toEqual([
+        'secret_sources.coffre.kind: no adapter nope (env, systemd-creds, file, sops, vault, fake)',
       ]);
     });
 
@@ -357,6 +357,13 @@ describe('factory.yml (ORC-209, part B)', () => {
         'secret_sources.coffre.address: an https URL is expected (http on the loopback only)',
         'secret_sources.coffre.token: required, or token_file',
       ]);
+    });
+
+    it('refuses a source credential written in clear: a reference `env:NAME` is expected, resolved and masked (ORC-418)', () => {
+      const env = { VAULT_TOKEN: 'hvs.from-env' };
+      const yml = (token: string) => `secret_sources: { coffre: { kind: vault, address: "https://vault.example.com", token: "${token}" } }\n`;
+      expect(violations(yml('hvs.in-clear'), env)).toEqual(['secret_sources.coffre.token: a reference `env:NAME` is expected, never a secret in clear in factory.yml']);
+      expect(parseFactoryYml(yml('env:VAULT_TOKEN'), env).secretSources?.['coffre']?.options['token']).toBe('hvs.from-env');
     });
   });
 

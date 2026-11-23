@@ -24,6 +24,8 @@ export interface SecretSource {
 export interface SecretSourceKind {
   /** Why `path` is not one of its paths, checked at startup without reading anything; undefined when it is. */
   checkPath(path: string): string | undefined;
+  /** Its options that hold a credential: written `env:NAME`, resolved and masked, refused in clear in factory.yml (ORC-418). */
+  credentialOptions?: readonly string[];
   /** The faults of a declaration's options (every key but `kind`), each prefixed by its key. */
   checkOptions(options: Record<string, unknown>): string[];
   /** The source of a declaration whose options passed `checkOptions`. */

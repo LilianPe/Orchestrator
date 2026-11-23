@@ -512,6 +512,10 @@ export function parseFactoryYml(
         const options = Object.fromEntries(
           Object.entries(written).map(([key, v]) => [key, typeof v === 'string' && v.startsWith('env:') ? envSecret(`${path}.${key}`, v) : v]),
         );
+        for (const key of adapter.credentialOptions ?? []) {
+          const v = written[key];
+          if (typeof v === 'string' && !v.startsWith('env:')) violations.push(`${path}.${key}: a reference \`env:NAME\` is expected, never a secret in clear in factory.yml`);
+        }
         // Kept despite faulty options: its references are still checked against its adapter.
         violations.push(...adapter.checkOptions(options).map((v) => `${path}.${v}`));
         adapters.set(name, adapter);

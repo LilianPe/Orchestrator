@@ -47,6 +47,8 @@ function fixture(plain: unknown = { github: { key: 'pem-secret-value' }, port: 5
   return { file, keyFile, log, env: { PATH: `${root}:${dirname(process.execPath)}`, FAKE_SOPS_LOG: log } };
 }
 
+const sops = (f: Fixture) => sopsKind.create({ file: f.file, age_key_file: f.keyFile }, f.env);
+
 const calls = (f: Fixture) =>
   readFileSync(f.log, 'utf8')
     .split('\n')
@@ -56,7 +58,7 @@ const calls = (f: Fixture) =>
 describeSecretSourceContract('sops', () => {
   const f = fixture();
   return {
-    source: sopsKind.create({ file: f.file, age_key_file: f.keyFile }, f.env),
+    source: sops(f),
     present: { path: 'github.key', value: 'pem-secret-value' },
     missing: 'github.absent',
     down: sopsKind.create({ file: f.file, age_key_file: join(dirname(f.file), 'no-key.txt') }, f.env),
@@ -68,7 +70,7 @@ describeSecretSourceContract('sops', () => {
 describe('sops secret source', () => {
   it('decrypts the file with sops into JSON, its age key handed to sops through SOPS_AGE_KEY_FILE', async () => {
     const f = fixture();
-    expect(await sopsKind.create({ file: f.file, age_key_file: f.keyFile }, f.env).read('github.key')).toBe('pem-secret-value');
+    expect(await sops(f).read('github.key')).toBe('pem-secret-value');
     expect(calls(f)).toEqual([{ args: ['--decrypt', '--output-type', 'json', f.file], key: f.keyFile }]);
   });
 
@@ -81,12 +83,12 @@ describe('sops secret source', () => {
 
   it('reaches an item of a list by its index', async () => {
     const f = fixture();
-    expect(await sopsKind.create({ file: f.file, age_key_file: f.keyFile }, f.env).read('list.0')).toBe('first-value-x');
+    expect(await sops(f).read('list.0')).toBe('first-value-x');
   });
 
   it('refuses a key that holds no text, a number or a section, without its content', async () => {
     const f = fixture();
-    const source = sopsKind.create({ file: f.file, age_key_file: f.keyFile }, f.env);
+    const source = sops(f);
     await expect(source.read('port')).rejects.toThrow('the key port of the sops file is not a text');
     const err = (await rejection(source.read('github'))) as Error;
     expect(err.message).toBe('the key github of the sops file is not a text');
@@ -95,7 +97,7 @@ describe('sops secret source', () => {
 
   it('names a key the file does not hold', async () => {
     const f = fixture();
-    await expect(sopsKind.create({ file: f.file, age_key_file: f.keyFile }, f.env).read('github.absent')).rejects.toThrow('no key github.absent in the sops file');
+    await expect(sops(f).read('github.absent')).rejects.toThrow('no key github.absent in the sops file');
   });
 
   it("says why sops failed, by its own words, when it cannot decrypt", async () => {
@@ -114,7 +116,7 @@ describe('sops secret source', () => {
 
   it('an output that is not JSON fails without quoting it: it would be the clear document', async () => {
     const f = fixture({}, { garbage: 'pem-secret-value is not json' });
-    const err = (await rejection(sopsKind.create({ file: f.file, age_key_file: f.keyFile }, f.env).read('github.key'))) as Error;
+    const err = (await rejection(sops(f).read('github.key'))) as Error;
     expect(err.message).toBe('sops answered no JSON document');
     expect(err.cause).toBeUndefined();
   });
@@ -138,7 +140,7 @@ describe('sops secret source', () => {
   it('knows no rotation date in a file without sops metadata it can read', async () => {
     const f = fixture();
     writeFileSync(f.file, JSON.stringify({ plain: { github: { key: 'pem-secret-value' } } }));
-    expect(await sopsKind.create({ file: f.file, age_key_file: f.keyFile }, f.env).describe!('github.key')).toEqual({});
+    expect(await sops(f).describe!('github.key')).toEqual({});
   });
 
   it('reads the rotation date from the metadata of a YAML, JSON or dotenv file, and none from anything else', () => {
