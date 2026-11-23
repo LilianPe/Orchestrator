@@ -731,12 +731,13 @@ describe('ContainerSandboxProvider services (ORC-309)', () => {
     expect(rms(e.calls)).toEqual([['rm', '-f', '-v', '--depend', 'svc1']]);
   });
 
-  it('removes one container at a time: two `rm --depend` at once, of a service and a container joining it, wedge Podman (ORC-491)', async () => {
+  /** Three destroys at once: the most `rm` the engine had in flight together, in the order they ended, and how each destroy ended. */
+  async function destroyAtOnce(cli: string) {
     let inFlight = 0;
     let most = 0;
     const removed: string[] = [];
     const exec: Exec = async (cmd, args) => {
-      if (args[0] === 'version') return PODMAN_CLIENT;
+      if (args[0] === 'version') return /podman/.test(cmd) ? PODMAN_CLIENT : DOCKER_CLIENT;
       if (sub(args)[0] !== 'rm') return ok();
       most = Math.max(most, ++inFlight);
       await new Promise((resolve) => setTimeout(resolve, 5));
@@ -745,11 +746,17 @@ describe('ContainerSandboxProvider services (ORC-309)', () => {
       // One that fails does not hold the next ones back.
       return args.at(-1) === 'c1' ? { stdout: '', stderr: 'boom', code: 1 } : ok();
     };
-    const p = new ContainerSandboxProvider({ ...opts, cli: 'podman', exec });
+    const p = new ContainerSandboxProvider({ ...opts, cli, exec });
     const results = await Promise.allSettled(['c1', 'svc1', 'c2'].map((id) => p.destroy(id)));
-    expect(most).toBe(1);
-    expect(removed).toEqual(['c1', 'svc1', 'c2']);
-    expect(results.map((r) => r.status)).toEqual(['rejected', 'fulfilled', 'fulfilled']);
+    return { most, removed, results: results.map((r) => r.status) };
+  }
+
+  it('removes one container at a time under Podman: two `rm --depend` at once, of a service and a container joining it, wedge it (ORC-491)', async () => {
+    expect(await destroyAtOnce('podman')).toEqual({ most: 1, removed: ['c1', 'svc1', 'c2'], results: ['rejected', 'fulfilled', 'fulfilled'] });
+  });
+
+  it('removes them all at once under Docker, which has no `--depend` to wedge', async () => {
+    expect((await destroyAtOnce('docker')).most).toBe(3);
   });
 
   it('list gives the services under the key they serve, so recover destroys those of dead attempts', async () => {
