@@ -60,9 +60,10 @@ export function resolveGithubApp(config: InstanceConfig, env: NodeJS.ProcessEnv 
     );
   }
   // The source read, the one a refusal names: factory.yml's key hides the variable.
-  const [source, written] = fromConfig?.installationId !== undefined ? ['github.installation_id', fromConfig.installationId] : ['GH_APP_INSTALLATION_ID', env['GH_APP_INSTALLATION_ID']];
-  const pinned = (written ?? '').trim();
-  const installationId = pinned ? installationNumber(source, pinned) : undefined;
+  const installationId =
+    fromConfig?.installationId !== undefined
+      ? installationNumber('github.installation_id', fromConfig.installationId)
+      : installationNumber('GH_APP_INSTALLATION_ID', env['GH_APP_INSTALLATION_ID']);
   return {
     appId,
     privateKey: readPrivateKey(key),
@@ -73,11 +74,13 @@ export function resolveGithubApp(config: InstanceConfig, env: NodeJS.ProcessEnv 
 /**
  * The pinned installation as the number GitHub gives it (ORC-490), refused unless it is a positive integer: the daemon
  * would otherwise start and ask its tokens of an installation that cannot exist. A leading zero is read in decimal, as YAML
- * reads an unquoted `042`.
+ * reads an unquoted `042`. Undefined when blank: nothing is pinned.
  */
-function installationNumber(source: string, written: string): number {
-  const id = /^\d+$/.test(written) ? Number(written) : Number.NaN;
-  if (id > 0 && Number.isSafeInteger(id)) return id;
+function installationNumber(source: string, value: string | undefined): number | undefined {
+  const written = (value ?? '').trim();
+  if (!written) return undefined;
+  const id = Number(written);
+  if (/^\d+$/.test(written) && id > 0 && Number.isSafeInteger(id)) return id;
   throw new Error(
     `${source}: "${written}" is not an installation id. ` +
       "Write the positive integer GitHub shows at the end of the installation's URL (…/settings/installations/<id>), as in `installation_id: 987654`, " +

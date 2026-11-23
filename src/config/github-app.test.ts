@@ -68,14 +68,16 @@ describe('GitHub App configuration', () => {
   });
 
   it('keeps the pinned installation as a number, from YAML written 42 or "42", or from GH_APP_INSTALLATION_ID (ORC-490)', () => {
-    const pinned = (written: string, env: NodeJS.ProcessEnv = {}) =>
-      resolveGithubApp(effectiveInstance(parseFactoryYml(`github: { app_id: 123, private_key: env:GH_APP_KEY${written} }\n`, { GH_APP_KEY: PEM })), env)?.installationId;
-    expect(pinned(', installation_id: 42')).toBe(42);
-    expect(pinned(', installation_id: "42"')).toBe(42);
-    expect(pinned('', { GH_APP_INSTALLATION_ID: ' 42 ' })).toBe(42);
+    const pinned = (installationId: string | undefined, env: NodeJS.ProcessEnv = {}) => {
+      const key = installationId === undefined ? '' : `, installation_id: ${installationId}`;
+      return resolveGithubApp(effectiveInstance(parseFactoryYml(`github: { app_id: 123, private_key: env:GH_APP_KEY${key} }\n`, { GH_APP_KEY: PEM })), env)?.installationId;
+    };
+    expect(pinned('42')).toBe(42);
+    expect(pinned('"42"')).toBe(42);
+    expect(pinned(undefined, { GH_APP_INSTALLATION_ID: ' 42 ' })).toBe(42);
     // A leading zero changes nothing: YAML reads `042` unquoted as 42 already, its quoted form is the same id.
-    expect(pinned(', installation_id: "042"')).toBe(42);
-    expect(pinned('')).toBeUndefined();
+    expect(pinned('"042"')).toBe(42);
+    expect(pinned(undefined)).toBeUndefined();
   });
 
   it('refuses at the start a pinned installation that is not a positive integer, saying what to write (ORC-490)', () => {
