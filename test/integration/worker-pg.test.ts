@@ -216,15 +216,10 @@ describe.skipIf(!PG_URL)('worker on PgStore', () => {
       // Only this suite's connections, on REL-1's key: the run's suites share one database (ORC-334), so a
       // connection of this suite can also wait on a key that another suite holds. REL-1's task runs beside
       // REL-2's, on its own connection: REL-2 decided says nothing of when REL-1's transaction reached the lock.
-      const waiting = async () =>
-        (
-          await pool.query(
-            `select 1 from pg_locks l join pg_stat_activity a on a.pid = l.pid
-              where l.locktype = 'advisory' and not l.granted and a.application_name = $1
-                and (l.classid::bigint << 32 | l.objid::bigint) = hashtext('REL-1')::bigint`,
-            [db.name],
-          )
-        ).rowCount;
+      const waitingOnRel1 = `select 1 from pg_locks l join pg_stat_activity a on a.pid = l.pid
+        where l.locktype = 'advisory' and not l.granted and a.application_name = $1
+          and (l.classid::bigint << 32 | l.objid::bigint) = hashtext('REL-1')::bigint`;
+      const waiting = async () => (await pool.query(waitingOnRel1, [db.name])).rowCount;
       for (let i = 0; i < 500 && !(await waiting()); i++) await new Promise((r) => setTimeout(r, 10));
       expect(await waiting()).toBe(1);
       expect(await journaled('REL-1')).toBe(0);
