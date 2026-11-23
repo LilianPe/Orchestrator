@@ -1,4 +1,4 @@
-import { createPrivateKey, X509Certificate } from 'node:crypto';
+import { createPrivateKey, generateKeyPairSync, X509Certificate } from 'node:crypto';
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -74,54 +74,42 @@ describe('a CA stored before ORC-477 that OpenSSL cannot read (ORC-483)', () => 
     return { certPem, keyPem: made.keyPem };
   }
 
-  it('is replaced by a new one, both files at their modes, said once and without its key', async () => {
-    const at = join(dir, 'ca-padded');
-    const keyPath = join(at, 'ca.key');
-    const before = await stored(at);
-    expect(() => new X509Certificate(before.certPem)).toThrow();
+  /** Loaded from `at`, the stored pair is replaced: a new pair that belongs together, both files at their modes, said once and without a key. */
+  async function expectReplaced(at: string, oldKeys: string[]): Promise<void> {
     const log = vi.fn();
     const ca = await loadOrCreateCa(at, log);
     // The pair on disk belongs together: the key renamed first, the certificate last.
     expect(new X509Certificate(ca.certPem).checkPrivateKey(createPrivateKey(ca.keyPem))).toBe(true);
-    expect(ca.keyPem).not.toBe(before.keyPem);
+    expect(oldKeys).not.toContain(ca.keyPem);
     if (process.platform !== 'win32') {
-      expect(statSync(keyPath).mode & 0o777).toBe(0o600);
+      expect(statSync(join(at, 'ca.key')).mode & 0o777).toBe(0o600);
       expect(statSync(ca.certPath).mode & 0o777).toBe(0o644);
     }
     expect(readdirSync(at).sort()).toEqual(['ca.crt', 'ca.key']);
     expect(log).toHaveBeenCalledOnce();
     const [message] = log.mock.calls[0]! as [string];
     expect(message).toContain(at);
-    for (const key of [before.keyPem, ca.keyPem]) expect(message).not.toContain(key.split('\n')[1]);
+    for (const key of [...oldKeys, ca.keyPem]) expect(message).not.toContain(key.split('\n')[1]);
     // Read back from disk as it is after: no second word.
     expect(await loadOrCreateCa(at, log)).toEqual(ca);
     expect(log).toHaveBeenCalledOnce();
+  }
+
+  it('is replaced by a new one, both files at their modes, said once and without its key', async () => {
+    const at = join(dir, 'ca-padded');
+    const before = await stored(at);
+    expect(() => new X509Certificate(before.certPem)).toThrow();
+    await expectReplaced(at, [before.keyPem]);
   });
 
   it('a readable certificate whose key is another one is replaced the same way (ORC-484)', async () => {
     const at = join(dir, 'ca-mismatched');
-    const keyPath = join(at, 'ca.key');
     const made = await loadOrCreateCa(at);
-    // The key of another CA beside this certificate: one file restored from a backup, or two processes racing on the folder.
-    const other = await loadOrCreateCa(join(dir, 'ca-other'));
-    writeFileSync(keyPath, other.keyPem);
-    expect(new X509Certificate(made.certPem).checkPrivateKey(createPrivateKey(other.keyPem))).toBe(false);
-    const log = vi.fn();
-    const ca = await loadOrCreateCa(at, log);
-    expect(new X509Certificate(ca.certPem).checkPrivateKey(createPrivateKey(ca.keyPem))).toBe(true);
-    expect(ca.certPem).not.toBe(made.certPem);
-    expect([made.keyPem, other.keyPem]).not.toContain(ca.keyPem);
-    if (process.platform !== 'win32') {
-      expect(statSync(keyPath).mode & 0o777).toBe(0o600);
-      expect(statSync(ca.certPath).mode & 0o777).toBe(0o644);
-    }
-    expect(readdirSync(at).sort()).toEqual(['ca.crt', 'ca.key']);
-    expect(log).toHaveBeenCalledOnce();
-    const [message] = log.mock.calls[0]! as [string];
-    expect(message).toContain(at);
-    for (const key of [made.keyPem, other.keyPem, ca.keyPem]) expect(message).not.toContain(key.split('\n')[1]);
-    expect(await loadOrCreateCa(at, log)).toEqual(ca);
-    expect(log).toHaveBeenCalledOnce();
+    // Another key beside this certificate: one file restored from a backup, or two processes racing on the folder.
+    const other = generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey.export({ type: 'pkcs8', format: 'pem' }) as string;
+    writeFileSync(join(at, 'ca.key'), other);
+    expect(new X509Certificate(made.certPem).checkPrivateKey(createPrivateKey(other))).toBe(false);
+    await expectReplaced(at, [made.keyPem, other]);
   });
 
   it('a key OpenSSL cannot parse fails the load and is never written over (ORC-484)', async () => {
