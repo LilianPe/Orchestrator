@@ -5,3 +5,5 @@ import { devNull } from 'node:os';
 // runner's (Git LFS's filters) would differ from a workstation's. A test that wants a global config stubs its own.
 process.env['GIT_CONFIG_GLOBAL'] = devNull;
 process.env['GIT_CONFIG_NOSYSTEM'] = '1';
+// Run from a git hook (the repository's pre-push runs the tests), these would point every temporary repository's git at this one.
+for (const name of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY']) delete process.env[name];

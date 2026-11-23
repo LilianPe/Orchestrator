@@ -117,12 +117,15 @@ describe('the audit sheet page (ORC-229)', () => {
 
   it('frees the button when the server refuses or fails, so the typed defect can be sent again (ORC-494)', async () => {
     const busy: boolean[] = [];
+    let sent = 0;
     const enter = oneAtATime((send: () => Promise<unknown>) => send(), (on) => busy.push(on));
-    let failed = false;
-    enter(() => Promise.reject(new Error('offline')).catch(() => { failed = true; }));
-    await new Promise((r) => setTimeout(r, 0));
-    expect(failed).toBe(true);
-    expect(busy).toEqual([true, false]);
+    const settle = () => new Promise((r) => setTimeout(r, 0));
+    for (const answer of [() => Promise.resolve(false), () => Promise.reject(new Error('offline')), () => { throw new Error('thrown'); }]) {
+      enter(() => { sent++; return answer(); });
+      await settle();
+    }
+    expect(sent).toBe(3);
+    expect(busy).toEqual([true, false, true, false, true, false]);
   });
 
   it('lists the PRs a human reviewed, each to its sheet', () => {

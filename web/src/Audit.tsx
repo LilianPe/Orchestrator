@@ -132,10 +132,16 @@ export function oneAtATime<A>(run: (a: A) => Promise<unknown>, busy: (on: boolea
     if (inFlight) return;
     inFlight = true;
     busy(true);
-    void run(a).finally(() => {
+    const done = () => {
       inFlight = false;
       busy(false);
-    });
+    };
+    try {
+      // A failed send frees the button too: what was typed stays, to send again.
+      run(a).then(done, done);
+    } catch {
+      done();
+    }
   };
 }
 
