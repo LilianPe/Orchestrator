@@ -24,7 +24,7 @@ describe('ticketMeasures (ORC-235)', () => {
     expect(ticketMeasures('p', 'REL-1', facts({}))).toEqual({
       projectId: 'p', ticketId: 'REL-1', mergedAt: null, tokens: null, attempts: 0, attemptsWithoutTokens: 0, usageLimitShare: null,
       firstTry: null, reworks: [], humanReviewMinutes: null, revertedWithin14Days: null, revertWindowEndsAt: null, ciCost: null, messages: [], red: [],
-      startedAt: null, leadTimeMs: null, workMs: 0, costUsd: 0, reviewRounds: { ai: 0, human: 0 }, runs: [],
+      startedAt: null, leadTimeMs: null, workMs: 0, costUsd: 0, reviewRounds: { ai: 0, human: 0 }, runs: [], specs: [],
     });
   });
 
@@ -393,5 +393,17 @@ describe('cost, duration and review rounds of each run (ORC-223)', () => {
       ],
     }));
     expect(m.reviewRounds).toEqual({ ai: 2, human: 2 });
+  });
+
+  it('counts the « for any input » properties of each spec version the factory published, not one still to publish (ORC-261)', () => {
+    const spec = (properties?: { statement: string; domain: string; target: string }[]) => ({ goal: 'g', criteria: ['c'], ...(properties ? { properties } : {}) });
+    const m = ticketMeasures('p', 'REL-1', facts({
+      effects: [
+        row('REL-1:1:1', { kind: 'publish_spec', version: 1, spec: spec() }),
+        row('REL-1:2:1', { kind: 'publish_spec', version: 2, spec: spec([{ statement: 's', domain: 'd', target: 't' }]) }),
+        row('REL-1:3:1', { kind: 'publish_spec', version: 3, spec: spec() }, 'pending'),
+      ],
+    }));
+    expect(m.specs).toEqual([{ version: 1, properties: 0 }, { version: 2, properties: 1 }]);
   });
 });

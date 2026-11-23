@@ -20,7 +20,8 @@ export interface PromptInput {
   /** A replayed ticket's thread and linked tickets as of its start (ORC-376, `formatHistory`): what the human had beside its text. */
   history?: string;
   /** The ticket's spec (ORC-212): approved, the contract of the steps after the gate; not yet, the draft `spec_draft` rewrites. */
-  spec?: { version: number; approved: boolean; text: string };
+  /** `properties`: the file the factory names for each approved « for any input » property's test, in order (ORC-261). */
+  spec?: { version: number; approved: boolean; text: string; properties?: readonly { ts: string; py: string }[] };
   /** The answers to the `clarify` questions (ORC-210): decided by the humans, to hold the work to. */
   decisions?: readonly Pick<ClarifyAnswer, 'question' | 'answer' | 'author'>[];
   /** The repository's CLAUDE.md, AGENTS.md, .claude/CLAUDE.md (`readConventions`), injected as data. */
@@ -76,6 +77,14 @@ export function buildPrompt(p: PromptInput): string {
   }
   if (p.spec?.approved) {
     lines.push(`## Approved spec (version ${p.spec.version})`, 'The spec a designated validator approved: the contract of this ticket, which the review reads the PR against. Its acceptance criteria are the tests to write and to pass; stay within its scope.', p.spec.text, '');
+    if (p.spec.properties?.length) {
+      lines.push(
+        '## Property tests',
+        "Each « for any input » property of the approved spec gets one property test (fast-check in TypeScript or JavaScript, Hypothesis in Python), in the file the factory names for it, in the language of its target, where the repository keeps its tests. The factory freezes that file with the test files it imports, its generators.",
+        ...p.spec.properties.map((f, i) => `- Property ${i + 1}: \`${f.ts}\` (TypeScript, JavaScript) or \`${f.py}\` (Python)`),
+        '',
+      );
+    }
   } else if (p.spec) {
     lines.push(`## Spec under review (version ${p.spec.version})`, 'Your last version of the spec, not approved: write the next one from it and the feedback below.', p.spec.text, '');
   }

@@ -212,7 +212,7 @@ The `spec` job (agent, skill `factory:spec-draft`, Sonnet, effort high, the repo
 | `goal` | what the ticket delivers |
 | `out_of_scope` | what it does not do |
 | `criteria` | the acceptance criteria, each a testable example (« Given …, when …, then … »), at least one |
-| `properties` | optional « for any input » properties, each with its `statement`, input `domain` and `target` (frozen as property tests by ORC-261) |
+| `properties` | optional « for any input » properties, each with its `statement`, input `domain` and `target`: once approved, each becomes a property test, frozen ([below](#property-tests-orc-261)) |
 | `files` | the files the change touches |
 | `architecture` | its impact on the architecture |
 | `risks` | what could go wrong |
@@ -241,7 +241,7 @@ A command with no spec waiting (none yet, a ticket blocked or undelegated), on a
 
 `spec` runs after `intake` and `clarify` (ORC-395): every ticket waits for a designated validator's `/approve` before its tests and its code. A project whose entry in `factory.yml` designates no validator (`authz.validators`, empty by default) approves no spec: its tickets stop at the gate; with a lone validator, the tickets they delegate. `factory doctor` and the daemon's start warn of it (ORC-421).
 
-**Not yet**: the spec as an editable comment (ORC-139), and with it a spec edited by hand; a `knowledge.candidate` event for each `/changes` and `/reject` (ORC-258); the decisions of the scope given to `spec_draft` (ORC-254); the properties frozen as tests (ORC-261); « assumed without verification » in the PR description (ORC-195); the spec's critique (out of scope).
+**Not yet**: the spec as an editable comment (ORC-139), and with it a spec edited by hand; a `knowledge.candidate` event for each `/changes` and `/reject` (ORC-258); the decisions of the scope given to `spec_draft` (ORC-254); « assumed without verification » in the PR description (ORC-195); the spec's critique (out of scope).
 
 ## `review` step (ORC-183)
 
@@ -324,9 +324,20 @@ The `tests` step (agent, skill `factory:tests`, Sonnet, effort medium, repositor
 | no test run, or no test committed | `no_tests` | refused |
 | tests already green | `passing` | refused |
 | non-test file, committed or not | `scope` | refused |
+| an approved property without its test, in the file the factory names (ORC-261), observed without running anything | `missing_property` | refused |
 | the check could not run (git, worktree, sandbox) | `infra` | no verdict |
 
 The verdict comes back like the result of `verify`: `verify.passed` or `verify.failed`, with the `red` field carrying the cause. A verified red starts the next agent step's job (`build`'s, `dev`, in `factory/default`).
+
+### Property tests (ORC-261)
+
+A spec may carry « for any input » properties (`properties`, [above](#spec_draft-spec_check-and-the-spec_review-gate-orc-212)), optional at the MVP (measure mode): a spec without one goes through as before. Each property the validator approves becomes a property test, which samples its inputs and proves nothing: fast-check in TypeScript or JavaScript, Hypothesis in Python.
+
+- **The file is the factory's.** The `tests` step's prompt (« Property tests », that step's alone) names one file per approved property, in the language of its target, put where the repository keeps its tests: `rel-12.property-1.test.ts` (any `.test` or `.spec` JS or TS extension) or `test_rel_12_property_1.py` for property 1 of REL-12 (`src/checks/properties.ts`).
+- **The red check wants it.** An approved property whose file is neither committed by the step nor at its head already (an earlier pass's) is a `missing_property` verdict, observed before anything runs; like any verdict of the check, it is measured or blocking as the job's `red` mode says (measured in `factory/default`).
+- **It is frozen with its generators.** The freeze after `red` holds the property tests as it holds every test of the step, and with them every test file of the repository they import, then those import (relative JS and TS imports, `import()`, `require()` and `import x = require()`, not an alias of `tsconfig.json` or `package.json`; Python's relative imports, and its absolute ones looked for from the test's folder up to the root, a name imported from a package also as its submodule, with the `__init__.py` of each package on the way, and of the test's own folder and those above it, which pytest runs first): the generators they draw their inputs from, written in the step or before it. Never the code under test, which is no test file: a generator kept in a file that is no test file (`src/testing/arb.ts`) is not frozen, which is why the step's skill puts them in test files. A commit that changes a frozen generator, or the number of runs written in a frozen test, fails `factory/tests-gelés`, until a maintainer's `/refreeze`.
+
+**Not yet**: `verify` running the properties again with the factory's number of runs (1 000, `numRuns` / `max_examples`) and a seed it draws, written in the check, whatever the repository sets; the defects a property found that the examples did not, as a measure. A property is numbered by its place in the spec: a later approved version that removes or reorders one keeps the old files frozen under the new numbers.
 
 **Measurement mode.** For the first 20 tickets, the check is in measurement mode: it never blocks. An unverified red, a scope violation included, leaves in the decision the trace "red: would have blocked (<cause>), measure mode: the run goes on", and the build starts. The verdicts are in the ticket's measurements (`red` of `TicketMeasures`, ORC-235): a red that is not `verified` is what the check would have blocked.
 

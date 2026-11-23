@@ -2,22 +2,23 @@
 // factory runs them itself and reads the runner's machine report (vitest, jest, pytest, ORC-342), its text output
 // when the runner wrote none; it never takes the agent's word.
 import { randomUUID } from 'node:crypto';
-import { posix } from 'node:path';
 import { isRecord } from '../adapters/graphql-pages.js';
 import { ANSI } from './log-excerpt.js';
+import { missingProperties, propertyTestFiles } from './properties.js';
 import { isTestFile, isTestSpec, normalizePath } from './test-files.js';
-import { exportedNames, importedFrom, isPython, parse } from './ts-ast.js';
+import { exportedNames, importedFrom, isPython, parse, pyModule, tsCandidates } from './ts-ast.js';
 
 /**
  * Why the red is verified or not. Verified: an `assertion`; a `missing_module` the build will create (absent at
  * baseSha); a `missing_export` of a module that exists, the symbol absent at baseSha. Not verified: a module that
  * exists at baseSha (`module_at_base`), a package (`missing_package`: the build installs none), a compilation or
- * load error, a runtime error, no test, tests that pass, a step outside the tests (`scope`). `infra`: the check
+ * load error, a runtime error, no test, tests that pass, a step outside the tests (`scope`), an approved property left
+ * without its test (`missing_property`, ORC-261). `infra`: the check
  * could not run, no verdict on the tests.
  */
 export type RedCause =
   | 'assertion' | 'missing_module' | 'missing_export'
-  | 'module_at_base' | 'missing_package' | 'compile' | 'error' | 'no_tests' | 'passing' | 'scope' | 'infra';
+  | 'module_at_base' | 'missing_package' | 'compile' | 'error' | 'no_tests' | 'passing' | 'scope' | 'missing_property' | 'infra';
 
 export const RED_VERIFIED: ReadonlySet<RedCause> = new Set<RedCause>(['assertion', 'missing_module', 'missing_export']);
 
@@ -252,7 +253,6 @@ export async function testCommand(command: string, deps: Pick<RedDeps, 'showAtHe
   return ran(hasSeparator(call.args) ? command : `${command.trimEnd()} --`, runner);
 }
 
-const TS_EXT = ['.ts', '.tsx', '.js', '.jsx', '.mts', '.mjs', '.cts', '.cjs'];
 // ponytail: Python reads modules from the root or `src/`; other layouts read as packages, and are refused.
 const PY_ROOTS = ['', 'src/'];
 
@@ -263,15 +263,7 @@ function testOf(importer: string | undefined, tests: readonly string[]): string 
   return tests.find((t) => t === p || t.endsWith(`/${p}`) || p.endsWith(`/${t}`));
 }
 
-/** The repository paths a relative TS module imported by `test` could be. */
-function tsCandidates(module: string, test: string): string[] {
-  const path = posix.normalize(posix.join(posix.dirname(test), module));
-  // ESM TypeScript imports `./x.js` for `./x.ts`.
-  const stem = path.replace(/\.[cm]?jsx?$/, '');
-  return [path, ...TS_EXT.map((e) => stem + e), ...TS_EXT.map((e) => `${stem}/index${e}`)];
-}
-
-const pyCandidates = (module: string): string[] => PY_ROOTS.flatMap((r) => [`${r}${module.replace(/\./g, '/')}.py`, `${r}${module.replace(/\./g, '/')}/__init__.py`]);
+const pyCandidates = (module: string): string[] => PY_ROOTS.flatMap((r) => pyModule(module).map((p) => r + p));
 
 export const escape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -313,6 +305,11 @@ export interface RedDeps {
   showAtBase(path: string): Promise<string | undefined>;
   /** A test file of the step, at its head. */
   showAtHead(path: string): Promise<string | undefined>;
+  /**
+   * The approved spec's « for any input » properties (ORC-261): each needs its test, in the file the factory names, committed by
+   * this pass of the step or already at its head (`atHead`, an earlier pass's, frozen).
+   */
+  properties?: { ticketId: string; count: number; atHead: readonly string[] };
 }
 
 export interface RedResult {
@@ -340,6 +337,15 @@ export async function checkRed(repoCommand: string, deps: RedDeps): Promise<RedR
   if (outside.length > 0) return verdict('scope', `The tests step changed files that are not tests: ${[...new Set(outside)].join(', ')}.`);
   const tests = deps.changed.filter((f) => !f.deleted && isTestSpec(f.path)).map((f) => normalizePath(f.path));
   if (tests.length === 0) return verdict('no_tests', 'The tests step committed no test.');
+  const p = deps.properties;
+  const owed = p ? missingProperties(p.ticketId, p.count, [...tests, ...p.atHead]) : [];
+  if (p && owed.length) {
+    const named = owed.map((n) => {
+      const { ts, py } = propertyTestFiles(p.ticketId, n);
+      return `property ${n}: \`${ts}\` or \`${py}\``;
+    });
+    return verdict('missing_property', `The tests step committed no test for an approved property, in the file the factory names: ${named.join('; ')}.`);
+  }
 
   const { line, runner } = await testCommand(repoCommand, deps);
   const ran = `${line} ${tests.map(quote).join(' ')}`;
@@ -419,7 +425,7 @@ async function judge(m: Missing, tests: readonly string[], deps: RedDeps): Promi
   return hasSymbol(existing, (await deps.showAtBase(existing)) ?? '', m.symbol) ? 'compile' : 'missing_export';
 }
 
-const DETAIL: Record<Exclude<RedCause, 'scope' | 'infra'>, string> = {
+const DETAIL: Record<Exclude<RedCause, 'scope' | 'missing_property' | 'infra'>, string> = {
   assertion: 'The tests fail on an assertion: red verified.',
   missing_module: 'The tests fail on a module the ticket has to create: red verified',
   missing_export: 'The tests fail on what an existing module does not export yet: red verified',

@@ -28,6 +28,8 @@ export interface Overview {
   ciPerMerged: { mean: number | null; leftOut: number };
   /** Verdicts of the `red` check (ORC-123) of the delivered tickets: verified, and what it would have blocked. */
   red: { verified: number; wouldHaveBlocked: number };
+  /** Delivered tickets with a published spec, and those whose last version had « for any input » properties (ORC-261). */
+  properties: { specs: number; withProperties: number };
   /** The human messages of the period: sign of life over all, answer over the questions and commands. */
   messages: { count: number; medianSignOfLifeMs: number | null; withoutSignOfLife: number; questions: number; medianAnswerMs: number | null; unanswered: number };
   /** The state of reference over 90 days the measures above face (ORC-230): null until `factory baseline` computes one. */
@@ -74,6 +76,7 @@ export function overview(
   const answers = questions.flatMap((m) => (m.answerMs === null ? [] : [m.answerMs]));
   const red = delivered.flatMap((m) => m.red);
   const reverted = delivered.filter((m) => m.revertedWithin14Days === true);
+  const lastSpecs = delivered.flatMap((m) => m.specs.slice(-1));
   return {
     ...period,
     unmeasured,
@@ -85,6 +88,7 @@ export function overview(
     reverted: { yes: reverted.length, known: reverted.length + delivered.filter((m) => m.revertedWithin14Days === false && m.revertWindowEndsAt !== null && m.revertWindowEndsAt <= period.until).length },
     ciPerMerged: meanOf(delivered, (m) => m.ciCost?.durationMs ?? null),
     red: { verified: red.filter((r) => r.verified).length, wouldHaveBlocked: red.filter((r) => !r.verified).length },
+    properties: { specs: lastSpecs.length, withProperties: lastSpecs.filter((s) => s.properties > 0).length },
     messages: {
       count: messages.length,
       medianSignOfLifeMs: median(signs),
