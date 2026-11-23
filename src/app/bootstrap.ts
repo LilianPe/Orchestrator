@@ -38,7 +38,7 @@ import { claudeAccountReader, disabledControls, readCapsOf, specPublicationOf, s
 import { loadSealedFactoryYml } from '../config/server-secrets.js';
 import { startRefusals, type StartChecks } from '../config/start-refusals.js';
 import { ignoredWorkflowWarning } from '../config/repo-config.js';
-import { cloneAuth, httpsGithub, projectGithub } from './project-github.js';
+import { cloneAuth, httpsGithub } from './project-github.js';
 import { ignoredWorkflowFilesOn, makeDryRunFiles, makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint } from './repo-variables.js';
 import { currentProjectIds, daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens, sealSecretsAtRest, validatorWarnings } from '../config/instance.js';
 import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
@@ -161,23 +161,19 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const workflow = defaultWorkflow(settings);
   // The replay of closed tickets (ORC-231): driven by the fantome's own steps, with the instance's step settings.
   const ghost = presetWorkflow(fantome, settings);
-  // Each project's repository on GitHub, resolved once (ORC-478): a project whose origin is not on GitHub stops the start here.
-  const [origins, knowledgeGithub] = await Promise.all([
-    Promise.all(instance.projects.map((p) => projectGithub({ repoPath: p.repoPath, teamKey: p.linearTeamKey, repos: yml?.repos }).catch((err: Error) => {
-      throw new Error(`${p.id}: ${err.message}`);
-    }))),
-    instance.knowledge ? httpsGithub(instance.knowledge.repoPath) : undefined,
-  ]);
+  // The knowledge base's clone, read by its path until ORC-471 part 4.
+  const knowledgeGithub = instance.knowledge ? await httpsGithub(instance.knowledge.repoPath) : undefined;
   // Without the App, no forge at all (ORC-181): every read says the App is missing, and nothing is published.
   const appForge = githubApp ? new GitHubAppForge({ ...githubApp, log }) : undefined;
   // The daemon's own git reads a private repository with the App's token (ORC-442); without the App, with the machine's credentials.
   const gitAuth = appForge?.fetchEnv.bind(appForge);
   // The daemon's own mirror of each repository (ORC-479), its git source in place of the operator's clone.
   const mirrors = new RepoMirrors({ root: paths.repos, log, ...(gitAuth ? { auth: gitAuth } : {}), ...(o.githubUrl ? { url: o.githubUrl } : {}) });
-  const projects: ProjectRuntime[] = instance.projects.map((p, i) => ({
+  // Each project's repository on GitHub, as its entry in factory.yml names it (ORC-480): no clone is read for it.
+  const projects: ProjectRuntime[] = instance.projects.map((p) => ({
     id: p.id,
-    mirror: mirrors.path(origins[i]!.github),
-    github: origins[i]!.github,
+    mirror: mirrors.path(p.github),
+    github: p.github,
     teamKey: p.linearTeamKey,
     // The replay of closed tickets (ORC-231): nothing of the project leaves the factory.
     workflow: isFantome(p) ? ghost : workflow,
@@ -313,9 +309,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     // again past their TTL, and the designations of factory.yml.
     const roles = new CachedRoleResolver({
       projects: (id) => {
-        const i = instance.projects.findIndex((x) => x.id === id);
-        const p = instance.projects[i];
-        return p && { teamKey: p.linearTeamKey, github: projects[i]!.github, maintainers: [], validators: [], githubLogins: {}, ...p.authz };
+        const p = instance.projects.find((x) => x.id === id);
+        return p && { teamKey: p.linearTeamKey, github: p.github, maintainers: [], validators: [], githubLogins: {}, ...p.authz };
       },
       team: {
         teamMembers: (teamKey) => (linearTracker ? linearTracker.teamMembers(teamKey) : Promise.reject(new Error('Linear not connected'))),

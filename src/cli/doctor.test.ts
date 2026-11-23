@@ -92,6 +92,11 @@ const podman = (info: object = PODMAN_INFO) => checkHost({ FACTORY_CONTAINER_CLI
 /** A host as the factory needs it: its engine on cgroup v2, able to limit processes, memory and CPUs. */
 const goodHost: HostReport = await docker();
 
+/** git in a checkout whose origin is the GitHub repository `github` (ORC-480): every other command fails. */
+function originOn(github: string): Exec {
+  return async (cmd, args) => (cmd === 'git' && args.includes('get-url') ? { stdout: `https://github.com/${github}.git\n`, stderr: '', code: 0 } : { stdout: '', stderr: 'fatal', code: 128 });
+}
+
 function workflow(content: string, path = '.github/workflows/ci.yml'): WorkflowSource {
   return { path, content };
 }
@@ -863,13 +868,13 @@ jobs:
   describe("the statuses factory.yml names that the Linear team lacks (ORC-382)", () => {
     const homeWith = (yml = '') => {
       const home = tempHome();
-      writeFileSync(join(home, 'factory.yml'), `projects:\n  - id: app\n    repo_path: /repo\n    linear_team_key: APP\n${yml}`);
+      writeFileSync(join(home, 'factory.yml'), `repos:\n  - id: app\n    github: acme/app\n    linear_team: APP\n${yml}`);
       return home;
     };
     const ORC_170 = ['Todo', 'In Progress', 'AI Review', 'Human Review', 'Done', 'Canceled'];
     const cli = async (home: string, team: string[] | Error = ORC_170) => {
       const lines: string[] = [];
-      await runDoctorCommand({ repoPath: '/repo', home, env: {}, out: (line) => lines.push(line), teamStatuses: async () => (team instanceof Error ? Promise.reject(team) : team) });
+      await runDoctorCommand({ repoPath: '/repo', home, env: {}, out: (line) => lines.push(line), exec: originOn('acme/app'), teamStatuses: async () => (team instanceof Error ? Promise.reject(team) : team) });
       return lines.filter((l) => /status/i.test(l));
     };
 
@@ -881,7 +886,7 @@ jobs:
 
     it('refuses statuses the daemon would refuse at load, exit 1', async () => {
       const lines: string[] = [];
-      const code = await runDoctorCommand({ repoPath: '/repo', home: homeWith('statuses:\n  build: Todo\n'), env: {}, out: (line) => lines.push(line), teamStatuses: async () => ORC_170 });
+      const code = await runDoctorCommand({ repoPath: '/repo', home: homeWith('statuses:\n  build: Todo\n'), env: {}, out: (line) => lines.push(line), exec: originOn('acme/app'), teamStatuses: async () => ORC_170 });
       expect(code).toBe(1);
       expect(lines).toContainEqual(expect.stringMatching(/« Todo » would name both todo and dev/));
     });
@@ -901,7 +906,7 @@ jobs:
 
     it('without a Linear connection, says the statuses are not checked', async () => {
       const lines: string[] = [];
-      await runDoctorCommand({ repoPath: '/repo', home: homeWith(), env: {}, out: (line) => lines.push(line) });
+      await runDoctorCommand({ repoPath: '/repo', home: homeWith(), env: {}, out: (line) => lines.push(line), exec: originOn('acme/app') });
       expect(lines).toContain('Linear statuses not checked: Linear not connected: run `factory up`, then connect Linear.');
     });
   });
@@ -911,15 +916,16 @@ jobs:
       const home = tempHome();
       const authz = validators ? `\n    authz:\n      validators: ${JSON.stringify(validators)}` : '';
       const ghost = preset ? `\n    preset: ${preset}` : '';
-      writeFileSync(join(home, 'factory.yml'), `projects:\n  - id: app\n    repo_path: /repo\n    linear_team_key: APP${authz}${ghost}\n`);
+      writeFileSync(join(home, 'factory.yml'), `repos:\n  - id: app\n    github: Acme/App\n    linear_team: APP${authz}${ghost}\n`);
       return home;
     };
-    const cli = async (home: string, repoPath = '/repo') => {
+    // The checkout's origin names the entry's repository, whatever its case (ORC-480).
+    const cli = async (home: string, github = 'acme/app') => {
       const lines: string[] = [];
-      await runDoctorCommand({ repoPath, home, env: {}, out: (line) => lines.push(line) });
+      await runDoctorCommand({ repoPath: '/repo', home, env: {}, out: (line) => lines.push(line), exec: originOn(github) });
       return lines;
     };
-    const warned = async (home: string, repoPath?: string) => (await cli(home, repoPath)).filter((l) => l.includes('authz.validators'));
+    const warned = async (home: string, github?: string) => (await cli(home, github)).filter((l) => l.includes('authz.validators'));
 
     it('warns, naming authz.validators, of the instance before it needs the GitHub App, without validators', async () => {
       const lines = await cli(homeWith());
@@ -938,7 +944,7 @@ jobs:
     });
 
     it("says nothing of another repository's project", async () => {
-      expect(await warned(homeWith(), '/other')).toEqual([]);
+      expect(await warned(homeWith(), 'acme/other')).toEqual([]);
     });
 
     it('says nothing with two validators, nor of the replay of closed tickets, which approves its own specs', async () => {
@@ -963,7 +969,7 @@ jobs:
   describe('the Smee relay outside the development mode (ORC-446)', () => {
     const homeWith = (extra: string) => {
       const home = tempHome();
-      writeFileSync(join(home, 'factory.yml'), `relay:\n  kind: smee\n  url: https://smee.io/abc\n${extra}projects:\n  - id: app\n    repo_path: /repo\n    linear_team_key: APP\n`);
+      writeFileSync(join(home, 'factory.yml'), `relay:\n  kind: smee\n  url: https://smee.io/abc\n${extra}repos:\n  - id: app\n    github: acme/app\n    linear_team: APP\n`);
       return home;
     };
     const cli = async (home: string, json = false) => {
@@ -1206,6 +1212,14 @@ describe('doctor --json on a refusal of the instance configuration (ORC-449)', (
     expect(code).toBe(1);
     expect(lines).toHaveLength(1);
     expect(JSON.parse(lines[0]!)).toMatchObject({ repoPath: '/repo', accepted: false, error: expect.stringMatching(/^invalid factory\.yml:\n- port/), visualProof: { available: false } });
+  });
+
+  it('refuses a factory.yml that still lists projects, saying how to rewrite it into repos, as the start refuses it (ORC-480)', async () => {
+    const home = tempHome();
+    writeFileSync(join(home, 'factory.yml'), 'projects:\n  - { id: app, repo_path: /repo, linear_team_key: APP }\n');
+    const lines: string[] = [];
+    expect(await runDoctorCommand({ repoPath: '/repo', home, env: {}, json: true, out: (line) => lines.push(line), exec: originOn('acme/app') })).toBe(1);
+    expect(JSON.parse(lines[0]!)).toMatchObject({ accepted: false, error: expect.stringMatching(/^invalid factory\.yml:\n- projects: replaced by repos \(ORC-480\), one entry per repository/) });
   });
 
   it('keeps the warnings said before the refusal, as the text says them', async () => {

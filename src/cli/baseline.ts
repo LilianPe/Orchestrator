@@ -1,6 +1,5 @@
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
-import { projectGithub } from '../app/project-github.js';
 import { repoRoot } from '../app/root.js';
 import { FactoryYmlError } from '../config/factory-yml.js';
 import { GITHUB_APP_SECRETS, LINEAR_SECRETS, loadSealedFactoryYml } from '../config/server-secrets.js';
@@ -116,20 +115,13 @@ export async function runBaselineCommand(home: string, args: readonly string[]):
     console.log(forge);
     return 1;
   }
-  let github;
-  try {
-    ({ github } = await projectGithub({ repoPath: project.repoPath, teamKey: project.linearTeamKey, repos: yml?.repos }));
-  } catch (err) {
-    console.log(`${project.id}: ${(err as Error).message}`);
-    return 1;
-  }
   // The daemon migrates the schema; this only writes rows.
   const store = await openStore({ env: process.env, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
   try {
     return await runBaseline({
       store,
       sources: { completedIssues: (...a) => tracker.completedIssues(...a), mergedPrs: (...a) => forge.mergedPrs(...a) },
-      project: { id: project.id, github, teamKey: project.linearTeamKey },
+      project: { id: project.id, github: project.github, teamKey: project.linearTeamKey },
       start,
       replace: !!values.replace,
       now: Date.now(),

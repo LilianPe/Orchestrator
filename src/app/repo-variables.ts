@@ -10,7 +10,6 @@ import { zFields } from '../core/clean-verify.js';
 import { fingerprintFiles, type FingerprintFiles } from '../core/dry-run.js';
 import { START_FILES } from '../knowledge/preview-recipe.js';
 import { canonical } from '../runtime/workflow-version.js';
-import { repoEntry } from './project-github.js';
 import { isTable, parseToml, type TomlTable, type TomlValue } from '../checks/toml.js';
 
 /**
@@ -159,8 +158,8 @@ export function pyprojectStart(text: string): string {
 const START_PART: Partial<Record<string, (text: string) => string>> = { 'package.json': packageScripts, 'pyproject.toml': pyprojectStart };
 
 /**
- * Where `verify`, the dry run and the start recipe read a project's forge (ORC-151): the URL of its repository on GitHub as the start
- * resolved it (`projectGithub`, ORC-478), never what a clone's config or an agent says. A replayed ticket's (ORC-376) is its clone at
+ * Where `verify`, the dry run and the start recipe read a project's forge (ORC-151): the URL of its repository on GitHub as its entry in
+ * factory.yml names it (ORC-478, ORC-480), never what a clone's config or an agent says. A replayed ticket's (ORC-376) is its clone at
  * the start, which stands for the repository: never the forge's default branch, which holds the human's PR and all that came after.
  */
 export function makeOriginUrl(): (project: { github: string; mirror: string; replayed?: unknown }) => Promise<string> {
@@ -178,13 +177,12 @@ export async function ignoredWorkflowFilesOn(mirror: string, exec: Exec = execCm
 }
 
 /**
- * The variables of a project's repository at each launch (ORC-211): its entry in `factory.yml`, found by its team and
- * its repository on GitHub (`github`, ORC-478), and the names `config` declares, as the launch (`makeRepoConfig`) or `verify`
- * (ORC-151) read it.
+ * The variables of a project's repository at each launch (ORC-211): the `env` and `secrets` of its entry in `factory.yml`, by its id
+ * (ORC-480), and the names `config` declares, as the launch (`makeRepoConfig`) or `verify` (ORC-151) read it.
  */
-export function makeRepoVariables(o: { yml: FactoryYml | undefined; log: (message: string) => void }): (project: { id: string; github: string; teamKey: string }, config: RepoConfig) => Promise<RepoVariables> {
-  return async ({ id, github, teamKey }, config) => {
-    const server = repoEntry(o.yml?.repos, teamKey, github);
+export function makeRepoVariables(o: { yml: FactoryYml | undefined; log: (message: string) => void }): (project: { id: string }, config: RepoConfig) => Promise<RepoVariables> {
+  return async ({ id }, config) => {
+    const server = o.yml?.repos?.find((r) => r.id === id);
     if (!server) return NO_REPO_VARIABLES;
     const vars = repoVariables(config, server);
     if (vars.missing.length) o.log(`${id}: variables declared by the repository, with no value in factory.yml, left out of the runner: ${vars.missing.join(', ')}`);

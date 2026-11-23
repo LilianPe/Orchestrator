@@ -1,9 +1,9 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { Document, parse, parseDocument } from 'yaml';
-import { FANTOME, FactoryYmlError, factoryYmlText, parseInstanceKeys, type FactoryYml, type ProjectConfig, type Relay } from './factory-yml.js';
+import { join } from 'node:path';
+import { Document, isMap, isSeq, parse, parseDocument, type YAMLMap } from 'yaml';
+import { FANTOME, FactoryYmlError, factoryYmlText, parseInstanceKeys, REPO_DAEMON_KEYS, type FactoryYml, type ProjectConfig, type Relay } from './factory-yml.js';
 import { isSealed, LINEAR_NEEDS_SECRETS_KEY, openSecretsFile, sealSecretsFile } from './secrets-file.js';
 import { validatorsNeeded } from '../core/authz.js';
 
@@ -85,7 +85,7 @@ export function effectiveInstance(yml: FactoryYml | undefined): InstanceConfig {
     port: yml?.port ?? 4100,
     host: yml?.host ?? '127.0.0.1',
     relay: yml?.relay ?? { kind: 'none' },
-    projects: yml?.projects ?? [],
+    projects: yml?.repos ?? [],
     ...(yml?.publicUrl ? { publicUrl: yml.publicUrl } : {}),
     ...(yml?.dev !== undefined ? { dev: yml.dev } : {}),
     ...(yml?.knowledge ? { knowledge: yml.knowledge } : {}),
@@ -106,7 +106,7 @@ export function loadInstance(home: string): InstanceConfig {
 /**
  * The ids of factory.yml's projects as the file is now (ORC-454): one `factory init` added while the daemon runs included, one
  * removed left out. `fallback` when the file is missing, empty (an editor caught between its truncation and its write), not a
- * YAML object or does not read, which the daemon would refuse; a `projects` left out is no project, as the daemon reads it.
+ * YAML object or does not read, which the daemon would refuse; a `repos` left out is no project, as the daemon reads it (a file still written with `projects`, refused, gives `fallback`, ORC-480).
  */
 export function currentProjectIds(home: string, fallback: readonly string[]): readonly string[] {
   try {
@@ -119,12 +119,12 @@ export function currentProjectIds(home: string, fallback: readonly string[]): re
   }
 }
 
-/** A project as factory.yml writes it. */
-function projectYml({ id, repoPath, linearTeamKey, authz, effects, preset }: ProjectConfig): Record<string, unknown> {
+/** A repository as factory.yml writes it (ORC-480), without the daemon's keys (`repoNodes`). */
+function projectYml({ id, github, linearTeamKey, authz, effects, preset }: ProjectConfig): Record<string, unknown> {
   return {
     id,
-    repo_path: repoPath,
-    linear_team_key: linearTeamKey,
+    github,
+    linear_team: linearTeamKey,
     ...(authz ? { authz: { maintainers: authz.maintainers, validators: authz.validators, github_logins: authz.githubLogins } } : {}),
     ...(effects ? { effects } : {}),
     ...(preset ? { preset } : {}),
@@ -132,10 +132,21 @@ function projectYml({ id, repoPath, linearTeamKey, authz, effects, preset }: Pro
 }
 
 /**
+ * The repositories as factory.yml writes them (ORC-480), each with the daemon's keys (`env`, `secrets`) its entry of the same id holds
+ * in the file, as their nodes: written as they are, comments included, references never replaced by a value read from them.
+ */
+function repoNodes(doc: Document, projects: readonly ProjectConfig[]): unknown {
+  const old = doc.get('repos', true);
+  const kept = new Map((isSeq(old) ? old.items : []).filter(isMap).map((entry) => [entry.get('id'), entry]));
+  const daemonKeys = (entry: YAMLMap | undefined) => Object.fromEntries(REPO_DAEMON_KEYS.map((k) => [k, entry?.get(k, true)]).filter(([, v]) => v != null));
+  return doc.createNode(projects.map((p) => ({ ...projectYml(p), ...daemonKeys(kept.get(p.id)) })));
+}
+
+/**
  * Writes the instance keys into `<home>/factory.yml` (ORC-199), for `factory init`: only those whose value, as the daemon reads
  * it, changed, so the rest of the file and the comments of what did not change stay as they are; a default the file leaves out is
  * never written. `base` is the rest of a file written where there is none. Never its GitHub App, whose key is a reference only a
- * person writes. Validated as the daemon reads it: a value it would refuse is never written. Replaced whole by a rename: the
+ * person writes, nor a repository's `env` and `secrets`, kept as the file writes them (ORC-480). Validated as the daemon reads it: a value it would refuse is never written. Replaced whole by a rename: the
  * daemon, which reads its Claude account there at each launch (`claudeAccountReader`), never reads it half-written.
  * `keyFile`: the `secrets_key` `factory init --dev` drew (ORC-470), declared with its `file` source; a reference, never its value.
  */
@@ -150,7 +161,7 @@ export function saveInstance(home: string, cfg: Omit<InstanceConfig, 'github'>, 
     ['publicUrl', 'public_url', cfg.publicUrl],
     ['dev', 'dev', cfg.dev],
     ['relay', 'relay', cfg.relay],
-    ['projects', 'projects', cfg.projects.map(projectYml)],
+    ['projects', 'repos', repoNodes(doc, cfg.projects)],
     ['knowledge', 'knowledge', cfg.knowledge && { repo_path: cfg.knowledge.repoPath }],
   ];
   for (const [key, yml, value] of keys) {
@@ -186,7 +197,7 @@ const OLD_INSTANCE_FILES = ['config.yaml', 'run-settings.json', 'logs']; // tran
 export function oldInstanceFileWarnings(home: string): string[] {
   return OLD_INSTANCE_FILES.filter((name) => existsSync(join(home, name))).map((name) =>
     name === 'config.yaml'
-      ? "config.yaml: left from before factory.yml, not read (ORC-199): write what it declares in factory.yml (port, host, public_url, dev, relay, projects, knowledge, github), its keys in snake_case (publicUrl is public_url, repoPath repo_path…), then delete it; it may hold the GitHub App's key in clear"
+      ? "config.yaml: left from before factory.yml, not read (ORC-199): write what it declares in factory.yml (port, host, public_url, dev, relay, knowledge, github), its keys in snake_case (publicUrl is public_url…), and each of its projects as an entry of repos (docs/configuration.md), then delete it; it may hold the GitHub App's key in clear"
       : `${name}: left from before ORC-199, not read: delete it`,
   );
 }
@@ -230,12 +241,6 @@ export function secretValues(s: Secrets): string[] {
 export function isLoopbackHost(host: string): boolean {
   const h = host.replace(/^\[|\]$/g, '').toLowerCase();
   return h === 'localhost' || h === '::1' || /^127\.\d+\.\d+\.\d+$/.test(h);
-}
-
-/** Whether two paths name one directory: a project's `repoPath` an older init wrote in another form (`C:/x`, `x/`) is the same repo. */
-export function samePath(a: string, b: string): boolean {
-  const norm = (p: string) => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p));
-  return norm(a) === norm(b);
 }
 
 /**

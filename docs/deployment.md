@@ -77,14 +77,14 @@ Both examples take `127.0.0.1:4100`: the port of `FACTORY_LOOPBACK_PORT` if it i
 The engine reads a mount's paths **on the host**, not in the `factoryd` container. Three consequences:
 
 - `$FACTORY_DIR` is an absolute path, mounted at the same place in the container.
-- The paths in `factory.yml` are those paths (`repo_path: /srv/factory/repos/mon-app`, written in full).
+- The paths in `factory.yml` are those paths (`knowledge.repo_path: /srv/factory/repos/knowledge`, written in full). A target repository has no path there: its entry names it on GitHub (`github`), and the daemon mirrors it under `data/repos` (ORC-479, ORC-480).
 - The factory's installation, which each runner mounts read-only, only exists in the image. At startup, `docker/entrypoint.sh` copies it into `$FACTORY_DIR/install/<fingerprint>`, once per image, and launches the daemon from that copy.
 
 | Directory | Contents | Mounted by |
 |---|---|---|
 | `data` | `FACTORY_HOME`: `factory.yml`, `secrets.json`, transcripts, worktrees | `factoryd` |
 | `data/network` | Run sockets and logs, control socket | `factoryd`, `proxy` |
-| `repos` | The repository clones, over HTTPS | `factoryd` |
+| `repos` | The knowledge base's clone, over HTTPS, until it has a mirror of its own (ORC-481); the target repositories are the daemon's mirrors, in `data/repos` | `factoryd` |
 | `install` | The copy of the installation | `factoryd` |
 | `egress-ca` | The egress authority, including its key | `proxy` |
 
@@ -99,8 +99,8 @@ No image receives a secret at build time. Isolation test no. 7 looks for tokens 
 ## Current limits
 
 - **Publishing**: the factory pushes and opens the PR, with the GitHub App (ORC-125, [`github.md`](github.md#publishing)). Without it, a verified ticket is blocked: configure `github.*` or `GH_APP_*`. An agent in a runner has neither `gh` nor a token, and the proxy refuses `git push`. `factoryd` has neither either since ORC-181: the App reads the PRs.
-- **`factoryd`'s own `git fetch`** (ORC-442): the image gives git no credential of its own (the GitHub CLI's credential helper went with ORC-181). A private repository's clone under `repos/`, and the knowledge base's, are read with the App's installation token, as the push is, when their `origin` is an `https://github.com/` URL the App is installed on: no SSH key nor credential helper is needed in the container. An `origin` over SSH, or a repository the App is not installed on, is still read with whatever credential the container's git finds; with none, a launch is refused with `the forge could not be read` ([`github.md`](github.md#the-daemons-own-git)).
-- **`verify` no longer runs in `factoryd`** (ORC-151): its commands go into a fresh runner, on a clone, at network level `none`. Under compose, `FACTORY_CONTAINER_CLI` is set: a failed engine gives a ticket blocked for infrastructure reasons (`verify.errored`), never a fallback to `factoryd`. **`factoryd`'s `git`, next to the socket, reads nothing an agent wrote** (ORC-317): each agent has its own repository, and the git directory of `repo_path` is never mounted.
+- **`factoryd`'s own `git fetch`** (ORC-442): the image gives git no credential of its own (the GitHub CLI's credential helper went with ORC-181). A repository's mirror under `data/repos/` is fetched with the App's installation token, as the push is, and so is the knowledge base's clone under `repos/` when its `origin` is an `https://github.com/` URL the App is installed on: no SSH key nor credential helper is needed in the container. A knowledge base's `origin` over SSH, or a repository the App is not installed on, is still read with whatever credential the container's git finds; with none, a launch is refused with `the forge could not be read` ([`github.md`](github.md#the-daemons-own-git)).
+- **`verify` no longer runs in `factoryd`** (ORC-151): its commands go into a fresh runner, on a clone, at network level `none`. Under compose, `FACTORY_CONTAINER_CLI` is set: a failed engine gives a ticket blocked for infrastructure reasons (`verify.errored`), never a fallback to `factoryd`. **`factoryd`'s `git`, next to the socket, reads nothing an agent wrote** (ORC-317): each agent has its own repository, and the daemon's mirror is never mounted.
 
 ## Variables
 
@@ -138,7 +138,7 @@ On the server, with the user's rootless engine running:
    mkdir -p "$FACTORY_DIR"/data/network "$FACTORY_DIR"/repos "$FACTORY_DIR"/install "$FACTORY_DIR"/egress-ca
    ```
 
-2. Clone the repositories into `repos/` (over HTTPS), create the Linear application with URLs based on `public_url` ([`linear.md`](linear.md)), and write `data/secrets.json` (`clientId`, `clientSecret`, `webhookSecret`, format: [`configuration.md`](configuration.md#secretsjson)) and `data/factory.yml`:
+2. Clone the knowledge base, if you use one, into `repos/` (over HTTPS; the target repositories need no clone: the daemon mirrors each one its entry names), create the Linear application with URLs based on `public_url` ([`linear.md`](linear.md)), and write `data/secrets.json` (`clientId`, `clientSecret`, `webhookSecret`, format: [`configuration.md`](configuration.md#secretsjson)) and `data/factory.yml`:
 
    ```yaml
    # data/factory.yml, with FACTORY_DIR=/srv/factory
@@ -146,8 +146,8 @@ On the server, with the user's rootless engine running:
    port: 4100
    public_url: https://usine.exemple.fr
    relay: { kind: none }
-   projects:
-     - { id: mon-app, repo_path: /srv/factory/repos/mon-app, linear_team_key: APP }
+   repos:
+     - { id: mon-app, github: moi/mon-app, linear_team: APP }
    # one ticket at a time to start with
    concurrency: 1
    # who may sign in to the dashboard with GitHub (ORC-399): logins, or an org, or a team

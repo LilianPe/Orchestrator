@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, renameSync, symlinkSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { FactoryYmlError, type FactoryYml } from '../config/factory-yml.js';
+import { FactoryYmlError, loadFactoryLimits, type FactoryYml } from '../config/factory-yml.js';
 import { factoryDefault } from '../presets/factory-default.js';
 import { isAgentStep } from '../presets/preset.js';
 import { stepTools } from '../presets/tools.js';
@@ -211,6 +211,14 @@ describe('factory validate: the worst case of the preset (ORC-216)', () => {
     const code = runValidateCommand({ repoPath: repo(), out: (l) => out.push(l), factoryYml: () => { throw new FactoryYmlError(['budgets.per_ticket_tokens: a positive integer is expected']); } });
     expect(code).toBe(1);
     expect(out.slice(1)).toEqual(['factory.yml refused:', '- budgets.per_ticket_tokens: a positive integer is expected']);
+  });
+
+  it('refuses a factory.yml that still lists projects, as it reads it, saying how to rewrite it into repos (ORC-480)', () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-validate-home-'));
+    writeFileSync(join(home, 'factory.yml'), 'budgets: { per_step_tokens: off, per_ticket_tokens: 1000 }\nprojects:\n  - { id: app, repo_path: /repo, linear_team_key: APP }\n');
+    const out: string[] = [];
+    expect(runValidateCommand({ repoPath: repo(), out: (l) => out.push(l), factoryYml: () => loadFactoryLimits(home) })).toBe(1);
+    expect(out.slice(1)).toEqual(['factory.yml refused:', expect.stringMatching(/^- projects: replaced by repos \(ORC-480\), one entry per repository/)]);
   });
 
   it('refuses a factory.yml it cannot read, as unreadable, not a crash', () => {

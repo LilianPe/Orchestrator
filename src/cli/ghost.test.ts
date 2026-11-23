@@ -38,7 +38,7 @@ function withGhost(o: { sandboxes?: boolean } = {}) {
     user: 'armand',
     newId: () => `g${++ids}`,
     dir,
-    projects: [{ id: 'ghost', repoPath: '/repo', fantome: true }, { id: 'live', repoPath: '/repo', fantome: false }],
+    projects: [{ id: 'ghost', github: 'acme/app', fantome: true }, { id: 'live', github: 'acme/app', fantome: false }],
     // What the daemon last said of its runs (ORC-376): with sandboxes, unless a test says otherwise.
     sandboxes: async () => ('sandboxes' in o ? o.sandboxes : true),
     humanPr: async (_repo, n) => PRS[n] ?? Promise.reject(new Error(`no PR #${n}`)),

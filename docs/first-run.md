@@ -10,7 +10,7 @@ Nothing below can be skipped for a real run: without rootless Podman and the run
 
 | # | What | How | Where the value goes |
 |---|---|---|---|
-| 1 | **The pilot repository**, cloned locally, with `origin` on GitHub and `origin/HEAD` set | ORC-137 chose two pilots: `Intersektion/intersektion-platform` (the product repository, the first 20 real tickets) and `LilianPe/Orchestrator` (dogfooding: run the factory from a pinned commit, never from the branch it changes). For a first run, the one whose tests you know. `git clone` sets `origin/HEAD`; on an older clone, `git remote set-head origin --auto`. | `factory.yml`, `projects[].repo_path` (written by `factory init`) |
+| 1 | **The pilot repository**, cloned locally, with `origin` on GitHub and `origin/HEAD` set | ORC-137 chose two pilots: `Intersektion/intersektion-platform` (the product repository, the first 20 real tickets) and `LilianPe/Orchestrator` (dogfooding: run the factory from a pinned commit, never from the branch it changes). For a first run, the one whose tests you know. `git clone` sets `origin/HEAD`; on an older clone, `git remote set-head origin --auto`. The clone is where you run `factory init`, `factory validate` and `factory doctor`: the daemon never reads it, it fetches the repository from GitHub into a mirror of its own (ORC-479). | `factory.yml`, `repos[].github` (`<owner>/<name>`, written by `factory init` from the clone's `origin`) |
 | 2 | **`.factory/config.yml` with `commands.test`**, merged on the default branch | `factory init` proposes it (step 2); commit it through a normal PR. Without `commands.test` every ticket blocks at the tests step. | the repository, default branch |
 | 3 | **Branch protection** on the default branch: a ruleset with *Require a pull request before merging* that the App cannot bypass | GitHub → repository → Settings → Rules → Rulesets ([`github.md`](github.md#branch-protection-required-by-factory-doctor)). `factory doctor` refuses without it. | GitHub |
 | 4 | **A test GitHub App** with the permissions of [`github-app-manifest.json`](github-app-manifest.json) (Contents, Pull requests, Checks write; Commit statuses, Actions, Metadata read), **its private key**, and **installed on the pilot repository** | `factory init` prints the steps, with the permissions (step 2); details in [`github.md`, "Creating the App"](github.md#creating-the-app). Locally, leave its webhook disabled: the factory reads the PRs at its reconciliation, every 5 minutes. Keep the `.pem` outside the repository, mode `0600`. | `factory.yml`, written by `factory init`: `github: { app_id: env:GH_APP_ID, private_key: env:GH_APP_KEY }`, with `GH_APP_ID` (the App ID) and `GH_APP_KEY` (the `.pem` path) in the daemon's environment. |
@@ -20,8 +20,8 @@ Nothing below can be skipped for a real run: without rootless Podman and the run
 | 8 | **Rootless Podman on Linux, cgroup v2**, with the systemd cgroup manager and the `cpu`, `memory` and `pids` controllers delegated to your user | `sudo loginctl enable-linger <user>`; check with `podman info --format json` (`host.cgroupVersion: v2`, `host.cgroupManager: systemd`, `host.security.rootless: true`). On Windows, inside WSL2 only: the sandboxes need a Linux daemon. `factory doctor` checks all of it (step 3). | `FACTORY_CONTAINER_CLI=podman` in the daemon's environment |
 | 9 | **The runner image**, built from this repository | `podman build -f docker/runner.Dockerfile -t localhost/factory-runner docker` | `FACTORY_RUNNER_IMAGE=localhost/factory-runner` |
 | 10 | **Postgres** | The only store (ORC-178): without the URL the daemon does not start. A database of its own (never the test suites' one). | `FACTORY_DATABASE_URL=postgres://user:password@host:5432/database` |
-| 11 | **Who validates the spec**: at least two Linear users | Every ticket waits for `/approve` from a designated validator, and never from the person who delegated it. With a lone validator, someone else must delegate; with two validators, either can delegate and the other approves. Linear user ids (UUIDs): `query { users { nodes { id name } } }` in Linear's GraphQL explorer. | `factory.yml`: `projects[].authz.validators` |
-| 12 | **Who may delegate**: each delegator's GitHub login, with write access to the pilot repository | The trigger needs Linear team membership **and** GitHub write access, read through the App on the login you map ([`linear.md`](linear.md#authorizations-who-can-do-what)). Without a mapping, the delegation is refused. | `factory.yml`: `projects[].authz.github_logins` (Linear id → GitHub login) |
+| 11 | **Who validates the spec**: at least two Linear users | Every ticket waits for `/approve` from a designated validator, and never from the person who delegated it. With a lone validator, someone else must delegate; with two validators, either can delegate and the other approves. Linear user ids (UUIDs): `query { users { nodes { id name } } }` in Linear's GraphQL explorer. | `factory.yml`: `repos[].authz.validators` |
+| 12 | **Who may delegate**: each delegator's GitHub login, with write access to the pilot repository | The trigger needs Linear team membership **and** GitHub write access, read through the App on the login you map ([`linear.md`](linear.md#authorizations-who-can-do-what)). Without a mapping, the delegation is refused. | `factory.yml`: `repos[].authz.github_logins` (Linear id → GitHub login) |
 
 Also on the machine: Node 24.22.1+ and git (no `claude`: it is the runner image's, run in the sandboxes; no `gh`: the factory reads and publishes on GitHub by its App alone, ORC-181) ([`installation.md`](installation.md#prerequisites)). The visual proof needs `FACTORY_BROWSER_IMAGE` too (`docker/browser.Dockerfile`); without it, a ticket that changes a screen gets its proof marked unavailable and still goes on.
 
@@ -106,9 +106,9 @@ Wrote /home/<user>/.factory/factory.yml: its secrets are references; export them
 
 It ends with `Configuration written.` and its next steps. It wrote `FACTORY_HOME/factory.yml` (its secrets as references, then `dev: true`, the relay, the project, and the reference of `secrets_key`), `FACTORY_HOME/secrets.key` and `FACTORY_HOME/secrets.json` (both mode `0600`, `secrets.json` encrypted). There is no `config.yaml` any more (ORC-199): the daemon reads `factory.yml` alone, refuses to start without it, and names a `config.yaml` left from an older install, never read, to delete.
 
-Run again, `factory init` erases nothing (ORC-83): an empty answer keeps the team key and the stored Linear values (and « Connect Linear »'s tokens, as long as the client ID is the same), the project's roles stay, and of an existing `factory.yml` it writes only the projects and the webhook relay, the rest of the file and its comments kept (`… factory.yml: its projects and webhook relay written, the rest kept as it is.`). A new client ID asks for its secrets: nothing of the old application is kept.
+Run again, `factory init` erases nothing (ORC-83): an empty answer keeps the team key and the stored Linear values (and « Connect Linear »'s tokens, as long as the client ID is the same), the repository's entry keeps its id, its roles, its `env` and its `secrets` (found by the GitHub repository the clone's `origin` names, ORC-480), and of an existing `factory.yml` it writes only the repositories and the webhook relay, the rest of the file and its comments kept (`… factory.yml: its repositories and webhook relay written, the rest kept as it is.`). A new client ID asks for its secrets: nothing of the old application is kept.
 
-`FACTORY_HOME/factory.yml` is read whole by `factory up` and `factory doctor` with the daemon's environment, by `factory validate` for its budgets, `max_diff` and tools, and by the other commands for its port and projects alone. The one `init` wrote:
+`FACTORY_HOME/factory.yml` is read whole by `factory up` and `factory doctor` with the daemon's environment, by `factory validate` for its budgets, `max_diff` and tools, and by the other commands for its port and repositories alone. The one `init` wrote:
 
 ```yaml
 # Written by factory init: every secret is a reference, read from the daemon's environment.
@@ -129,10 +129,10 @@ dev: true
 relay:
   kind: smee
   url: https://smee.io/<channel>
-projects:
+repos:
   - id: pilot
-    repo_path: /home/<user>/code/pilot
-    linear_team_key: PIL
+    github: acme/pilot
+    linear_team: PIL
 secret_sources:
   factory_home:
     kind: file
@@ -140,13 +140,15 @@ secret_sources:
 secrets_key: factory_home:secrets.key
 ```
 
-Now add by hand, under the project, the roles of items 11 and 12:
+`github` is the GitHub repository of the clone's `origin` (here `acme/pilot`): `init` refuses an `origin` that is not on GitHub. `id` is the key of the repository's tickets and `repo:<id>` labels: keep it once written.
+
+Now add by hand, under the repository's entry, the roles of items 11 and 12:
 
 ```yaml
-projects:
+repos:
   - id: pilot
-    repo_path: /home/<user>/code/pilot
-    linear_team_key: PIL
+    github: acme/pilot
+    linear_team: PIL
     authz:
       validators: [<linear id of validator 1>, <linear id of validator 2>]
       github_logins:

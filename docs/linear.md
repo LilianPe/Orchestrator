@@ -170,7 +170,7 @@ A message (reply in a session, mention, command) goes through ingestion, then th
 
 **A single active run per ticket.** A new delegation on a ticket that has a run or a verification in progress launches nothing, queues nothing, keeps the initiator and replies in its session; after a restart, this holds for the resumed run as well as the relaunched one. Two delegations of a queued ticket give a single queue row, but `decide` does not see the queue: the second is acknowledged too, and its author becomes the initiator.
 
-**Team without a repository.** A delegation on a Linear team that no project in `factory.yml` takes goes to Blocked (`Bloqué` label, reason in the blocking comment), whoever its author: without a repository, there is no role to check. The ticket waits under the **first** project in the configuration, and no work starts. To fix it: add a project for that team and restart, the next reconciliation pass lifts the block and the label, then delegate again. A delegation that arrives before that pass already goes to the new repository, and removes the label. Everything else on that team (mention, reply, ticket change) stays ignored, as before. Attachment by Linear *project* does not exist yet: routing is done by team, and `repos` in `factory.yml` is not read for routing yet (ORC-204).
+**Team without a repository.** A delegation on a Linear team that no project in `factory.yml` takes goes to Blocked (`Bloqué` label, reason in the blocking comment), whoever its author: without a repository, there is no role to check. The ticket waits under the **first** project in the configuration, and no work starts. To fix it: add a project for that team and restart, the next reconciliation pass lifts the block and the label, then delegate again. A delegation that arrives before that pass already goes to the new repository, and removes the label. Everything else on that team (mention, reply, ticket change) stays ignored, as before. Attachment by Linear *project* does not exist yet: routing is done by team (`linear_team` of each entry of `repos` in `factory.yml`).
 
 ### Authorizations: who can do what
 
@@ -194,8 +194,8 @@ A refusal launches nothing, does not keep the refused reply for the next run and
 **Where roles come from.** Before deciding a human event that the matrix can check, the daemon resolves its actor's roles and **journals them with the event**: a replay of the journal decides on the same roles, and `decide` stays pure: replaying the journal (`npm run test:replay`, ORC-174) makes the same decision, refusals included, and the refusal trace is kept in `decision_trace`. An event that the matrix does not check (a label, a status change no reaction starts a run on, untracked ticket) waits for neither Linear nor GitHub.
 
 - *Team member*: active members of the project's Linear team (`teams { members }`).
-- *Write access* and *merge rights*: the user's permission on the repository (`GET /repos/{owner}/{repo}/collaborators/{login}/permission`), read by the GitHub App (a login GitHub does not know has no rights; any other error makes the event wait; without the App, every read fails, ORC-181); `write`, `maintain` and `admin` grant both (GitHub allows merging with write access, branch protections aside). Linear provides no GitHub login that the factory can read: each Linear user whose GitHub rights matter is linked to their login in `factory.yml` (`projects[].authz.github_logins`). Without a login, no GitHub rights: that user cannot trigger.
-- *Maintainer* and *approver*: lists of Linear ids in `factory.yml` (`projects[].authz.maintainers`, `validators`), until `.factory/config.yml` (ORC-209). See [configuration](configuration.md#authorization).
+- *Write access* and *merge rights*: the user's permission on the repository (`GET /repos/{owner}/{repo}/collaborators/{login}/permission`), read by the GitHub App (a login GitHub does not know has no rights; any other error makes the event wait; without the App, every read fails, ORC-181); `write`, `maintain` and `admin` grant both (GitHub allows merging with write access, branch protections aside). Linear provides no GitHub login that the factory can read: each Linear user whose GitHub rights matter is linked to their login in `factory.yml` (`repos[].authz.github_logins`). Without a login, no GitHub rights: that user cannot trigger.
+- *Maintainer* and *approver*: lists of Linear ids in `factory.yml` (`repos[].authz.maintainers`, `validators`), until `.factory/config.yml` (ORC-209). See [configuration](configuration.md#authorization).
 - *Requester*, *initiator*: the signed author of the ticket's last authorized delegation.
 - *Operator*: whoever passed the dashboard's guard (its GitHub sign-in, as `github:<login>`, or the loopback, as `dashboard:local`, ORC-399), given by the server with the event, never resolved from Linear or GitHub (see [interface and security](interface-and-security.md)).
 
@@ -226,7 +226,7 @@ As long as a ticket is **blocked** (the factory is waiting for a reply), the `Bl
 
 ## 6. Teams and projects
 
-A project = one repository + **one** Linear team (`linear_team_key` in `factory.yml`). A single instance can track several teams (one project each); see [`projects-and-workspaces.md`](projects-and-workspaces.md). Webhooks from an unconfigured team are ignored.
+A project = one repository + **one** Linear team (`linear_team` of its entry of `repos` in `factory.yml`). A single instance can track several teams (one project each); see [`projects-and-workspaces.md`](projects-and-workspaces.md). Webhooks from an unconfigured team are ignored.
 
 ## Troubleshooting
 

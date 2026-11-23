@@ -2,21 +2,22 @@
 
 ## Projects
 
-A **project** associates a local git repository with a Linear team. They are listed in `projects` in `<FACTORY_HOME>/factory.yml`:
+A **project** associates a repository on GitHub with a Linear team. They are the entries of `repos` in `<FACTORY_HOME>/factory.yml` (ORC-480), one list for all a repository needs:
 
 ```yaml
-projects:
-  - id: mon-app                       # internal identifier (directories, API)
-    repo_path: /home/moi/code/mon-app # local clone, with an origin remote
-    linear_team_key: APP              # key of the tracked Linear team
+repos:
+  - id: mon-app          # internal identifier: tickets, events, directories, API, `repo:<id>` labels
+    github: moi/mon-app  # the repository on GitHub, <owner>/<name>
+    linear_team: APP     # key of the tracked Linear team
 ```
 
 Rules:
 
 - tickets are routed by team key; a delegation on a team without a project is blocked, the rest ignored ([`linear.md`](linear.md#4-using-the-agent-day-to-day)). A team can have several projects: see [One team, several repositories](#one-team-several-repositories);
 - every project runs the `factory/default` workflow ([`preset.md`](preset.md)); its own part is its `.factory/config.yml`, read on its default branch ([`repository-configuration.md`](repository-configuration.md)). A `.factory/workflow.yml` is ignored since ORC-388;
-- `repo_path` is read for its `origin` alone, to know the repository on GitHub (below), until ORC-471 part 3 writes `github` in `factory.yml`: no git of the factory reads its objects, its branches or its working tree any more (ORC-479). The factory keeps its own bare **mirror** of each repository, `<FACTORY_HOME>/repos/<owner>/<name>`: made in the background at the start, the server not waiting for a first clone (a launch that comes meanwhile waits for it; one the forge could not give is made at the next launch), fetched with the App's token before each launch (in git's environment only, never in the mirror's config nor on disk), one fetch at a time per mirror, its branches with `--prune`: a branch deleted on GitHub leaves the mirror at the next fetch of its branches (a launch's), and a workspace on that branch keeps its commits, as its objects are its own (ORC-486); a default branch renamed on GitHub becomes the mirror's `origin/HEAD` once the old one is deleted there, at that fetch or, should the forge not answer then, at a next one (the daemon's log says so). It holds the forge's branches as `origin/*` and its default branch as `origin/HEAD`, no branch of its own: a branch only your clone has is not seen. The workspaces copy their objects from it, the repository's config and the fingerprints are read on its default branch, and no sandbox mounts it.
-- the project's repository on GitHub (`owner/name`) is resolved **once, at the start** (ORC-478): the `repos` entry of `factory.yml` of the same Linear team whose `github` the clone's `origin` names (case aside), else the name that origin gives. The forge (PRs, checks, reviews, labels, merges), the captures, the App's git token, the GitHub roles, the GitHub webhooks and `verify`'s clone (`https://github.com/<owner>/<name>`; a replayed ticket's reads its own clone at the start) know the repository by it, never by the clone's remote again. An `origin` changed while the daemon runs changes nothing until its restart. A project whose `origin` is not a GitHub repository (another host, a local path, none) stops the start, with a message naming the project; `factory doctor` refuses it alike. ORC-471 removes `repo_path` (`github` written in `factory.yml`, part 3).
+- `id` is required and stays: it is in the key of the tickets' rows, in the events and in the `repo:<id>` labels, so renaming it starts the project over (below). `projects` and `repo_path`, the list and the local clone of before ORC-480, are refused with how to rewrite them ([`configuration.md`](configuration.md#the-instance-in-factoryyml-orc-199));
+- no local clone: the factory keeps its own bare **mirror** of each repository, `<FACTORY_HOME>/repos/<owner>/<name>`: made in the background at the start, the server not waiting for a first clone (a launch that comes meanwhile waits for it; one the forge could not give is made at the next launch), fetched with the App's token before each launch (in git's environment only, never in the mirror's config nor on disk), one fetch at a time per mirror, its branches with `--prune`: a branch deleted on GitHub leaves the mirror at the next fetch of its branches (a launch's), and a workspace on that branch keeps its commits, as its objects are its own (ORC-486); a default branch renamed on GitHub becomes the mirror's `origin/HEAD` once the old one is deleted there, at that fetch or, should the forge not answer then, at a next one (the daemon's log says so). It holds the forge's branches as `origin/*` and its default branch as `origin/HEAD`, no branch of its own: a branch only your clone has is not seen. The workspaces copy their objects from it, the repository's config and the fingerprints are read on its default branch, and no sandbox mounts it.
+- the project's repository on GitHub (`owner/name`) is its entry's `github` (ORC-480): the forge (PRs, checks, reviews, labels, merges), the captures, the App's git token, the GitHub roles, the GitHub webhooks, the mirror and `verify`'s clone (`https://github.com/<owner>/<name>`; a replayed ticket's reads its own clone at the start) know the repository by it. A change counts from the next start. `factory init` writes it from the `origin` of the clone it runs in, and `factory doctor` finds the entry by it: both refuse an `origin` that is not a GitHub repository (another host, a local path, none).
 
 ### Adding a project
 
@@ -25,17 +26,17 @@ cd <other repository>
 factory init       # same Linear application key: answer with the same credentials
 ```
 
-`init` adds the project (or replaces the one with the same `repo_path`) and proposes its `.factory/config.yml`, which it does not write. Then restart `factory up`: the statuses and labels are created in the new team on the next Linear connection (« Connect Linear » button or `/oauth/start`).
+`init` adds the project, or updates the entry of the GitHub repository its `origin` names (its id, roles, `env` and `secrets` kept; a `factory/fantome` entry of the same repository left as it is), and proposes its `.factory/config.yml`, which it does not write. Then restart `factory up`: the statuses and labels are created in the new team on the next Linear connection (« Connect Linear » button or `/oauth/start`).
 
 > The queue capacities are global to the instance: `concurrency` of `factory.yml` for the `dev` queue, a fixed 2 for the `questions` queue (ORC-390). The other settings are specific to each project.
 
 ### One team, several repositories
 
-Several projects can declare the same `linear_team_key`. The ticket then designates its repository with a **`repo:<id>`** label, where `<id>` is the project's `id` in `factory.yml` (case-insensitive): `repo:api` sends the ticket to the `api` project. Create these labels in the Linear team.
+Several projects can declare the same `linear_team`. The ticket then designates its repository with a **`repo:<id>`** label, where `<id>` is the project's `id` in `factory.yml` (case-insensitive): `repo:api` sends the ticket to the `api` project. Create these labels in the Linear team.
 
 - Team with a single project: nothing changes, the label is useless and ignored.
 - The label is only read for a ticket no project holds yet, at its delegation (or at a mention, a command). **Routing is sticky**: a delegated ticket, or one that already has a branch or a PR, stays under its project, whatever its labels say afterwards, and a project added to the team takes no existing ticket. Adding the label of another repository of the team to a ticket in progress changes nothing: the factory replies in a comment that the repository does not change midway. Without a branch or PR, you change it by stopping the work and removing the delegation, then, once the removal is seen by reconciliation (up to 5 minutes: no webhook reports it), delegating again; otherwise, a new ticket is needed. A `repo:` label that names no repository of the team is ignored. A reply or a stop on a ticket no project holds also follows its label, including when its delegation has not been processed yet: without a label, it receives the question; with a label, a reply goes to the copy of the ticket that opened its session.
-- Ticket without a `repo:` label naming one of the projects: the delegation is blocked (label « Bloqué ») and the Linear session asks for the label, with the list of choices. The ticket waits under the team's **first** project (order of `projects` in `factory.yml`), even if it was blocked for another reason, which it replaces. A cancellation or a move to done ends the wait. While it waits, a reply, a mention, a command or a stop receives the same question, and nothing else (status, label) starts work: no work starts in a repository chosen by default.
+- Ticket without a `repo:` label naming one of the projects: the delegation is blocked (label « Bloqué ») and the Linear session asks for the label, with the list of choices. The ticket waits under the team's **first** project (order of `repos` in `factory.yml`), even if it was blocked for another reason, which it replaces. A cancellation or a move to done ends the wait. While it waits, a reply, a mention, a command or a stop receives the same question, and nothing else (status, label) starts work: no work starts in a repository chosen by default.
 - To unblock: add the `repo:<id>` label, then delegate the ticket again (remove the agent then put it back): the work starts in that repository, including if it is the one where the ticket was waiting, and the « Bloqué » label is removed. Both stores keep a copy of the ticket per project: the one that was waiting stays under the first project until reconciliation ends it. The new delegation is necessary: reconciliation does file the ticket under its repository and removes the waiting ticket from the first project (its block lifted), but a delegation it finds has no signed author, and permissions (ORC-186) start nothing without an author.
 - Several valid `repo:` labels: the first project in the list among them wins. A ticket that touches several repositories is split into one sub-ticket per repository.
 
@@ -43,7 +44,7 @@ Only one project holds a ticket, across both stores (key `(project, ticket)`, OR
 
 ### Removing a project
 
-Delete its entry from `projects` in `factory.yml` and restart. The remaining directories under `workspaces/<id>/` are deleted like any directory.
+Delete its entry from `repos` in `factory.yml` and restart. The remaining directories under `workspaces/<id>/` are deleted like any directory.
 
 ## Per-ticket worktrees
 

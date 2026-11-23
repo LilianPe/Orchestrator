@@ -28,7 +28,7 @@ describe.skipIf(!PG_URL)('factory replay --export on PgStore', () => {
     pool = new Pool({ connectionString: db.url, max: 2 });
     await migratePgStore(pool);
     home = mkdtempSync(join(tmpdir(), 'factory-replay-'));
-    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', repoPath: '/repo', linearTeamKey: 'REL' }] });
+    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', github: 'acme/app', linearTeamKey: 'REL' }] });
   });
 
   afterAll(async () => {
