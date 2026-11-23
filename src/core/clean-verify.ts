@@ -14,7 +14,9 @@ import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '..
 import { checkForbiddenPaths, FORBIDDEN_CHECK, type ForbiddenView } from '../checks/forbidden-paths.js';
 import { coverageOf, QUALITY_MAX_FILES, qualityArgv, readQuality, unmeasured, type CoverageAsk, type DiffQuality } from '../checks/diff-quality.js';
 import { mdCode } from '../checks/markdown.js';
-import { REPORT_FLAGS, stripAnsi, testCommand, type Runner } from '../checks/red.js';
+import { propertyTests } from '../checks/properties.js';
+import { rerunProperties, type PropertyRerun } from '../checks/property-runs.js';
+import { quote, REPORT_FLAGS, stripAnsi, testCommand, type Runner } from '../checks/red.js';
 import type { PackageRegistry, RegistryOpener } from '../checks/registry.js';
 import { addedLines, isRepoRuleFile, REPO_RULES_DIR, REPO_RULES_TARGET, semgrepArgv, semgrepCheck, semgrepFindings, type SemgrepRead } from '../checks/semgrep.js';
 import { isTestSpec } from '../checks/test-files.js';
@@ -66,6 +68,8 @@ export interface CleanVerifyRequest {
   registries?: RegistryOpener;
   /** `factory/tests-gelés` (ORC-131), once the ticket has a freeze. */
   frozen?: FrozenTests;
+  /** How many « for any input » properties the approved spec holds (ORC-261): their tests run again, with the factory's settings, once the commands pass. */
+  properties?: number;
   /** The repository's known flaky tests (ORC-164), a human's list: failing, they are indicative and do not count. */
   knownFlaky?: readonly KnownFlaky[];
   /** The branch took untrusted content (ORC-338): what its agent commits changed since the mark in the repository's `sensitive_paths` is refused. */
@@ -115,7 +119,8 @@ export interface VisualRequest {
  */
 export type PreviewOutcome = { of: 'found'; answered: true } | { of: 'found' | 'learned'; answered: false; detail: string };
 /** `quality`: what crapper and dryer found on the lines the diff adds (ORC-280), once the commands ran; a measure, in no verdict. */
-export type CleanVerifyResult = VerifyResult & { sha: string; tree: string; commands?: readonly string[]; flaky?: FlakyTest[]; visual?: { proof: VisualProof; files: Judged['files'] }; diffClass?: ClassifiedDiff; preview?: PreviewOutcome; quality?: DiffQuality };
+/** `properties`: the property tests run again with the factory's runs and seed (ORC-261), once the commands passed. */
+export type CleanVerifyResult = VerifyResult & { sha: string; tree: string; commands?: readonly string[]; flaky?: FlakyTest[]; visual?: { proof: VisualProof; files: Judged['files'] }; diffClass?: ClassifiedDiff; preview?: PreviewOutcome; quality?: DiffQuality; properties?: PropertyRerun };
 
 /** A verdict on the commit: rejecting means there is none, an infrastructure failure the agent is not sent. */
 export type CleanVerifier = (req: CleanVerifyRequest) => Promise<CleanVerifyResult>;
@@ -235,16 +240,18 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const { proof, shooting, probe } = await planVisual(req.visual, { git, from, sha, config, refused: failures.length > 0 });
     // Read before any code of the agent has run: the runner of each command, and the base checked out for the reruns there.
     const tests = await testCommands(git, sha, commands, req.quality);
+    const propertySources = req.properties && commands.length ? await propertySourcesAt(git, sha, req.ticketId, req.properties) : new Map<string, string | undefined>();
     const measured = req.quality && diff ? addedFiles : undefined;
     const onBase = from !== EMPTY_TREE && [...tests.values()].some((t) => t.runner) && !failures.length;
     if (shooting || onBase) await checkoutBase(req, cloneDir, { dir: beforeDir, index: beforeIndex }, from);
     let flaky: FlakyTest[] = [];
     let preview: PreviewOutcome | undefined;
     let quality: DiffQuality | undefined;
+    let properties: { rerun: PropertyRerun; failures: VerifyFailure[] } | undefined;
     // Every verdict goes out through here: the proof, decided, with it.
     const verdict = (files: Judged['files'] = []): CleanVerifyResult => ({
       ok: !failures.length, failures, sha, tree, commands, ...(diffClass ? { diffClass } : {}),
-      ...(flaky.length ? { flaky } : {}), ...(preview ? { preview } : {}), ...(quality ? { quality } : {}),
+      ...(flaky.length ? { flaky } : {}), ...(preview ? { preview } : {}), ...(quality ? { quality } : {}), ...(properties ? { properties: properties.rerun } : {}),
       ...(proof ? { visual: { proof: files.length ? { ...proof, captures: files.map((f) => f.capture) } : proof, files } } : {}),
     });
     const setUp = async (suffix: string, workspacePath: string, services: readonly string[] = []) => {
@@ -291,6 +298,8 @@ export const runCleanVerify: CleanVerifier = async (req) => {
       }
       const covered = [...new Set([...tests.values()].flatMap((t) => (t.coverage ? [t.coverage.language] : [])))];
       if (measured) quality = await measureQuality(sandboxes, id, measured, { coverageDir, covered });
+      // Last: the rewritten tests stay in the checkout, and only on commands that passed, whose properties are then all that can find a defect.
+      if (propertySources.size && !ran.length) properties = await rerunProperties([...propertySources.keys()], linesOf(tests), sandboxRerun(sandboxes, id, env, propertySources));
     }, withServices);
     // The base's tests get services as the commit's do, new ones.
     if (onBase && needsBase(ran, standing)) {
@@ -298,7 +307,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
       await inBox('verify-base', beforeDir, [], (id) => rerunOnBase(ran, reportRun(sandboxes, id, env), standing), withServices);
     }
     const settled = settle(ran, standing);
-    failures.push(...settled.failures);
+    failures.push(...settled.failures, ...(properties?.failures ?? []));
     flaky = settled.flaky;
     if (failures.length) return verdict();
     if (!shooting) {
@@ -419,6 +428,36 @@ export async function testCommands(git: CloneGit, sha: string, commands: readonl
       }),
     ),
   );
+}
+
+/** The approved properties' tests at `sha` (ORC-261), with their text: read before any code of the agent runs. */
+async function propertySourcesAt(git: CloneGit, sha: string, ticketId: string, count: number): Promise<Map<string, string | undefined>> {
+  const files = propertyTests(ticketId, count, zFields(await git.raw('ls-tree', '-r', '-z', '--name-only', sha)));
+  return new Map(await Promise.all(files.map(async (f) => [f, await show(git, sha, f)] as const)));
+}
+
+/** The line of the first command that runs each language's tests, the files to append: vitest or jest, pytest. */
+function linesOf(tests: ReadonlyMap<string, { line: string; runner?: Runner }>): { js?: string; py?: string } {
+  const of = (runners: readonly Runner[]) => [...tests.values()].find((t) => t.runner && runners.includes(t.runner))?.line;
+  const [js, py] = [of(['vitest', 'jest']), of(['pytest'])];
+  return { ...(js ? { js } : {}), ...(py ? { py } : {}) };
+}
+
+/** The rerun of the property tests in sandbox `id`, where the commands ran: what it writes goes in base64, whose letters no shell reads. */
+function sandboxRerun(sandboxes: Boxes, id: string, env: Record<string, string>, sources: ReadonlyMap<string, string | undefined>) {
+  return {
+    show: async (path: string) => sources.get(path),
+    write: async (path: string, content: string) => {
+      const out = await sandboxes.exec(id, ['bash', '--norc', '-c', `mkdir -p "$(dirname ${quote(path)})" && printf %s ${Buffer.from(content).toString('base64')} | base64 -d > ${quote(path)}`]);
+      if (out.code !== 0) throw new Error(`${path} not written (sandbox): ${out.stderr.trim()}`);
+    },
+    run: async (line: string, extra: Record<string, string>) => {
+      const started = Date.now();
+      const r = await sandboxes.exec(id, verifyCommand(line), { env: { ...env, ...extra } });
+      return { exitCode: cappedExit(r.code, started), output: r.stdout + r.stderr };
+    },
+    read: async (path: string) => (await sandboxes.exec(id, ['bash', '--norc', '-c', `timeout ${REPORT_READ_S} head -c 65536 ${quote(path)} 2>/dev/null`])).stdout,
+  };
 }
 
 /**

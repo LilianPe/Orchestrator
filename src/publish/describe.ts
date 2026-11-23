@@ -1,4 +1,5 @@
 import { mdCode } from '../checks/markdown.js';
+import type { PropertyRerun } from '../checks/property-runs.js';
 import type { VisualProof } from '../checks/visual-proof.js';
 import type { AgentOutput } from '../core/agent-output.js';
 import type { RunMeasure } from '../core/measures.js';
@@ -32,6 +33,8 @@ export interface PrFacts {
   unhosted?: string;
   /** The two worst of `factory/qualité-diff` (ORC-280), as its check words them: the factory's measure, after the agent's hints. */
   lookFirst?: readonly string[];
+  /** The property tests `verify` ran again with the factory's runs and seed (ORC-261). */
+  properties?: PropertyRerun;
 }
 
 /**
@@ -86,10 +89,22 @@ function prTitle(f: Pick<PrFacts, 'ticketId' | 'title'>): string {
  * What `verify` found on the commit pushed (ORC-151), in the same words on the PR and on its `factory/verify` check: `commands`
  * absent when an earlier verification found it green, empty when none is declared.
  */
-export function verifySummary(sha: string, commands: readonly string[] | undefined): { conclusion: 'success' | 'neutral'; summary: string } {
+export function verifySummary(sha: string, commands: readonly string[] | undefined, properties?: PropertyRerun): { conclusion: 'success' | 'neutral'; summary: string } {
   if (commands === undefined) return { conclusion: 'success', summary: `${sha.slice(0, 12)} already found green by an earlier verification.` };
   if (!commands.length) return { conclusion: 'neutral', summary: 'No verification command declared: nothing ran.' };
-  return { conclusion: 'success', summary: `Green on ${sha.slice(0, 12)}, in a fresh clone, without network:\n${commands.map((c) => `- ${mdCode(c)}`).join('\n')}` };
+  const green = `Green on ${sha.slice(0, 12)}, in a fresh clone, without network:\n${commands.map((c) => `- ${mdCode(c)}`).join('\n')}`;
+  return { conclusion: 'success', summary: properties ? `${green}\n\n${propertiesSaid(properties)}` : green };
+}
+
+/** The property tests run again (ORC-261), with the runs and the seed, those the factory could not set or run named apart. */
+function propertiesSaid(p: PropertyRerun): string {
+  const ran = p.files.filter((f) => !p.notRun.includes(f));
+  const codes = (files: readonly string[]) => files.map(mdCode).join(', ');
+  return [
+    `Property tests run again with the factory settings, whatever the repository sets: ${p.runs} runs, seed ${p.seed}.${ran.map((f) => `\n- ${mdCode(f)}`).join('')}`,
+    ...(p.unsettled.length ? [`No fast-check call or Hypothesis test found, run as written: ${codes(p.unsettled)}.`] : []),
+    ...(p.notRun.length ? [`Not run again, no test command runs vitest, jest or pytest: ${codes(p.notRun)}.`] : []),
+  ].join('\n\n');
 }
 
 /** Where the start command came from (ORC-386), the same words in the PR and on `factory/preuve-visuelle`. */
@@ -101,7 +116,7 @@ export const START_SAID = {
 } as const;
 
 function evidence(o: AgentOutput | undefined, f: PrFacts): string {
-  const parts = [`**Checked by the factory**: ${verifySummary(f.sha, f.commands).summary}`];
+  const parts = [`**Checked by the factory**: ${verifySummary(f.sha, f.commands, f.properties).summary}`];
   if (o) parts.push(`**Tests added**, as stated by the agent:\n${testsList(o)}`);
   const shots = [...(f.captures ?? [])].sort((a, b) => a.width - b.width);
   // A proof `visual_paths` required has captures without the ticket asking at intake: they show all the same (ORC-407).

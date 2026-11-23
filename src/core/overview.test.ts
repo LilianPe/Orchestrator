@@ -10,7 +10,7 @@ const tokens = (input: number) => ({ input, output: 0, cacheRead: 0, cacheCreati
 const measures = (ticketId: string, patch: Partial<TicketMeasures> = {}): TicketMeasures => ({
   projectId: 'p', ticketId, mergedAt: null, tokens: null, attempts: 1, attemptsWithoutTokens: 0, usageLimitShare: null, firstTry: null, reworks: [],
   humanReviewMinutes: null, revertedWithin14Days: null, revertWindowEndsAt: null, ciCost: null, messages: [], red: [], startedAt: null, leadTimeMs: null,
-  workMs: 0, costUsd: 0, reviewRounds: { ai: 0, human: 0 }, runs: [], specs: [], ...patch,
+  workMs: 0, costUsd: 0, reviewRounds: { ai: 0, human: 0 }, runs: [], specs: [], propertyReruns: [], ...patch,
 });
 const merged = (ticketId: string, at: number, patch: Partial<TicketMeasures> = {}) =>
   measures(ticketId, { mergedAt: at, startedAt: at - DAY, leadTimeMs: DAY, firstTry: true, ...patch });
@@ -80,7 +80,17 @@ describe('overview (ORC-299)', () => {
       merged('C', 13 * DAY),
       measures('WIP', { specs: [{ version: 1, properties: 3 }] }),
     ]);
-    expect(o.properties).toEqual({ specs: 2, withProperties: 1 });
+    expect(o.properties).toEqual({ specs: 2, withProperties: 1, reruns: 0, found: 0 });
+  });
+
+  it('counts the reruns of the property tests of the delivered tickets, and those where a property found a defect the examples did not (ORC-261)', () => {
+    const rerun = (id: string, found: boolean) => ({ id, runs: 1000, seed: 1, found });
+    const o = overview(PERIOD, [
+      merged('A', 11 * DAY, { propertyReruns: [rerun('a1', true), rerun('a2', false)] }),
+      merged('B', 12 * DAY, { propertyReruns: [rerun('b1', false)] }),
+      measures('WIP', { propertyReruns: [rerun('w1', true)] }),
+    ]);
+    expect(o.properties).toMatchObject({ reruns: 3, found: 1 });
   });
 
   it('says how many tickets it could not measure, and has no baseline until one is computed (ORC-230)', () => {

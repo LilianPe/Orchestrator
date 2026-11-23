@@ -1669,3 +1669,50 @@ describe('factory/qualité-diff (ORC-280)', () => {
     expect(argv[6]).toBe('');
   });
 });
+
+describe('the property tests run again with the factory settings (ORC-261)', () => {
+  const PROPERTY = 'src/orc-1.property-1.test.ts';
+  const withProperty = (over: Partial<CleanVerifyRequest> = { properties: 1 }) => {
+    const s = setup({ commands: ['npx vitest run'], ...over });
+    write(s.repo, PROPERTY, "import fc from 'fast-check';\nfc.assert(fc.property(fc.integer(), () => true), { numRuns: 5 });\n");
+    commit(s.repo, 'property');
+    return s;
+  };
+  const rerunLine = `npx vitest run '${PROPERTY}'`;
+  const written = (ran: { command: string }[]) =>
+    ran.flatMap((r) => {
+      const b64 = /printf %s (\S+) \| base64 -d > '([^']+)'/.exec(r.command);
+      return b64 ? [{ path: b64[2], content: Buffer.from(b64[1]!, 'base64').toString() }] : [];
+    });
+
+  it('reruns them once the commands pass, their settings over the file, and says the runs and the seed', async () => {
+    const { sandboxes, req } = withProperty();
+    sandboxes.answer = (command) => (command.includes('npx vitest run') ? { stdout: '', stderr: '', code: 0 } : undefined);
+    const res = await runCleanVerify(req);
+    expect(res).toMatchObject({ ok: true, failures: [], properties: { runs: 1000, files: [PROPERTY], unsettled: [], notRun: [], found: false } });
+    const commands = sandboxes.ran.filter((r) => r.box === 'r1-verify').map((r) => r.command);
+    expect(commands.at(-1)).toBe(rerunLine);
+    expect(written(sandboxes.ran)).toEqual([{ path: PROPERTY, content: expect.stringContaining(`numRuns: 1000, seed: ${res.properties!.seed}, path: undefined`) }]);
+  });
+
+  it('a red rerun fails verify, with the runs and the seed, and counts as a defect the properties found', async () => {
+    const { sandboxes, req } = withProperty();
+    sandboxes.answer = (command) => (command.includes('npx vitest run') ? { stdout: 'Property failed after 412 tests', stderr: '', code: command === rerunLine ? 1 : 0 } : undefined);
+    const res = await runCleanVerify(req);
+    expect(res.ok).toBe(false);
+    expect(res.properties!.found).toBe(true);
+    expect(res.failures).toEqual([{ command: rerunLine, exitCode: 1, output: expect.stringMatching(new RegExp(`^Property tests rerun by the factory: 1000 runs, seed ${res.properties!.seed},[\\s\\S]*412 tests`)) }]);
+  });
+
+  it('reruns nothing when a command failed, nor without approved properties', async () => {
+    const red = withProperty();
+    red.sandboxes.answer = (command) => (command.includes('npx vitest run') ? { stdout: '', stderr: '', code: 1 } : undefined);
+    const failed = await runCleanVerify(red.req);
+    expect(failed.properties).toBeUndefined();
+    expect(red.sandboxes.ran.map((r) => r.command)).not.toContain(rerunLine);
+    const none = withProperty({});
+    none.sandboxes.answer = (command) => (command.includes('npx vitest run') ? { stdout: '', stderr: '', code: 0 } : undefined);
+    expect((await runCleanVerify(none.req)).properties).toBeUndefined();
+    expect(none.sandboxes.ran.map((r) => r.command)).not.toContain(rerunLine);
+  });
+});

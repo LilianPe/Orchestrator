@@ -122,6 +122,14 @@ describe('describePr (ORC-195)', () => {
     expect(evidence({})).toMatch(/stated by the agent[^\n]*\n- `src\/export.test.ts`/i);
   });
 
+  it('ORC-261: the property tests the factory ran again, with its runs and seed, and those it could not set or run', () => {
+    const properties = { runs: 1000, seed: 42, files: ['a.property-1.test.ts', 'test_a_property_2.py', 'b.property-3.test.ts'], unsettled: ['b.property-3.test.ts'], notRun: ['test_a_property_2.py'], found: false };
+    const evidence = sections(describePr(full, facts({ commands: ['npm test'], properties })).body).at(-1)!.text;
+    expect(evidence).toContain('Property tests run again with the factory settings, whatever the repository sets: 1000 runs, seed 42.\n- `a.property-1.test.ts`\n- `b.property-3.test.ts`');
+    expect(evidence).toContain('No fast-check call or Hypothesis test found, run as written: `b.property-3.test.ts`');
+    expect(evidence).toContain('Not run again, no test command runs vitest, jest or pytest: `test_a_property_2.py`');
+  });
+
   it("criterion 4: a base64 blob in a field the agent submitted: the OutputPolicy refuses the description, nothing goes out", async () => {
     const policy = new OutputPolicy(async () => []);
     const blob = base64(120);
