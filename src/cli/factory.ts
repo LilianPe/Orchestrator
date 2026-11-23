@@ -27,8 +27,11 @@ async function main(): Promise<number> {
   if (process.argv[2] === 'baseline') return runBaselineCommand(factoryHome(), process.argv.slice(3));
   // Its own options, on the store and the projects; GitHub through the App, no running instance needed (ORC-231).
   if (process.argv[2] === 'ghost') return runGhostCommand(factoryHome(), process.argv.slice(3));
-  // Its own options, `--json` and `--secrets` (ORC-456): the instance read by the check itself.
-  if (process.argv[2] === 'doctor') return runDoctorCli(process.argv.slice(3));
+  // Its own options, `--json` and `--secrets` (ORC-456): the instance read by the check itself. Before the command too
+  // (`factory --json doctor`), as the shared parser took them; every option of the CLI is a flag, the first word the command.
+  const args = process.argv.slice(2);
+  const command = args.findIndex((a) => !a.startsWith('-'));
+  if (args[command] === 'doctor') return runDoctorCli(args.toSpliced(command, 1));
   // Its own option, `--dev` (ORC-411): a Smee channel without a public URL.
   if (process.argv[2] === 'init') return runInitCommand(process.argv.slice(3));
   // The repository's file, the budgets, max_diff and tools of factory.yml (ORC-216, ORC-381, ORC-383), its secrets left unresolved: no running instance needed.

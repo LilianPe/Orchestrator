@@ -55,4 +55,12 @@ describe('factory (ORC-200)', () => {
     expect(up.code).toBe(1);
     expect(up.out).toMatch(/Unknown option '--secrets'/);
   });
+
+  it('runs doctor with its options before the command too, as the shared parser took `--json doctor`', async () => {
+    const [json, secrets] = await Promise.all([factory('--json', 'doctor'), factory('--secrets', '--json', 'doctor', '/repo')]);
+    for (const run of [json, secrets]) {
+      expect(run.code).toBe(1);
+      expect(JSON.parse(run.out)).toMatchObject({ accepted: false, error: expect.stringMatching(/^no factory\.yml in FACTORY_HOME/) });
+    }
+  });
 });
