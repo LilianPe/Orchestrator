@@ -209,10 +209,10 @@ function packageCall(line: string): { tool: string; args: string } | undefined {
 
 const hasSeparator = (args: string): boolean => /(?:^|\s)--(?:\s|$)/.test(args);
 
-type PackageJson = { scripts?: Record<string, unknown>; packageManager?: unknown };
+type PackageJson = { scripts?: Record<string, unknown>; packageManager?: unknown; dependencies?: unknown; devDependencies?: unknown };
 
 /** The repository's `package.json`: empty without one, undefined when it does not parse as an object. */
-async function readPackageJson(deps: Pick<RedDeps, 'showAtHead'>): Promise<PackageJson | undefined> {
+export async function readPackageJson(deps: Pick<RedDeps, 'showAtHead'>): Promise<PackageJson | undefined> {
   try {
     const pkg: unknown = JSON.parse((await deps.showAtHead('package.json')) ?? '{}');
     return isRecord(pkg) ? pkg : undefined;
