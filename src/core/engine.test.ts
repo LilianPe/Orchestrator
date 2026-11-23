@@ -392,7 +392,7 @@ describe('decide — verify.errored (ORC-151)', () => {
     ['services (ORC-282)', 'The service redis is not available: .factory/config.yml declares it under `services`, and no sandbox backend of this factory provides it.'],
     ['setup_secrets (ORC-461)', '.factory/config.yml declares setup_secrets (NPM_TOKEN) for its setup, and verify does not run such a setup'],
   ])('a refusal of the repository configuration, %s, blocks as the repository\'s to fix, its reason told (ORC-493)', (_, error) => {
-    const refused = { ...errored(), payload: { runId: 'r1', job: 'dev', error, repoConfig: true } } as FactoryEvent;
+    const refused = { ...errored(), payload: { runId: 'r1', job: 'dev', error, cause: 'repo_config' } } as FactoryEvent;
     const out = decide(checking(), refused, workflow);
     expect(out.effects.some((e) => e.kind === 'start_run')).toBe(false);
     expect(out.events).toEqual([{ type: 'ticket.blocked', reason: `Repository configuration to fix: ${error}`, kind: 'repo_config', job: 'dev' }]);

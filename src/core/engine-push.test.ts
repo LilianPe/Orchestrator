@@ -115,7 +115,7 @@ describe('a human push on the agent branch (ORC-159)', () => {
     it("a check that refused the repository's config says what to change, not a breakdown, and stays the push's block (ORC-493)", () => {
       const t = after(ticket(), push(), decide(ticket(), push(), workflow));
       const error = 'The service redis is not available: take it out of `services`, then reply here.';
-      const out = decide(t, verdict('verify.errored', { error, repoConfig: true }), workflow);
+      const out = decide(t, verdict('verify.errored', { error, cause: 'repo_config' }), workflow);
       const blocked = out.events.find((e) => e.type === 'ticket.blocked') as { kind: string; reason: string };
       expect(blocked.kind).toBe('human_push');
       expect(blocked.reason).toContain(`Repository configuration to fix: ${error}`);

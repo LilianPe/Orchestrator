@@ -1832,7 +1832,7 @@ function pushChecked(out: Decision, event: FactoryEvent<'verify.passed' | 'verif
   const resume = 'reply to resume the agent: it rebases its work on top of your commits, and never pushes over them.';
   if (event.type === 'verify.errored') {
     // Still the push's block: a next push replaces it, and its verdict is told.
-    const why = event.payload.repoConfig ? `. ${REPO_CONFIG_REFUSED}${event.payload.error}` : ': infrastructure failure.';
+    const why = event.payload.cause === 'repo_config' ? `. ${REPO_CONFIG_REFUSED}${event.payload.error}` : ': infrastructure failure.';
     const reason = `The verification of ${head.slice(0, 12)}, pushed by a human, could not run${why}`;
     return block(out, workflow, { kind: 'human_push', reason, ...at, tried: [`Started the verification of the pushed commit: ${event.payload.error}`] });
   }
@@ -2455,9 +2455,9 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'verify.errored': {
       // Not a failure of the work: no counter moves, and the agent gets nothing to fix. A human relaunch checks again.
       if (ticket?.blocked) return out;
-      const { job, error } = event.payload;
+      const { job, error, cause } = event.payload;
       const at = { job, step: checkOf(workflow, job) };
-      if (event.payload.repoConfig) return block(out, workflow, { kind: 'repo_config', reason: `${REPO_CONFIG_REFUSED}${error}`, ...at, tried: [`Started the verification of ${job}.`] });
+      if (cause === 'repo_config') return block(out, workflow, { kind: 'repo_config', reason: `${REPO_CONFIG_REFUSED}${error}`, ...at, tried: [`Started the verification of ${job}.`] });
       const reason = `The verification of ${job} could not run: infrastructure failure, not the agent's fault.`;
       return block(out, workflow, { kind: 'infra', reason, ...at, tried: [`Started the verification of ${job}: ${error}`] });
     }

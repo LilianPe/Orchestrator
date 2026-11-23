@@ -192,8 +192,8 @@ const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
   'verify.failed': fc.record({ runId, job, failures: fc.constant(VERIFY_FAILURES) }),
   'run.lost': fc.record({ runId, job, cause: fc.constantFrom('restart' as const, 'lease' as const) }),
   'verify.lost': fc.record({ runId, job }),
-  // `repoConfig`: a refusal of the repository's config (ORC-493), blocked as the repository's to fix.
-  'verify.errored': fc.record({ runId, job, error: fc.constant('engine down'), repoConfig: fc.constant(true as const) }, { requiredKeys: ['runId', 'job', 'error'] }),
+  // `cause`: a refusal of the repository's config (ORC-493), blocked as the repository's to fix.
+  'verify.errored': fc.record({ runId, job, error: fc.constant('engine down'), cause: fc.constant('repo_config' as const) }, { requiredKeys: ['runId', 'job', 'error'] }),
   'timer.fired': timerFired,
   'control.pause': empty,
   'control.resume': empty,

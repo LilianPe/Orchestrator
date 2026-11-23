@@ -376,10 +376,10 @@ export interface EventPayloads {
   'verify.lost': { runId: string; job: string; output?: AgentOutput };
   /**
    * The check could not run (ORC-151): engine down, a sandbox that never started or stopped answering, a bundle
-   * refused. No verdict on the agent's work: the ticket is blocked, the agent never resumed for it. `repoConfig`: it refused
+   * refused. No verdict on the agent's work: the ticket is blocked, the agent never resumed for it. `cause`, `repo_config`: it refused
    * the repository's `.factory/config.yml` (ORC-493), `error` saying what to change: blocked as the repository's to fix.
    */
-  'verify.errored': { runId: string; job: string; error: string; repoConfig?: true };
+  'verify.errored': { runId: string; job: string; error: string; cause?: 'repo_config' };
   /** A timer armed by a decision, fired through the inbox with id `timer:<key>:<fireAt>` (ORC-161). */
   'timer.fired': TimerFired;
   'control.pause': Record<string, never>;
