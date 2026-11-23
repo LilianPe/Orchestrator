@@ -2,7 +2,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { dirname, join, posix } from 'node:path';
 import { execCmd, HARDENING, mustExec, type Exec, type ExecOpts } from '../adapters/exec.js';
 import type { CloneAuth } from '../adapters/forge/types.js';
-import { fetchOrigin, originHeadOf, remoteGitEnv } from '../adapters/workspace/git-workspaces.js';
+import { fetchOrigin, ORIGIN_REFSPEC, originHeadOf, remoteGitEnv } from '../adapters/workspace/git-workspaces.js';
+import { MIRROR_CLONE_DEADLINE_MS } from '../adapters/workspace/repo-mirrors.js';
 import { within } from '../core/clean-verify.js';
 import { unfenced } from '../core/prompt.js';
 import { FACTORY_GIT_IDENTITY } from '../product.js';
@@ -48,18 +49,25 @@ export class KnowledgeBase {
   private pulledAt: number | undefined;
   private freshMs: number;
   private auth: CloneAuth | undefined;
+  private origin: string | undefined;
   /** Whether the clone has a remote, asked once: the daemon does not change it. */
   private remote: Promise<boolean> | undefined;
 
   constructor(
-    readonly repoPath: string,
-    /** `auth`: what reads and pushes a private remote (ORC-442), the App's token, in git's environment alone. */
-    o: { exec?: Exec; freshMs?: number; auth?: CloneAuth } = {},
+    readonly dir: string,
+    /**
+     * `auth`: what reads and pushes a private remote (ORC-442), the App's token, in git's environment alone. `origin`: the forge's
+     * URL of the clone the daemon keeps (ORC-481), without credentials: cloned there when missing, its `origin` set back to it at
+     * each pull. Without it, a clone read as it is (a replayed ticket's knowledge base, a test's).
+     */
+    o: { exec?: Exec; freshMs?: number; auth?: CloneAuth; origin?: string } = {},
   ) {
     const exec = o.exec ?? execCmd;
     this.git = (cmd, args, opts) => exec(cmd, [...HARDENING.flatMap((c) => ['-c', c]), ...args], opts);
     this.freshMs = o.freshMs ?? FRESH_MS;
     this.auth = o.auth;
+    this.origin = o.origin;
+    if (o.origin) this.remote = Promise.resolve(true);
   }
 
   /**
@@ -67,16 +75,22 @@ export class KnowledgeBase {
    * did not, without touching it (ORC-38): a repository without a remote, or on another branch, is read as it is.
    */
   async pull(): Promise<string | undefined> {
-    const git = (a: string[], opts?: ExecOpts) => this.git('git', ['-C', this.repoPath, ...a], opts);
-    if (!(await git(['remote'])).stdout.trim()) return 'no remote: it is never pulled, the agents read it as it is';
-    await fetchOrigin(this.git, this.repoPath, { deadlineMs: FETCH_DEADLINE_MS, auth: this.auth });
+    const git = (a: string[], opts?: ExecOpts) => this.git('git', ['-C', this.dir, ...a], opts);
+    if (this.origin) await this.cloneAt(this.origin);
+    else if (!(await git(['remote'])).stdout.trim()) return 'no remote: it is never pulled, the agents read it as it is';
+    // No commit yet, a clone just made or one whose first fetch was cut short: that fetch brings the whole history, as a mirror's
+    // first, with its deadline. A stalled transfer is aborted all the same.
+    const born = (await git(['rev-parse', '--verify', '--quiet', 'HEAD'])).code === 0;
+    await fetchOrigin(this.git, this.dir, { deadlineMs: born ? FETCH_DEADLINE_MS : MIRROR_CLONE_DEADLINE_MS, auth: this.auth });
     // In full, never a tag of its name (ORC-354). A clone without origin/HEAD asks the remote its default branch.
-    let head = await originHeadOf(this.git, this.repoPath);
-    if (!head.set && (await git(['remote', 'set-head', 'origin', '--auto'], { env: await this.remoteEnv(), timeoutMs: FETCH_DEADLINE_MS })).code === 0) head = await originHeadOf(this.git, this.repoPath);
+    let head = await originHeadOf(this.git, this.dir);
+    if (!head.set && (await git(['remote', 'set-head', 'origin', '--auto'], { env: await this.remoteEnv(), timeoutMs: FETCH_DEADLINE_MS })).code === 0) head = await originHeadOf(this.git, this.dir);
     const branch = head.name.replace(/^origin\//, '');
+    // A clone without a commit yet: on the default branch, which the merge below brings.
+    if (!born) await mustExec(this.git, 'git', ['-C', this.dir, 'symbolic-ref', 'HEAD', `refs/heads/${branch}`]);
     const current = (await git(['branch', '--show-current'])).stdout.trim();
     if (current !== branch) return `on ${current || 'a detached HEAD'}, not on its default branch ${branch}: not pulled, the agents read it as it is`;
-    await mustExec(this.git, 'git', ['-C', this.repoPath, 'merge', '--ff-only', head.ref]);
+    await mustExec(this.git, 'git', ['-C', this.dir, 'merge', '--ff-only', head.ref]);
     this.pulledAt = Date.now();
     return undefined;
   }
@@ -97,8 +111,20 @@ export class KnowledgeBase {
     return next.index;
   }
 
+  /**
+   * The clone the daemon keeps (ORC-481): a repository made at `dir` when missing (not bare: the factory commits there), its
+   * `origin` set to the forge's `url` whenever it names another (a clone left there before, a creation cut short), and what it
+   * fetches every branch. No credential in its config: the App's token reaches git in its environment alone (`auth`).
+   */
+  private async cloneAt(url: string): Promise<void> {
+    if (!existsSync(join(this.dir, '.git'))) await mustExec(this.git, 'git', ['init', '--quiet', '--template=', this.dir]);
+    const config = (key: string) => this.git('git', ['-C', this.dir, 'config', '--get', key]).then((r) => r.stdout.trim());
+    if ((await config('remote.origin.url')) !== url) await mustExec(this.git, 'git', ['-C', this.dir, 'config', 'remote.origin.url', url]);
+    if (!(await config('remote.origin.fetch'))) await mustExec(this.git, 'git', ['-C', this.dir, 'config', 'remote.origin.fetch', ORIGIN_REFSPEC]);
+  }
+
   private remoteEnv(): Promise<Record<string, string>> {
-    return remoteGitEnv(this.auth, this.repoPath, FETCH_DEADLINE_MS);
+    return remoteGitEnv(this.auth, this.dir, FETCH_DEADLINE_MS);
   }
 
   private serial<T>(work: () => Promise<T>): Promise<T> {
@@ -120,7 +146,7 @@ export class KnowledgeBase {
       return Promise.reject(new Error(`the factory writes only notes under ${PREVIEW_DIR}/ in the knowledge base, not ${path}`));
     }
     return this.serial(async () => {
-      const git = (...a: string[]) => mustExec(this.git, 'git', ['-C', this.repoPath, ...a]);
+      const git = (...a: string[]) => mustExec(this.git, 'git', ['-C', this.dir, ...a]);
       const remote = await (this.remote ??= git('remote').then((out) => !!out.trim()));
       if (remote && !(this.pulledAt !== undefined && Date.now() - this.pulledAt < this.freshMs)) {
         const why = await this.pull().catch((err: Error) => `not pulled: ${err.message}`);
@@ -128,7 +154,7 @@ export class KnowledgeBase {
         // The launches right after it read the index this pull brought: none fetches again behind the write.
         this.last = { ended: Date.now(), index: Promise.resolve(this.readIndex()) };
       }
-      const file = join(this.repoPath, path);
+      const file = join(this.dir, path);
       const current = existsSync(file) ? readFileSync(file, 'utf8') : undefined;
       if (!stillAsRead(current)) return `knowledge base: ${path} changed since it was read; not written over`;
       if (current === content) return undefined;
@@ -140,7 +166,7 @@ export class KnowledgeBase {
       if (!remote) return `knowledge base: no remote, ${path} is committed in the clone only`;
       // As `fetchOrigin` reaches the forge: a stalled transfer aborted, and the deadline kept even by an ssh child that holds the output.
       const silent = `the knowledge base's remote no longer responds after ${FETCH_DEADLINE_MS / 1000} s`;
-      const push = this.remoteEnv().then((env) => this.git('git', ['-C', this.repoPath, 'push', '--quiet', 'origin', 'HEAD'], { env, timeoutMs: FETCH_DEADLINE_MS }));
+      const push = this.remoteEnv().then((env) => this.git('git', ['-C', this.dir, 'push', '--quiet', 'origin', 'HEAD'], { env, timeoutMs: FETCH_DEADLINE_MS }));
       const pushed = await within(push, FETCH_DEADLINE_MS + PUSH_GRACE_MS, silent).catch((err: Error) => ({ code: 1, stdout: '', stderr: err.message }));
       if (pushed.code === 0) return undefined;
       await git('reset', '--quiet', '--keep', before);
@@ -149,7 +175,7 @@ export class KnowledgeBase {
   }
 
   readIndex(maxChars = KB_INDEX_MAX): KbIndex {
-    const f = join(this.repoPath, 'INDEX.md');
+    const f = join(this.dir, 'INDEX.md');
     const all = existsSync(f) ? readFileSync(f, 'utf8') : '';
     // Never half a surrogate pair at the cut.
     const cut = /[\uD800-\uDBFF]/.test(all.charAt(maxChars - 1)) ? maxChars - 1 : maxChars;
@@ -158,7 +184,7 @@ export class KnowledgeBase {
 
   async search(query: string, limit = 20): Promise<KbHit[]> {
     const terms = norm(query).split(/\s+/).filter((t) => t.length >= 3);
-    const dir = join(this.repoPath, 'notes');
+    const dir = join(this.dir, 'notes');
     if (!terms.length || !existsSync(dir)) return [];
     const hits: (KbHit & { score: number })[] = [];
     for (const name of readdirSync(dir).filter((n) => n.endsWith('.md'))) {

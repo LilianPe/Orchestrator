@@ -221,7 +221,7 @@ export class PreviewRecipes {
 
   /** The repository's note, in the knowledge base or, for a replayed ticket (ORC-376), in its checkout at the ticket's start. */
   read(repo: string, at?: string): ReadNote {
-    const f = join(at ?? this.kb.repoPath, recipeNotePath(repo));
+    const f = join(at ?? this.kb.dir, recipeNotePath(repo));
     return existsSync(f) ? parseRecipeNote(readFileSync(f, 'utf8')) : undefined;
   }
 

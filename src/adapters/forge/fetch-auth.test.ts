@@ -11,7 +11,6 @@ import { execCmd, type Exec } from '../exec.js';
 import { GitHubAppForge } from './github-app.js';
 import type { HttpClient } from './github-app.js';
 import type { CloneAuth } from './types.js';
-import { cloneAuth } from '../../app/project-github.js';
 import { makeRepoConfig } from '../../app/repo-variables.js';
 import { fetchFromForge } from '../../core/clean-verify.js';
 import { cloneAtStart } from '../../ghost/history.js';
@@ -108,8 +107,8 @@ async function fixture() {
   };
   const logs: string[] = [];
   const forge = new GitHubAppForge({ appId: '1', privateKey: privatePem, installationId: 42, http: tokenApi, webBase: server.base, log: (m) => logs.push(m) });
-  // As the daemon wires it (ORC-478): the factory's clone stands for `acme/app`.
-  const auth = cloneAuth((github) => forge.fetchEnv(github), new Map([[repo, 'acme/app']]))!;
+  // The factory's repository stands for `acme/app`, as a mirror does (`RepoMirrors.auth`); any other path gets no token.
+  const auth: CloneAuth = async (path) => (path === repo ? forge.fetchEnv('acme/app') : {});
   return { dir, repo, second, server, exec, lines, logs, forge, auth, url: `${server.base}/acme/app.git` };
 }
 
@@ -175,6 +174,16 @@ const READS: Record<string, (f: Fixture, auth?: CloneAuth) => Promise<unknown>> 
     git(clone, 'init', '--quiet');
     await fetchFromForge({ originUrl: f.url, exec: f.exec, ...(auth ? { forgeEnv: () => auth(f.repo) } : {}) }, clone, ['+HEAD:refs/factory/base'], 'base branch');
   },
+  "the knowledge base's clone the daemon keeps, made from the forge (ORC-481), the token in no file of it": async (f, auth) => {
+    const mirrors = new RepoMirrors({ root: join(f.dir, 'repos'), exec: f.exec, url: () => f.url, ...(auth ? { auth: (github) => f.forge.fetchEnv(github) } : {}) });
+    const dir = join(f.dir, 'knowledge');
+    const kb = new KnowledgeBase(dir, { exec: f.exec, freshMs: 0, origin: mirrors.url('acme/app'), auth: mirrors.authOf('acme/app') });
+    const pulled = await kb.pull().catch((err: Error) => err.message);
+    if (pulled !== undefined) throw new Error(pulled);
+    const everyFile = (d: string): string[] => readdirSync(d).flatMap((n) => (statSync(join(d, n)).isDirectory() ? everyFile(join(d, n)) : [join(d, n)]));
+    const secrets = [TOKEN, Buffer.from(`x-access-token:${TOKEN}`).toString('base64')];
+    expect(everyFile(dir).filter((file) => secrets.some((t) => readFileSync(file, 'latin1').includes(t)))).toEqual([]);
+  },
   "the knowledge base's pull, its default branch asked, and its note's push": async (f, auth) => {
     git(f.repo, 'remote', 'set-head', 'origin', '-d');
     const kb = new KnowledgeBase(f.repo, { exec: f.exec, freshMs: 0, auth });
@@ -185,6 +194,38 @@ const READS: Record<string, (f: Fixture, auth?: CloneAuth) => Promise<unknown>> 
   },
   "the ghost's clone at the start": async (f, auth) => cloneAtStart({ remote: f.url, mergeSha: f.second, dir: join(f.dir, auth ? 'ghost' : 'ghost-refused'), exec: f.exec, ...(auth ? { env: await auth(f.repo) } : {}) }),
 };
+
+/**
+ * ORC-481: the knowledge base needs no clone of a human's. The daemon clones it under its home from the forge, then a note it
+ * writes reaches the forge, pushed with the App's installation token: on a machine without any git credential, the token in no
+ * file of the clone, its `origin` without credentials.
+ */
+describe("the knowledge base's note reaches the forge through the App, with no human clone (ORC-481)", () => {
+  it('clones it under the home, commits the note and pushes it with the token', async () => {
+    const f = await fixture();
+    const mirrors = new RepoMirrors({ root: join(f.dir, 'repos'), exec: f.exec, url: () => f.url, auth: (github) => f.forge.fetchEnv(github) });
+    const dir = join(f.dir, 'home', 'knowledge');
+    const kb = new KnowledgeBase(dir, { exec: f.exec, freshMs: 0, origin: mirrors.url('acme/app'), auth: mirrors.authOf('acme/app') });
+    expect(await kb.commitNote('notes/preview/app.md', 'npm start\n', 'notes(preview): app')).toBeUndefined();
+    // On the forge, as the factory committed it.
+    const bare = join(f.dir, 'srv', 'acme', 'app.git');
+    expect(git(bare, 'show', 'main:notes/preview/app.md')).toBe('npm start');
+    expect(git(bare, 'log', '-1', '--format=%s', 'main')).toBe('notes(preview): app');
+    expect(git(bare, 'rev-parse', 'main~1')).toBe(f.second);
+    expect(f.server.auths).toContain(BASIC);
+    expect(git(dir, 'config', 'remote.origin.url')).toBe(f.url);
+    const said = [...f.lines, ...f.logs, readFileSync(join(dir, '.git', 'config'), 'utf8')].join('\n');
+    expect(said).not.toContain(TOKEN);
+  });
+
+  it('writes nothing without the token: the clone cannot be fetched, the forge unchanged', async () => {
+    const f = await fixture();
+    const bare = join(f.dir, 'srv', 'acme', 'app.git');
+    const kb = new KnowledgeBase(join(f.dir, 'knowledge'), { exec: f.exec, freshMs: 0, origin: f.url });
+    expect(await kb.commitNote('notes/preview/app.md', 'npm start\n', 'notes(preview): app')).toMatch(/not pulled: the forge could not be read.*not written/);
+    expect(git(bare, 'rev-parse', 'main')).toBe(f.second);
+  });
+});
 
 describe('when GitHub does not give the token (ORC-442)', () => {
   const answering = (status: number, asked: string[]): HttpClient => async (url) => {

@@ -24,9 +24,9 @@ function repo(config?: string): string {
   return dir;
 }
 
-function run(repoPath: string, yml: FactoryYml | undefined = budgeted()): { code: number; out: string[] } {
+function run(checkout: string, yml: FactoryYml | undefined = budgeted()): { code: number; out: string[] } {
   const out: string[] = [];
-  return { code: runValidateCommand({ repoPath, out: (l) => out.push(l), factoryYml: () => yml }), out };
+  return { code: runValidateCommand({ checkout, out: (l) => out.push(l), factoryYml: () => yml }), out };
 }
 
 describe('factory validate (ORC-209)', () => {
@@ -123,7 +123,7 @@ describe('factory validate (ORC-209)', () => {
 
   it('refuses an option where the repository path goes', () => {
     const out: string[] = [];
-    expect(runValidateCommand({ repoPath: '--json', out: (l) => out.push(l), factoryYml: () => undefined })).toBe(1);
+    expect(runValidateCommand({ checkout: '--json', out: (l) => out.push(l), factoryYml: () => undefined })).toBe(1);
     expect(out).toEqual(['Usage: factory validate [repo] (no options)']);
   });
 
@@ -208,7 +208,7 @@ describe('factory validate: the worst case of the preset (ORC-216)', () => {
 
   it('refuses an invalid factory.yml, one line per violation', () => {
     const out: string[] = [];
-    const code = runValidateCommand({ repoPath: repo(), out: (l) => out.push(l), factoryYml: () => { throw new FactoryYmlError(['budgets.per_ticket_tokens: a positive integer is expected']); } });
+    const code = runValidateCommand({ checkout: repo(), out: (l) => out.push(l), factoryYml: () => { throw new FactoryYmlError(['budgets.per_ticket_tokens: a positive integer is expected']); } });
     expect(code).toBe(1);
     expect(out.slice(1)).toEqual(['factory.yml refused:', '- budgets.per_ticket_tokens: a positive integer is expected']);
   });
@@ -217,13 +217,21 @@ describe('factory validate: the worst case of the preset (ORC-216)', () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-validate-home-'));
     writeFileSync(join(home, 'factory.yml'), 'budgets: { per_step_tokens: off, per_ticket_tokens: 1000 }\nprojects:\n  - { id: app, repo_path: /repo, linear_team_key: APP }\n');
     const out: string[] = [];
-    expect(runValidateCommand({ repoPath: repo(), out: (l) => out.push(l), factoryYml: () => loadFactoryLimits(home) })).toBe(1);
+    expect(runValidateCommand({ checkout: repo(), out: (l) => out.push(l), factoryYml: () => loadFactoryLimits(home) })).toBe(1);
     expect(out.slice(1)).toEqual(['factory.yml refused:', expect.stringMatching(/^- projects: replaced by repos \(ORC-480\), one entry per repository/)]);
+  });
+
+  it('refuses knowledge.repo_path, saying how to rewrite the section (ORC-481)', () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-validate-home-'));
+    writeFileSync(join(home, 'factory.yml'), 'budgets: { per_step_tokens: off, per_ticket_tokens: 1000 }\nknowledge:\n  repo_path: /home/moi/kb\n');
+    const out: string[] = [];
+    expect(runValidateCommand({ checkout: repo(), out: (l) => out.push(l), factoryYml: () => loadFactoryLimits(home) })).toBe(1);
+    expect(out.slice(1)).toEqual(['factory.yml refused:', expect.stringMatching(/^- knowledge\.repo_path: no longer read \(ORC-481\).*`knowledge: \{ github: <owner>\/<name> \}`/)]);
   });
 
   it('refuses a factory.yml it cannot read, as unreadable, not a crash', () => {
     const out: string[] = [];
-    const code = runValidateCommand({ repoPath: repo(), out: (l) => out.push(l), factoryYml: () => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); } });
+    const code = runValidateCommand({ checkout: repo(), out: (l) => out.push(l), factoryYml: () => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); } });
     expect(code).toBe(1);
     expect(out.slice(1)).toEqual(['factory.yml refused:', '- unreadable: EACCES: permission denied']);
   });

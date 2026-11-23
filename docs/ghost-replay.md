@@ -86,7 +86,9 @@ The ticket starts to do, whatever Linear says of it now (Done), and runs the fan
   `start` refuses a ticket its project replayed already, and the daemon delegates none twice. Replay it on another project.
 - **The knowledge base at its start**: the session's index (its system prompt) and the MCP's `kb_search` read the one `start`
   rebuilt under `knowledge/`, never pulled, never the daemon's, which may hold a note learned from the ticket's own PR; neither
-  with `--memory off`. No knowledge base is mounted in the sandbox (ORC-232).
+  with `--memory off`. No knowledge base is mounted in the sandbox (ORC-232). That commit is read from `start`'s own clone of
+  `knowledge.github`, `<FACTORY_HOME>/ghost/.knowledge`, made from GitHub with the App's token and pulled once per command, never the
+  daemon's (ORC-481).
 
 ## Threshold, judging, report
 

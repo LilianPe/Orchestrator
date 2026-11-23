@@ -30,7 +30,7 @@ async function main(): Promise<number> {
   // Its own option, `--dev` (ORC-411): a Smee channel without a public URL.
   if (process.argv[2] === 'init') return runInitCommand(process.argv.slice(3));
   // The repository's file, the budgets, max_diff and tools of factory.yml (ORC-216, ORC-381, ORC-383), its secrets left unresolved: no running instance needed.
-  if (process.argv[2] === 'validate') return runValidateCommand({ repoPath: process.argv[3] ?? process.cwd(), out: (l) => console.log(l), factoryYml: () => loadFactoryLimits(factoryHome()) });
+  if (process.argv[2] === 'validate') return runValidateCommand({ checkout: process.argv[3] ?? process.cwd(), out: (l) => console.log(l), factoryYml: () => loadFactoryLimits(factoryHome()) });
   const { positionals, values } = parseArgs({
     allowPositionals: true,
     options: { json: { type: 'boolean' } },
@@ -53,7 +53,7 @@ async function main(): Promise<number> {
 
   switch (cmd) {
     case 'doctor':
-      return runDoctorCommand({ repoPath: arg ?? process.cwd(), home, json: values.json });
+      return runDoctorCommand({ checkout: arg ?? process.cwd(), home, json: values.json });
     case 'up': {
       const app = await startFactory({ home });
       console.log(`${PRODUCT_NAME} is running: ${app.url}  (Ctrl+C to stop)`);

@@ -333,9 +333,9 @@ export async function runInit(d: InitDeps): Promise<void> {
   const { io } = d;
   const top = await d.exec('git', ['rev-parse', '--show-toplevel'], { cwd: d.cwd });
   // One form whatever gave the path: git writes `C:/x` on Windows, a typed one may be relative or end with `/`.
-  const repoPath = resolve(top.code === 0 ? top.stdout.trim() : await io.ask(`Path of the git repository to hand to ${PRODUCT_NAME}`));
+  const checkout = resolve(top.code === 0 ? top.stdout.trim() : await io.ask(`Path of the git repository to hand to ${PRODUCT_NAME}`));
   // What its entry names (ORC-480): the daemon fetches it from GitHub into a mirror of its own, never from this checkout.
-  const github = await originGithub(repoPath, d.exec);
+  const github = await originGithub(checkout, d.exec);
   const cfg = loadInstance(d.home);
   const ymlPath = join(d.home, 'factory.yml');
   // Before init writes one with its App's references, its own left unread.
@@ -360,7 +360,7 @@ export async function runInit(d: InitDeps): Promise<void> {
 
   // The project's other fields (its id, its roles, written by hand) stay. A new one's id is its folder's, made unique: the key of
   // its tickets and labels, which another repository of the same folder name already holds.
-  const entry = { ...previous, id: previous?.id ?? freeId(slugify(basename(repoPath), 30), cfg.projects), github: previous?.github ?? github, linearTeamKey: teamKey };
+  const entry = { ...previous, id: previous?.id ?? freeId(slugify(basename(checkout), 30), cfg.projects), github: previous?.github ?? github, linearTeamKey: teamKey };
   cfg.projects = previous ? cfg.projects.map((p) => (p === previous ? entry : p)) : [...cfg.projects, entry];
   // Smee only on demand (ORC-411): a public channel, for a workstation; a server has its public URL, and --dev changes nothing
   // there, even beside an old channel. The development mode is what --dev writes (ORC-444): the daemon's leave to start the
@@ -376,15 +376,15 @@ export async function runInit(d: InitDeps): Promise<void> {
 
   // The workflow is the factory/default preset (ORC-388): the repository's part is its `.factory/config.yml`, read on the
   // default branch, which `init` proposes and leaves to commit.
-  for (const file of ignoredWorkflowFiles(repoPath)) io.print(ignoredWorkflowWarning(file));
-  const detected = existsSync(join(repoPath, REPO_CONFIG_PATH)) ? undefined : detect(repoPath);
+  for (const file of ignoredWorkflowFiles(checkout)) io.print(ignoredWorkflowWarning(file));
+  const detected = existsSync(join(checkout, REPO_CONFIG_PATH)) ? undefined : detect(checkout);
   const proposed = detected && proposal(detected);
   if (proposed) io.print(proposed);
   // The red check's command (ORC-412), in what it proposes or, as the daemon reads it, on the default branch: without it,
   // every ticket blocks at the tests step. A file git cannot read there is `factory validate`'s and `factory doctor`'s to name.
   const commands = detected
     ? detected.commands
-    : await makeRepoConfig({ exec: d.exec })({ mirror: repoPath }, { fetch: false }).then((c) => c.commands, () => undefined);
+    : await makeRepoConfig({ exec: d.exec })({ mirror: checkout }, { fetch: false }).then((c) => c.commands, () => undefined);
   for (const warning of testCommandWarnings(commands)) io.print(warning);
   if (detected?.commands['pytest']) io.print(PYTEST_BESIDE_TEST);
 
@@ -394,7 +394,7 @@ export async function runInit(d: InitDeps): Promise<void> {
   saveInstance(d.home, cfg, written?.text, drawn?.file);
   // The maturity report (ORC-410): each point the same detection read, as a card to approve, over a repository `init` proposes.
   // After factory.yml: a database that fails loses none of the answers.
-  if (detected) await printMaturity(d, entry.id, (run) => maturityReport(repoPath, detected, run), cfg.publicUrl ?? `http://localhost:${cfg.port}`);
+  if (detected) await printMaturity(d, entry.id, (run) => maturityReport(checkout, detected, run), cfg.publicUrl ?? `http://localhost:${cfg.port}`);
   // An App factory.yml already has is set up: its steps would only add noise.
   if (firstSetup && !appDeclared) io.print(githubAppSteps(cfg.publicUrl, d.home, !written));
   if (!written) {

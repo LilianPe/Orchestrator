@@ -246,14 +246,14 @@ describe('Daemon', () => {
       const issue = { identifier: 'REL-1', title: 'Export CSV', description: 'Export the scores as CSV, one row per player.', url: '', stateName: '', stateType: 'unstarted', labels: [], teamKey: 'REL', priority: 0, createdAt: 0 };
       const read: (string | undefined)[] = [];
       const knowledgeIndex = async (repo?: string) => (read.push(repo), { text: repo ? '- [Then](notes/then.md)\n' : '- [Now](notes/now.md)\n', more: 0 });
-      const then = setup({ knowledgeIndex, replays: { of: async () => ({ repoPath: '/ghost/g1/REL-1/repo', knowledge: '/ghost/g1/REL-1/knowledge', issue }) } });
+      const then = setup({ knowledgeIndex, replays: { of: async () => ({ clone: '/ghost/g1/REL-1/repo', knowledge: '/ghost/g1/REL-1/knowledge', issue }) } });
       then.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
       await then.orch.accept(delegated());
       await then.orch.drained();
       // Never the knowledge base of now, which may hold a note learned from the ticket's own PR.
       expect(then.runner.requests[0]!.systemPrompt).toContain('- [Then](notes/then.md)');
       expect(read).toEqual(['/ghost/g1/REL-1/knowledge']);
-      const off = setup({ knowledgeIndex, replays: { of: async () => ({ repoPath: '/ghost/g1/REL-1/repo', issue }) } });
+      const off = setup({ knowledgeIndex, replays: { of: async () => ({ clone: '/ghost/g1/REL-1/repo', issue }) } });
       off.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
       await off.orch.accept(delegated());
       await off.orch.drained();

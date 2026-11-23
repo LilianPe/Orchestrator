@@ -508,7 +508,7 @@ describe('factory init: the GitHub App and factory.yml (ORC-411)', () => {
     expect(out).toContain('Active');
     const text = readFileSync(join(home, 'factory.yml'), 'utf8');
     const lines: string[] = [];
-    expect(runValidateCommand({ repoPath: repo, out: (l) => lines.push(l), factoryYml: () => loadFactoryLimits(home) })).toBe(0);
+    expect(runValidateCommand({ checkout: repo, out: (l) => lines.push(l), factoryYml: () => loadFactoryLimits(home) })).toBe(0);
     // As `factory doctor` and `factory up` read it, with the daemon's environment.
     const yml = parseFactoryYml(text, ENV);
     expect(yml.github).toMatchObject({ appId: '123', privateKey: '/k.pem' });

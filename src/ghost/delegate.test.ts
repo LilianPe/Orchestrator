@@ -82,7 +82,7 @@ describe('the daemon delegates each replayed ticket to the replay\'s project (OR
     mkdirSync(join(dir, 'g1', 'REL-1', 'knowledge'));
     await replays.delegate();
     const r = await replays.of('ghost', 'REL-1');
-    expect(r).toMatchObject({ repoPath: join(dir, 'g1', 'REL-1', 'repo'), knowledge: join(dir, 'g1', 'REL-1', 'knowledge'), issue: { identifier: 'REL-1', title: 'Export CSV', description: 'Export the audits as CSV from their list.', teamKey: 'REL' } });
+    expect(r).toMatchObject({ clone: join(dir, 'g1', 'REL-1', 'repo'), knowledge: join(dir, 'g1', 'REL-1', 'knowledge'), issue: { identifier: 'REL-1', title: 'Export CSV', description: 'Export the audits as CSV from their list.', teamKey: 'REL' } });
     expect(r!.issue.url).not.toContain('linear.app');
     expect(r!.history).toContain('CSV, not XLSX.');
     expect(r!.history).toContain('### REL-2 — Audit list');
@@ -118,7 +118,7 @@ describe('the daemon delegates each replayed ticket to the replay\'s project (OR
     await replays.delegate();
     await replays.delegate();
     expect(accepted.map((e) => e.id)).toEqual([replayDelegationId('g1', 'REL-1')]);
-    expect((await replays.of('ghost', 'REL-1'))!.repoPath).toBe(join(dir, 'g1', 'REL-1', 'repo'));
+    expect((await replays.of('ghost', 'REL-1'))!.clone).toBe(join(dir, 'g1', 'REL-1', 'repo'));
     expect(logs.filter((l) => l.includes('replays once per project'))).toEqual(['REL-1 of replay g2 not run: ghost replayed it already for g1, a ticket replays once per project']);
   });
 });

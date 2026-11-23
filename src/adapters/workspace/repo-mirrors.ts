@@ -17,7 +17,7 @@ const SEGMENT = /^(?!\.{1,2}$)[A-Za-z0-9._-]+$/;
 /**
  * The daemon's own bare mirror of each GitHub repository (ORC-479), `<root>/<owner>/<name>` in lower case (GitHub's names ignore
  * it): the git source of the workspaces, the repository's config, the fingerprints and the ghost, in place of a clone the operator
- * keeps (`repo_path`). Its `origin` is the forge's URL, never with a credential: the App's token reaches git in its environment
+ * kept before ORC-480. Its `origin` is the forge's URL, never with a credential: the App's token reaches git in its environment
  * alone (`auth`), never the mirror's config nor the disk. It holds only `refs/remotes/origin/*` and `origin/HEAD`, no local
  * branch. Never mounted in a sandbox: an agent's repository copies its objects (`agentRepository`).
  *
@@ -111,7 +111,7 @@ export class RepoMirrors {
       await git('config', 'remote.origin.url', this.url(github));
       await git('config', 'remote.origin.fetch', ORIGIN_REFSPEC);
       // Its whole history: the agents' repositories, the diffs and the fingerprints are read from it.
-      await fetchOrigin(this.exec, making, { deadlineMs: MIRROR_CLONE_DEADLINE_MS, auth: this.tokenOf(github), ...(log ? { log } : {}) });
+      await fetchOrigin(this.exec, making, { deadlineMs: MIRROR_CLONE_DEADLINE_MS, auth: this.authOf(github), ...(log ? { log } : {}) });
       await this.setHead(github, making);
       if (!renamed(making, path)) {
         await rm(making, { recursive: true, force: true });
@@ -122,8 +122,11 @@ export class RepoMirrors {
     }
   }
 
-  /** The `CloneAuth` of `github`'s mirror at whatever path it is (`make`'s, aside). */
-  private tokenOf(github: string): CloneAuth {
+  /**
+   * The `CloneAuth` of `github` whatever the path git runs in: its mirror's at `make`'s path aside, and the knowledge base's clone
+   * (ORC-481), which reads and pushes with the same token.
+   */
+  authOf(github: string): CloneAuth {
     return async () => (this.o.auth ? this.o.auth(github) : {});
   }
 
@@ -134,7 +137,7 @@ export class RepoMirrors {
    */
   private async setHead(github: string, repo: string, deadlineMs = MIRROR_CLONE_DEADLINE_MS): Promise<void> {
     if ((await this.exec('git', ['-C', repo, 'rev-parse', '--verify', '--quiet', 'refs/remotes/origin/HEAD'])).code === 0) return;
-    const env = await remoteGitEnv(this.tokenOf(github), repo, deadlineMs);
+    const env = await remoteGitEnv(this.authOf(github), repo, deadlineMs);
     const r = await this.exec('git', ['-C', repo, 'remote', 'set-head', 'origin', '--auto'], { env, timeoutMs: deadlineMs });
     if (r.code === 0) return;
     // Pruned after a rename: a reader of the default branch fails until a next fetch sets it, said at each failure.

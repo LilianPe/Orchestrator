@@ -22,6 +22,8 @@ interface FakeOptions {
   protection?: BranchProtection;
   failInstallation?: 'network' | 'unreadable';
   permissions?: Record<string, string>;
+  /** The installation's permissions on the knowledge base's repository, `acme/notes` (ORC-481), or why GitHub gave none. */
+  knowledge?: Record<string, string> | Error;
 }
 
 /** The permissions the manifest asks for (docs/github-app-manifest.json): what a conforming installation holds. */
@@ -54,7 +56,12 @@ class FakeApi implements DoctorApi {
     return this.options.protection ?? { branch: 'main', classic: false, rules: ['pull_request'], pullRequestRulesets: [{ id: 1, bypass: 'never' }] };
   }
 
-  async installationPermissions(): Promise<Record<string, string>> {
+  async installationPermissions(github: string): Promise<Record<string, string>> {
+    if (github === 'acme/notes') {
+      const knowledge = this.options.knowledge ?? MANIFEST_PERMISSIONS;
+      if (knowledge instanceof Error) throw knowledge;
+      return knowledge;
+    }
     if (this.options.failInstallation === 'network') throw new Error('getaddrinfo ENOTFOUND api.github.com');
     if (this.options.failInstallation === 'unreadable') throw new UnreadableAnswerError('GitHub API GET /repos/acme/app/installation: unreadable answer');
     return this.options.permissions ?? MANIFEST_PERMISSIONS;
@@ -104,12 +111,12 @@ function workflow(content: string, path = '.github/workflows/ci.yml'): WorkflowS
 async function doctor(
   workflows: WorkflowSource[],
   environments: EnvironmentProtection[] = [],
-  options: { json?: boolean; fake?: FakeOptions; naming?: BranchNaming; repoPath?: string; commands?: Record<string, string>; host?: HostReport } = {},
+  options: { json?: boolean; fake?: FakeOptions; naming?: BranchNaming; checkout?: string; commands?: Record<string, string>; host?: HostReport; knowledge?: string } = {},
 ): Promise<{ code: number; lines: string[]; text: string; api: FakeApi }> {
   const api = new FakeApi(workflows, environments, options.fake);
   const lines: string[] = [];
   const code = await runDoctor({
-    repoPath: options.repoPath ?? '/repo',
+    checkout: options.checkout ?? '/repo',
     github: 'acme/app',
     api,
     host: options.host ?? goodHost,
@@ -117,6 +124,7 @@ async function doctor(
     ...(options.json ? { json: true } : {}),
     ...(options.naming ? { naming: options.naming } : {}),
     ...(options.commands ? { commands: options.commands } : {}),
+    ...(options.knowledge ? { knowledge: options.knowledge } : {}),
   });
   return { code, lines, text: lines.join('\n'), api };
 }
@@ -487,7 +495,7 @@ jobs:
   it('puts whether the visual proof can be taken on this instance in the JSON report, whatever the verdict, a failure included (ORC-404)', async () => {
     const report = async (api: FakeApi, visualProof: { image?: string; detail: string }) => {
       const json: string[] = [];
-      const code = await runDoctor({ repoPath: '/repo', github: 'acme/app', api, host: goodHost, out: (l) => json.push(l), json: true, visualProof });
+      const code = await runDoctor({ checkout: '/repo', github: 'acme/app', api, host: goodHost, out: (l) => json.push(l), json: true, visualProof });
       return { code, report: JSON.parse(json.join('\n')) as unknown };
     };
     expect(await report(new FakeApi([]), { image: 'b:1', detail: 'the captures run in b:1' })).toEqual({
@@ -500,7 +508,7 @@ jobs:
 
   it('says it first in text, from the CLI, once, before it needs the GitHub App (ORC-404)', async () => {
     const lines: string[] = [];
-    await runDoctorCommand({ repoPath: '/repo', home: tempHome(), env: {}, out: (line) => lines.push(line) });
+    await runDoctorCommand({ checkout: '/repo', home: tempHome(), env: {}, out: (line) => lines.push(line) });
     expect(lines[0]).toMatch(/^Visual proof on this instance: unavailable — .*FACTORY_CONTAINER_CLI/);
     expect(lines.filter((l) => l.startsWith('Visual proof'))).toHaveLength(1);
   });
@@ -508,7 +516,7 @@ jobs:
   it('fails with a clear message when the GitHub App is not configured', async () => {
     const home = tempHome();
     const lines: string[] = [];
-    const code = await runDoctorCommand({ repoPath: '/repo', home, env: {}, out: (line) => lines.push(line) });
+    const code = await runDoctorCommand({ checkout: '/repo', home, env: {}, out: (line) => lines.push(line) });
     expect(code).toBe(1);
     expect(lines.join('\n')).toContain('GitHub App not configured');
     expect(lines.join('\n')).not.toMatch(/\bgh\b/);
@@ -520,7 +528,8 @@ jobs:
     const home = tempHome();
     const pemPath = join(home, 'github-app.pem');
     writeFileSync(pemPath, privatePem);
-    writeFileSync(join(home, 'factory.yml'), 'github:\n  app_id: "123"\n  private_key: env:GH_APP_KEY\n  installation_id: "42"\n');
+    // The knowledge base's repository (ORC-481), whose installation doctor reads too.
+    writeFileSync(join(home, 'factory.yml'), 'github:\n  app_id: "123"\n  private_key: env:GH_APP_KEY\n  installation_id: "42"\nknowledge:\n  github: acme/notes\n');
 
     const now = Date.parse('2026-10-22T10:00:00Z');
     const ci = 'on: pull_request\npermissions: read-all\njobs:\n  test:\n    steps:\n      - run: npm test\n';
@@ -543,6 +552,7 @@ jobs:
       (url) => (url.pathname === '/repos/acme/app/rules/branches/main' ? { body: [{ type: 'pull_request', ruleset_id: 9 }] } : undefined),
       (url) => (url.pathname === '/repos/acme/app/rulesets/9' ? { body: { id: 9, current_user_can_bypass: 'never' } } : undefined),
       (url) => (url.pathname === '/repos/acme/app/installation' ? { body: { id: 42, permissions: MANIFEST_PERMISSIONS } } : undefined),
+      (url) => (url.pathname === '/repos/acme/notes/installation' ? { body: { id: 42, permissions: MANIFEST_PERMISSIONS } } : undefined),
     ];
     const http: HttpClient = async (url, init) => {
       const parsed = new URL(url);
@@ -567,7 +577,7 @@ jobs:
 
     const lines: string[] = [];
     const code = await runDoctorCommand({
-      repoPath: '/repo',
+      checkout: '/repo',
       home,
       env: { FACTORY_CONTAINER_CLI: 'docker', ...RUNNER, GH_APP_KEY: pemPath },
       out: (line) => lines.push(line),
@@ -579,6 +589,7 @@ jobs:
     expect(lines.join('\n')).toContain('Host: accepted');
     expect(lines.join('\n')).toContain('Default branch main: accepted');
     expect(lines.join('\n')).toContain('GitHub App installation: accepted');
+    expect(lines.join('\n')).toContain('Knowledge base acme/notes: accepted');
     expect(lines.join('\n')).toContain('verdict: accepted');
     // No `.factory/config.yml` on the default branch: no `commands.test` either (ORC-412).
     expect(lines).toContain(MISSING_TEST_COMMAND);
@@ -606,7 +617,7 @@ jobs:
       return args.includes('get-url') ? { stdout: 'https://gitlab.example.com/acme/app.git\n', stderr: '', code: 0 } : { stdout: '', stderr: 'fatal', code: 128 };
     };
     const lines: string[] = [];
-    const code = await runDoctorCommand({ repoPath: '/repo', home, env: { FACTORY_CONTAINER_CLI: 'docker', ...RUNNER, GH_APP_KEY: pemPath }, out: (line) => lines.push(line), http, exec });
+    const code = await runDoctorCommand({ checkout: '/repo', home, env: { FACTORY_CONTAINER_CLI: 'docker', ...RUNNER, GH_APP_KEY: pemPath }, out: (line) => lines.push(line), http, exec });
     expect(code).toBe(1);
     expect(lines.at(-1)).toMatch(/^the origin remote of \/repo is not a GitHub repository: set it to https:\/\/github\.com/);
     expect(asked).toEqual([]);
@@ -827,21 +838,21 @@ jobs:
     }
 
     it('warns about .factory/workflow.yml and .relais/workflow.yml, ignored, to delete, without reading them or changing the verdict', async () => { // transition, à retirer
-      const result = await doctor([], [], { repoPath: repoWith(['.factory/workflow.yml', '.relais/workflow.yml']) }); // transition, à retirer
+      const result = await doctor([], [], { checkout: repoWith(['.factory/workflow.yml', '.relais/workflow.yml']) }); // transition, à retirer
       expect(result.code).toBe(0);
       expect(result.lines).toContain('Warning: .factory/workflow.yml is ignored: the workflow is the factory/default preset. Delete it; its setup and checks go in .factory/config.yml.');
       expect(result.lines).toContain('Warning: .relais/workflow.yml is ignored: the workflow is the factory/default preset. Delete it; its setup and checks go in .factory/config.yml.'); // transition, à retirer
     });
 
     it('lists them in the JSON report', async () => {
-      const result = await doctor([], [], { repoPath: repoWith(['.factory/workflow.yml']), json: true });
+      const result = await doctor([], [], { checkout: repoWith(['.factory/workflow.yml']), json: true });
       expect(JSON.parse(result.text)).toMatchObject({ accepted: true, ignored: ['.factory/workflow.yml'] });
-      const failed = await doctor([], [], { repoPath: repoWith(['.relais/workflow.yml']), json: true, fake: { failWorkflows: true } }); // transition, à retirer
+      const failed = await doctor([], [], { checkout: repoWith(['.relais/workflow.yml']), json: true, fake: { failWorkflows: true } }); // transition, à retirer
       expect(JSON.parse(failed.text)).toMatchObject({ accepted: false, ignored: ['.relais/workflow.yml'] }); // transition, à retirer
     });
 
     it('says nothing of a repository without one', async () => {
-      const result = await doctor([], [], { repoPath: repoWith([]) });
+      const result = await doctor([], [], { checkout: repoWith([]) });
       expect(result.text).not.toContain('workflow.yml');
     });
   });
@@ -874,7 +885,7 @@ jobs:
     const ORC_170 = ['Todo', 'In Progress', 'AI Review', 'Human Review', 'Done', 'Canceled'];
     const cli = async (home: string, team: string[] | Error = ORC_170) => {
       const lines: string[] = [];
-      await runDoctorCommand({ repoPath: '/repo', home, env: {}, out: (line) => lines.push(line), exec: originOn('acme/app'), teamStatuses: async () => (team instanceof Error ? Promise.reject(team) : team) });
+      await runDoctorCommand({ checkout: '/repo', home, env: {}, out: (line) => lines.push(line), exec: originOn('acme/app'), teamStatuses: async () => (team instanceof Error ? Promise.reject(team) : team) });
       return lines.filter((l) => /status/i.test(l));
     };
 
@@ -886,7 +897,7 @@ jobs:
 
     it('refuses statuses the daemon would refuse at load, exit 1', async () => {
       const lines: string[] = [];
-      const code = await runDoctorCommand({ repoPath: '/repo', home: homeWith('statuses:\n  build: Todo\n'), env: {}, out: (line) => lines.push(line), exec: originOn('acme/app'), teamStatuses: async () => ORC_170 });
+      const code = await runDoctorCommand({ checkout: '/repo', home: homeWith('statuses:\n  build: Todo\n'), env: {}, out: (line) => lines.push(line), exec: originOn('acme/app'), teamStatuses: async () => ORC_170 });
       expect(code).toBe(1);
       expect(lines).toContainEqual(expect.stringMatching(/« Todo » would name both todo and dev/));
     });
@@ -906,7 +917,7 @@ jobs:
 
     it('without a Linear connection, says the statuses are not checked', async () => {
       const lines: string[] = [];
-      await runDoctorCommand({ repoPath: '/repo', home: homeWith(), env: {}, out: (line) => lines.push(line), exec: originOn('acme/app') });
+      await runDoctorCommand({ checkout: '/repo', home: homeWith(), env: {}, out: (line) => lines.push(line), exec: originOn('acme/app') });
       expect(lines).toContain('Linear statuses not checked: Linear not connected: run `factory up`, then connect Linear.');
     });
   });
@@ -922,7 +933,7 @@ jobs:
     // The checkout's origin names the entry's repository, whatever its case (ORC-480).
     const cli = async (home: string, github = 'acme/app') => {
       const lines: string[] = [];
-      await runDoctorCommand({ repoPath: '/repo', home, env: {}, out: (line) => lines.push(line), exec: originOn(github) });
+      await runDoctorCommand({ checkout: '/repo', home, env: {}, out: (line) => lines.push(line), exec: originOn(github) });
       return lines;
     };
     const warned = async (home: string, github?: string) => (await cli(home, github)).filter((l) => l.includes('authz.validators'));
@@ -955,7 +966,7 @@ jobs:
     it('lists them in the JSON report, whatever the verdict, and only when there is one', async () => {
       const report = async (api: FakeApi, validatorWarnings?: string[]) => {
         const json: string[] = [];
-        await runDoctor({ repoPath: '/repo', github: 'acme/app', api, host: goodHost, json: true, out: (line) => json.push(line), ...(validatorWarnings ? { validatorWarnings } : {}) });
+        await runDoctor({ checkout: '/repo', github: 'acme/app', api, host: goodHost, json: true, out: (line) => json.push(line), ...(validatorWarnings ? { validatorWarnings } : {}) });
         return JSON.parse(json.join('\n')) as unknown;
       };
       expect(await report(new FakeApi([]), ['Warning: app: x'])).toMatchObject({ accepted: true, validatorWarnings: ['Warning: app: x'] });
@@ -974,7 +985,7 @@ jobs:
     };
     const cli = async (home: string, json = false) => {
       const lines: string[] = [];
-      const code = await runDoctorCommand({ repoPath: '/repo', home, env: {}, out: (line) => lines.push(line), ...(json ? { json } : {}) });
+      const code = await runDoctorCommand({ checkout: '/repo', home, env: {}, out: (line) => lines.push(line), ...(json ? { json } : {}) });
       return { code, lines, relay: lines.filter((l) => l.includes('kind: smee')) };
     };
 
@@ -1004,7 +1015,7 @@ jobs:
     it('lists the warning in the JSON report, and only when there is one', async () => {
       const report = async (startWarnings?: string[]) => {
         const json: string[] = [];
-        await runDoctor({ repoPath: '/repo', github: 'acme/app', api: new FakeApi([]), host: goodHost, json: true, out: (line) => json.push(line), ...(startWarnings ? { startWarnings } : {}) });
+        await runDoctor({ checkout: '/repo', github: 'acme/app', api: new FakeApi([]), host: goodHost, json: true, out: (line) => json.push(line), ...(startWarnings ? { startWarnings } : {}) });
         return JSON.parse(json.join('\n')) as unknown;
       };
       expect(await report(['Warning: relay: x'])).toMatchObject({ accepted: true, startWarnings: ['Warning: relay: x'] });
@@ -1028,7 +1039,7 @@ describe('an old SQLite database in FACTORY_HOME (ORC-463)', () => {
   it("warns with the start's message, before it needs the GitHub App", async () => {
     const home = homeWithOldDatabases();
     const lines: string[] = [];
-    expect(await runDoctorCommand({ repoPath: '/repo', home, env: {}, out: (line) => lines.push(line) })).toBe(1);
+    expect(await runDoctorCommand({ checkout: '/repo', home, env: {}, out: (line) => lines.push(line) })).toBe(1);
     const warned = oldDatabaseWarnings(home);
     expect(warned).toHaveLength(2);
     expect(lines.filter((l) => warned.includes(l))).toEqual(warned);
@@ -1038,7 +1049,7 @@ describe('an old SQLite database in FACTORY_HOME (ORC-463)', () => {
   it('lists them in the JSON report under startWarnings', async () => {
     const home = homeWithOldDatabases();
     const lines: string[] = [];
-    expect(await runDoctorCommand({ repoPath: '/repo', home, env: {}, json: true, out: (line) => lines.push(line) })).toBe(1);
+    expect(await runDoctorCommand({ checkout: '/repo', home, env: {}, json: true, out: (line) => lines.push(line) })).toBe(1);
     expect(lines).toHaveLength(1);
     expect(JSON.parse(lines[0]!)).toMatchObject({ error: expect.stringContaining('GitHub App not configured'), startWarnings: oldDatabaseWarnings(home) });
   });
@@ -1052,10 +1063,10 @@ describe('a config.yaml left in FACTORY_HOME (ORC-199)', () => {
     const warned = oldInstanceFileWarnings(home);
     expect(warned).toEqual([expect.stringMatching(/^config\.yaml: left from before factory\.yml, not read/)]);
     const lines: string[] = [];
-    expect(await runDoctorCommand({ repoPath: '/repo', home, env: {}, out: (line) => lines.push(line) })).toBe(1);
+    expect(await runDoctorCommand({ checkout: '/repo', home, env: {}, out: (line) => lines.push(line) })).toBe(1);
     expect(lines).toContain(warned[0]);
     const json: string[] = [];
-    await runDoctorCommand({ repoPath: '/repo', home, env: {}, json: true, out: (line) => json.push(line) });
+    await runDoctorCommand({ checkout: '/repo', home, env: {}, json: true, out: (line) => json.push(line) });
     expect(JSON.parse(json[0]!)).toMatchObject({ error: expect.stringContaining('GitHub App not configured'), startWarnings: warned });
   });
 });
@@ -1119,7 +1130,7 @@ describe("the daemon's start refusals, each one doctor's", () => {
       );
       expect(started, name).toMatch(r.reason);
       const lines: string[] = [];
-      const code = await runDoctorCommand({ repoPath: '/repo', home, env, out: (line) => lines.push(line) });
+      const code = await runDoctorCommand({ checkout: '/repo', home, env, out: (line) => lines.push(line) });
       expect({ name, code, refused: lines.includes(started!) }).toEqual({ name, code: 1, refused: true });
     }
   });
@@ -1131,7 +1142,7 @@ describe("the daemon's start refusals, each one doctor's", () => {
     appendFileSync(join(home, 'factory.yml'), `secret_sources: { creds: { kind: systemd-creds } }\nsecrets_key: creds:secrets-key\n${claude}${signIn}`);
     const lines: string[] = [];
     // The daemon would take the active account's token, never this one.
-    await runDoctorCommand({ repoPath: '/repo', home, env: { ...client, CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-x\r\nX-Injected: 1' }, out: (line) => lines.push(line) });
+    await runDoctorCommand({ checkout: '/repo', home, env: { ...client, CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-x\r\nX-Injected: 1' }, out: (line) => lines.push(line) });
     expect(lines.filter((l) => l.startsWith('host: 0.0.0.0') || l.startsWith('CLAUDE_CODE_OAUTH_TOKEN'))).toEqual([]);
     expect(lines).toContain('GitHub App not configured: `factory doctor` needs github.app_id and github.private_key in factory.yml (or GH_APP_ID and GH_APP_KEY) to read the workflows and the environments.');
   });
@@ -1208,7 +1219,7 @@ describe('doctor --json on a refusal of the instance configuration (ORC-449)', (
     const home = tempHome();
     writeFileSync(join(home, 'factory.yml'), 'port: nope\n');
     const lines: string[] = [];
-    const code = await runDoctorCommand({ repoPath: '/repo', home, env: {}, json: true, out: (line) => lines.push(line) });
+    const code = await runDoctorCommand({ checkout: '/repo', home, env: {}, json: true, out: (line) => lines.push(line) });
     expect(code).toBe(1);
     expect(lines).toHaveLength(1);
     expect(JSON.parse(lines[0]!)).toMatchObject({ repoPath: '/repo', accepted: false, error: expect.stringMatching(/^invalid factory\.yml:\n- port/), visualProof: { available: false } });
@@ -1218,21 +1229,29 @@ describe('doctor --json on a refusal of the instance configuration (ORC-449)', (
     const home = tempHome();
     writeFileSync(join(home, 'factory.yml'), 'projects:\n  - { id: app, repo_path: /repo, linear_team_key: APP }\n');
     const lines: string[] = [];
-    expect(await runDoctorCommand({ repoPath: '/repo', home, env: {}, json: true, out: (line) => lines.push(line), exec: originOn('acme/app') })).toBe(1);
+    expect(await runDoctorCommand({ checkout: '/repo', home, env: {}, json: true, out: (line) => lines.push(line), exec: originOn('acme/app') })).toBe(1);
     expect(JSON.parse(lines[0]!)).toMatchObject({ accepted: false, error: expect.stringMatching(/^invalid factory\.yml:\n- projects: replaced by repos \(ORC-480\), one entry per repository/) });
+  });
+
+  it("refuses knowledge.repo_path, saying how to rewrite the section, as the start refuses it (ORC-481)", async () => {
+    const home = tempHome();
+    writeFileSync(join(home, 'factory.yml'), 'knowledge:\n  repo_path: /home/moi/kb\n');
+    const lines: string[] = [];
+    expect(await runDoctorCommand({ checkout: '/repo', home, env: {}, json: true, out: (line) => lines.push(line), exec: originOn('acme/app') })).toBe(1);
+    expect(JSON.parse(lines[0]!)).toMatchObject({ accepted: false, error: expect.stringMatching(/^invalid factory\.yml:\n- knowledge\.repo_path: no longer read \(ORC-481\).*`knowledge: \{ github: <owner>\/<name> \}`/) });
   });
 
   it('keeps the warnings said before the refusal, as the text says them', async () => {
     const home = tempHome();
     saveInstance(home, { port: 4160, host: '127.0.0.1', relay: { kind: 'smee', url: 'https://smee.io/abc' }, projects: [] });
     const lines: string[] = [];
-    expect(await runDoctorCommand({ repoPath: '/repo', home, env: { GH_APP_ID: '456' }, json: true, out: (line) => lines.push(line) })).toBe(1);
+    expect(await runDoctorCommand({ checkout: '/repo', home, env: { GH_APP_ID: '456' }, json: true, out: (line) => lines.push(line) })).toBe(1);
     expect(JSON.parse(lines.join('\n'))).toMatchObject({ error: expect.stringMatching(/^Incomplete GitHub App configuration/), startWarnings: [expect.stringContaining('smee')] });
   });
 
   it('stays JSON without the GitHub App', async () => {
     const lines: string[] = [];
-    expect(await runDoctorCommand({ repoPath: '/repo', home: tempHome(), env: {}, json: true, out: (line) => lines.push(line) })).toBe(1);
+    expect(await runDoctorCommand({ checkout: '/repo', home: tempHome(), env: {}, json: true, out: (line) => lines.push(line) })).toBe(1);
     expect(lines).toHaveLength(1);
     expect(JSON.parse(lines[0]!)).toMatchObject({ accepted: false, error: expect.stringContaining('GitHub App not configured') });
   });
@@ -1629,5 +1648,43 @@ describe("the GitHub App's installation permissions (ORC-439, ORC-441, ORC-443)"
     const result = await doctor([], [], { fake: { failWorkflows: true, permissions: { administration: 'write' } } });
     expect(result.code).toBe(1);
     expect(result.text).toContain('GitHub App installation: refused');
+  });
+});
+
+describe("the knowledge base's repository, which the daemon reads and pushes with the App's token (ORC-481)", () => {
+  it('accepts it when the installation covers it with Contents in write, and says so', async () => {
+    const result = await doctor([], [], { knowledge: 'acme/notes' });
+    expect(result.code).toBe(0);
+    expect(result.text).toContain("Knowledge base acme/notes: accepted — the App's installation covers it with Contents (write): the daemon clones it, pulls it and pushes its notes with its token");
+    const json = JSON.parse((await doctor([], [], { json: true, knowledge: 'acme/notes' })).text) as { knowledge: object };
+    expect(json.knowledge).toEqual({ github: 'acme/notes', verdict: 'accepted', reasons: [expect.stringContaining('Contents (write)')] });
+  });
+
+  it('refuses it when the installation reads it only, and says how to grant the push', async () => {
+    const result = await doctor([], [], { knowledge: 'acme/notes', fake: { knowledge: { ...MANIFEST_PERMISSIONS, contents: 'read' } } });
+    expect(result.code).toBe(1);
+    const line = result.lines.find((l) => l.startsWith('Knowledge base acme/notes: refused'));
+    for (const named of ['Contents (read)', 'Repository permissions → Contents', 'Read and write', 'Installed GitHub Apps']) expect(line).toContain(named);
+    expect(result.text).toContain('Result: refused — the GitHub App cannot push to the knowledge base acme/notes');
+  });
+
+  it('refuses it when the App is not installed on it, and says to add it to the installation', async () => {
+    const result = await doctor([], [], { knowledge: 'acme/notes', fake: { knowledge: new Error('GitHub API GET /repos/acme/notes/installation: 404 Not Found') } });
+    expect(result.code).toBe(1);
+    const line = result.lines.find((l) => l.startsWith('Knowledge base acme/notes: refused'));
+    expect(line).toContain('404 Not Found');
+    expect(line).toContain('Install the App on acme/notes');
+  });
+
+  it('says nothing of a knowledge base without one in factory.yml', async () => {
+    const result = await doctor([], []);
+    expect(result.text).not.toContain('Knowledge base');
+    expect(JSON.parse((await doctor([], [], { json: true })).text)).not.toHaveProperty('knowledge');
+  });
+
+  it("keeps its verdict when the workflows cannot be read", async () => {
+    const result = await doctor([], [], { knowledge: 'acme/notes', fake: { failWorkflows: true, knowledge: { contents: 'read' } } });
+    expect(result.code).toBe(1);
+    expect(result.text).toContain('Knowledge base acme/notes: refused');
   });
 });

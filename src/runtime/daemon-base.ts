@@ -239,7 +239,7 @@ export abstract class DaemonBase {
     if (!found || !ticketId) return found;
     // A replayed ticket (ORC-376) runs on its clone, and reads the ticket as it was.
     const replayed = await this.d.replays?.of(found.id, ticketId);
-    const project = replayed ? { ...found, mirror: replayed.repoPath, replayed } : found;
+    const project = replayed ? { ...found, mirror: replayed.clone, replayed } : found;
     const hash = (known === undefined ? await this.d.store.getTicket(project.id, ticketId) : known)?.workflowHash;
     if (!hash || hash === this.currentVersion(project).hash) return project;
     let workflow = this.workflows.get(hash);

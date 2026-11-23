@@ -80,7 +80,7 @@ export const REPO_CONFIG_PATH = `${REPO_CONFIG_DIR}/config.yml`;
 export const IGNORED_WORKFLOW_FILES = [`${REPO_CONFIG_DIR}/workflow.yml`, '.relais/workflow.yml']; // transition, à retirer
 
 /** The ignored workflow files present in a repository's working copy, for `factory doctor` and `factory init`, which run in a checkout; the daemon reads its mirror (`ignoredWorkflowFilesOn`). */
-export const ignoredWorkflowFiles = (repoPath: string): string[] => IGNORED_WORKFLOW_FILES.filter((file) => existsSync(join(repoPath, file)));
+export const ignoredWorkflowFiles = (dir: string): string[] => IGNORED_WORKFLOW_FILES.filter((file) => existsSync(join(dir, file)));
 
 export const ignoredWorkflowWarning = (file: string): string =>
   `Warning: ${file} is ignored: the workflow is the ${factoryDefault.name} preset. Delete it; its setup and checks go in ${REPO_CONFIG_PATH}.`;

@@ -942,11 +942,11 @@ describe('server', () => {
       const issue = { identifier: 'REL-1', title: 'Export, as it was', description: '', url: '', stateName: '', stateType: 'unstarted', labels: [], teamKey: 'REL', priority: 0, createdAt: 0 };
       const searched: (string | undefined)[] = [];
       const knowledgeSearch = async (_q: string, repo?: string) => (searched.push(repo), [{ file: 'notes/csv.md', line: 1, text: repo ? 'CSV, then' : 'CSV, learned from its PR' }]);
-      const then = await setup({ replays: { of: async () => ({ repoPath: '/ghost/g1/REL-1/repo', knowledge: '/ghost/g1/REL-1/knowledge', issue }) }, knowledgeSearch });
+      const then = await setup({ replays: { of: async () => ({ clone: '/ghost/g1/REL-1/repo', knowledge: '/ghost/g1/REL-1/knowledge', issue }) }, knowledgeSearch });
       // Never the knowledge base of now, which may hold a note learned from the ticket's own PR.
       expect((await call(then.app, 'kb_search', { query: 'export' })).content[0].text).toBe('notes/csv.md:1: CSV, then');
       expect(searched).toEqual(['/ghost/g1/REL-1/knowledge']);
-      const off = await setup({ replays: { of: async () => ({ repoPath: '/ghost/g1/REL-1/repo', issue }) }, knowledgeSearch });
+      const off = await setup({ replays: { of: async () => ({ clone: '/ghost/g1/REL-1/repo', issue }) }, knowledgeSearch });
       expect((await call(off.app, 'kb_search', { query: 'export' })).content[0].text).toBe('No note matches.');
       expect(searched).toEqual(['/ghost/g1/REL-1/knowledge']);
     });

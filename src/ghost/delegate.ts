@@ -45,7 +45,7 @@ async function readSnapshot(dir: string): Promise<IssueHistory | undefined> {
 /** What the run of a replayed ticket reads instead of the live ticket and the project's repository. */
 export interface ReplayedTicket {
   /** The clone at the start, standing for the project's repository (`asRepository`). */
-  repoPath: string;
+  clone: string;
   /** The ticket's text as of its start, read through no tracker at the launch. */
   issue: TrackerIssue;
   /** Its comments and linked tickets as of its start (`formatHistory`), none when it had neither. */
@@ -106,7 +106,7 @@ export class Replays implements ReplaySource {
     const text = formatHistory(history);
     const knowledge = join(dir, 'knowledge');
     const replayed: ReplayedTicket = {
-      repoPath: join(dir, 'repo'),
+      clone: join(dir, 'repo'),
       // No link to the live ticket, which holds the human's work: the agent reads the ticket as it was, here.
       issue: { identifier: issue.identifier, title: issue.title, description: issue.description, url: '(a replayed ticket: no link)', stateName: '', stateType: 'unstarted', labels: [], teamKey: teamOf(issue.identifier), priority: 0, createdAt: issue.createdAt },
       ...(text ? { history: text } : {}),

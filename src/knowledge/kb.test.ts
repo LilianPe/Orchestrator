@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { execCmd, type Exec } from '../adapters/exec.js';
+import { MIRROR_CLONE_DEADLINE_MS } from '../adapters/workspace/repo-mirrors.js';
 import { KB_INDEX_MAX, KnowledgeBase, knowledgePrompt } from './kb.js';
 
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8' });
@@ -99,6 +100,56 @@ describe('KnowledgeBase', () => {
     const kb = new KnowledgeBase(repo);
     expect(await kb.pull()).toBeUndefined();
     expect(kb.readIndex().text).toBe('- one\n');
+  });
+
+  // ORC-481: no human clone, the daemon keeps its own under <FACTORY_HOME>/knowledge.
+  describe('the clone the daemon keeps (ORC-481)', () => {
+    it('clones the repository when missing, on its default branch, its origin the forge without credentials, then commits and pushes there', async () => {
+      const { base, origin } = kbRepo();
+      const dir = join(base, 'home', 'knowledge');
+      const kb = new KnowledgeBase(dir, { origin, freshMs: 0 });
+      expect(await kb.pull()).toBeUndefined();
+      expect(kb.readIndex().text).toContain('agrégats');
+      expect(git(dir, 'branch', '--show-current').trim()).toBe('main');
+      expect(git(dir, 'config', 'remote.origin.url').trim()).toBe(origin);
+      expect(git(dir, 'rev-parse', '--is-bare-repository').trim()).toBe('false');
+      expect(await kb.commitNote('notes/preview/app.md', 'start\n', 'notes: app')).toBeUndefined();
+      expect(git(origin, 'show', 'main:notes/preview/app.md')).toBe('start\n');
+    });
+
+    it("sets its origin back to the forge's URL, a clone left there before or half made included", async () => {
+      const { base, origin, repo } = kbRepo();
+      git(repo, 'remote', 'set-url', 'origin', `${origin}-elsewhere`);
+      expect(await new KnowledgeBase(repo, { origin }).pull()).toBeUndefined();
+      expect(git(repo, 'config', 'remote.origin.url').trim()).toBe(origin);
+      const half = join(base, 'half');
+      git(base, 'init', '--quiet', half);
+      expect(await new KnowledgeBase(half, { origin }).pull()).toBeUndefined();
+      expect(new KnowledgeBase(half).readIndex().text).toContain('agrégats');
+    });
+
+    it("fetches a clone with no commit yet (a first clone cut short) with the first clone's deadline, then a clone with one with the launch's", async () => {
+      const { base, origin } = kbRepo();
+      const dir = join(base, 'knowledge');
+      const deadlines: (number | undefined)[] = [];
+      const recording: Exec = (cmd, args, opts) => {
+        if (args.includes('fetch')) deadlines.push(opts?.timeoutMs);
+        return execCmd(cmd, args, opts);
+      };
+      // Cut short: made, but its fetch failed.
+      expect(await new KnowledgeBase(dir, { origin: `${origin}-gone` }).pull().catch(() => 'failed')).toBe('failed');
+      const kb = new KnowledgeBase(dir, { origin, exec: recording, freshMs: 0 });
+      expect(await kb.pull()).toBeUndefined();
+      expect(await kb.pull()).toBeUndefined();
+      expect(deadlines).toEqual([MIRROR_CLONE_DEADLINE_MS, 60_000]);
+    });
+
+    it('fails its pull, said in the warning, when the forge cannot be read, and reads nothing', async () => {
+      const { base, origin } = kbRepo();
+      const index = await new KnowledgeBase(join(base, 'knowledge'), { origin: `${origin}-gone` }).refresh();
+      expect(index).toMatchObject({ text: '', more: 0 });
+      expect(index.warning).toMatch(/^Knowledge base: not pulled, the agents read it as it is: the forge could not be read/);
+    });
   });
 
   it('shares one refresh between launches that ask together, and with those right after it', async () => {

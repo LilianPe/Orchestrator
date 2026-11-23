@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Exec } from '../adapters/exec.js';
-import { httpsGithub, originGithub, sameGithub } from './project-github.js';
+import { originGithub, sameGithub } from './project-github.js';
 
 /** A clone whose `origin` is `origin` (none: git fails to read it), every command it is asked kept. */
 function clone(origin?: string): { exec: Exec; calls: string[][] } {
@@ -44,16 +44,5 @@ describe('originGithub (ORC-478, ORC-480)', () => {
   it('tells one repository whatever its case', () => {
     expect(sameGithub('Org/App', 'org/app')).toBe(true);
     expect(sameGithub('org/app', 'org/app2')).toBe(false);
-  });
-});
-
-describe('httpsGithub (ORC-478)', () => {
-  it('names the GitHub repository a clone fetches over HTTPS, and nothing for one over ssh, elsewhere or without origin', async () => {
-    expect(await httpsGithub('/kb', clone('https://github.com/org/kb.git').exec)).toBe('org/kb');
-    expect(await httpsGithub('/kb', clone('https://x-access-token:t@github.com/org/kb').exec)).toBe('org/kb');
-    expect(await httpsGithub('/kb', clone('git@github.com:org/kb.git').exec)).toBeUndefined();
-    expect(await httpsGithub('/kb', clone('ssh://git@github.com/org/kb.git').exec)).toBeUndefined();
-    expect(await httpsGithub('/kb', clone('https://gitlab.example.com/org/kb.git').exec)).toBeUndefined();
-    expect(await httpsGithub('/kb', clone().exec)).toBeUndefined();
   });
 });

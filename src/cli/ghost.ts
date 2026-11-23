@@ -15,6 +15,7 @@ import { GITHUB_APP_SECRETS, loadSealedFactoryYml } from '../config/server-secre
 import { NO_SANDBOXES_REFUSED, SANDBOXES_META } from '../ghost/delegate.js';
 import { asRepository, cloneAtStart, knowledgeAt, startTime } from '../ghost/history.js';
 import { blindPairs, ghostReport, GRADE_LABELS, GRADES, parseThreshold, type GhostGrade, type GhostReplay, type GhostSide, type GhostTicket } from '../ghost/replay.js';
+import { KnowledgeBase } from '../knowledge/kb.js';
 import { isFantome } from '../presets/fantome.js';
 import { openStore } from '../store/open.js';
 import { cliGithubForge } from './github.js';
@@ -334,6 +335,20 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
     making.catch(() => ready.delete(github));
     return making;
   };
+  // The knowledge base (ORC-481): ghost's own clone, `<ghost>/.knowledge`, never the daemon's, which it would race for git's locks.
+  // Made from GitHub if missing, brought up to its default branch once per command; a failure is not kept, the next ticket tries again.
+  const knowledgeDir = join(homePaths(home).ghost, '.knowledge');
+  let knowledgeClone: Promise<string> | undefined;
+  const knowledgeOf = (github: string): Promise<string> =>
+    (knowledgeClone ??= new KnowledgeBase(knowledgeDir, { origin: mirrors.url(github), auth: mirrors.authOf(github) }).pull().then(
+      (why) => {
+        if (why) throw new Error(why);
+        return knowledgeDir;
+      },
+    ).catch((err: Error) => {
+      knowledgeClone = undefined;
+      throw new Error(`the knowledge base ${github} could not be pulled: ${err.message}`);
+    }));
   try {
     let user = 'cli';
     try {
@@ -369,7 +384,7 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
         if (!memory || !instance.knowledge) return { start };
         // Transaction time: the knowledge base as it stood when the start commit was made.
         const at = await startTime({ dir: repo, sha: start });
-        const knowledge = await knowledgeAt({ repo: instance.knowledge.repoPath, before: at, dir: join(dir, 'knowledge') });
+        const knowledge = await knowledgeAt({ repo: await knowledgeOf(instance.knowledge.github), before: at, dir: join(dir, 'knowledge') });
         return { start, ...(knowledge ? { knowledge } : {}) };
       },
       ask: (q) => (rl ??= createInterface({ input: process.stdin, output: process.stdout })).question(q),

@@ -313,7 +313,7 @@ describe('the workflows doctor reads on the pilot repository (ORC-475)', () => {
   it('is accepted by doctor, every workflow of the repository, with no environment, as online (gh api …/environments)', async () => {
     const lines: string[] = [];
     const code = await runDoctor({
-      repoPath: root,
+      checkout: root,
       github: 'acme/app',
       api: {
         // Every file, as GitHub lists them: a third workflow is judged too.

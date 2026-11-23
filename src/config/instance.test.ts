@@ -35,11 +35,12 @@ describe('instance config', () => {
     const cfg = {
       port: 4100, host: '127.0.0.1', relay: { kind: 'smee' as const, url: 'https://smee.io/abc' }, dev: true,
       projects: [{ id: 'perso', github: 'org/perso', linearTeamKey: 'REL', effects: 'none' as const }],
-      knowledge: { repoPath: join(home, 'knowledge') },
+      knowledge: { github: 'org/notes' },
     };
     saveInstance(home, cfg);
     expect(loadInstance(home)).toEqual(cfg);
     expect(readFileSync(homePaths(home).factoryYml, 'utf8')).toContain('repos:\n  - id: perso\n    github: org/perso\n    linear_team: REL\n    effects: none\n');
+    expect(readFileSync(homePaths(home).factoryYml, 'utf8')).toContain('knowledge:\n  github: org/notes\n');
   });
 
   it('reads the projects as factory.yml is now, a project added or removed since included; the fallback when it does not read (ORC-454)', () => {
@@ -136,7 +137,8 @@ describe('instance config', () => {
     expect(() => parseFactoryYml('repos: [{ id: a, githb: org/a, linear_team: A }]\n')).toThrow(/repos\[0\]\.github: .*\n- repos\[0\]: .*githb/s);
     expect(() => parseFactoryYml('relay: { kind: smee }\n')).toThrow(/relay\.url/);
     expect(() => parseFactoryYml('limits: {}\n')).toThrow(/limits: unknown key/);
-    expect(() => parseFactoryYml('knowledge: {}\n')).toThrow(/knowledge\.repo_path: /);
+    expect(() => parseFactoryYml('knowledge: {}\n')).toThrow(/knowledge\.github: /);
+    expect(() => parseFactoryYml('knowledge: { github: notes }\n')).toThrow(/knowledge\.github: `<org>\/<repo>` expected/);
   });
 });
 

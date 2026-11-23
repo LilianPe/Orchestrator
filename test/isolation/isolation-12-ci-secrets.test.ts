@@ -45,12 +45,12 @@ describe.skipIf(skip)(title, () => {
     const host: HostReport = { verdict: 'accepted', reasons: ['held accepted'] };
     const api = { listWorkflows: (p: string) => live.listWorkflows(p), listEnvironments: (p: string) => live.listEnvironments(p), branchProtection, installationPermissions };
     const lines: string[] = [];
-    expect(await runDoctor({ repoPath: REPO, github: REPO, api, host, out: (l) => lines.push(l), json: true }), lines.join('\n')).toBe(0);
+    expect(await runDoctor({ checkout: REPO, github: REPO, api, host, out: (l) => lines.push(l), json: true }), lines.join('\n')).toBe(0);
     const report = JSON.parse(lines.join('\n')) as { workflows: { path: string; secrets: boolean; verdict: string }[] };
     expect(report.workflows, `${CANARY} is missing from the test repository`).toContainEqual(expect.objectContaining({ path: CANARY, secrets: true, verdict: 'accepted' }));
     // The control: the same workflows, the environment without its reviewer.
     const unprotected = { ...api, listEnvironments: async () => [{ name: ENVIRONMENT, requiredReviewers: false }] };
-    expect(await runDoctor({ repoPath: REPO, github: REPO, api: unprotected, host, out: () => {}, json: true })).toBe(1);
+    expect(await runDoctor({ checkout: REPO, github: REPO, api: unprotected, host, out: () => {}, json: true })).toBe(1);
   }, 120_000);
 
   it("a factory PR's CI does not run the job that reads the secret: it waits for the reviewer", async () => {
@@ -155,7 +155,7 @@ describe.skipIf(protectionGate.skip)(protectionGate.title, () => {
     const host: HostReport = { verdict: 'accepted', reasons: ['held accepted'] };
     const api = { listWorkflows: async () => [], listEnvironments: async () => [], branchProtection: async () => protection, installationPermissions: async () => ({}) };
     const lines: string[] = [];
-    const code = await runDoctor({ repoPath: REPO, github: REPO, api, host, out: (l) => lines.push(l), json: true });
+    const code = await runDoctor({ checkout: REPO, github: REPO, api, host, out: (l) => lines.push(l), json: true });
     const report = JSON.parse(lines.join('\n')) as { branchProtection: { branch: string; verdict: string } };
     expect(report.branchProtection, lines.join('\n')).toMatchObject({ branch, verdict: bypassable ? 'refused' : 'accepted' });
     expect(code).toBe(bypassable ? 1 : 0);
