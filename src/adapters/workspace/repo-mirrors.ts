@@ -71,11 +71,12 @@ export class RepoMirrors {
   readonly fetch: FetchOrigin = (repo, o = {}) =>
     this.turn(repo, async () => {
       const github = this.repos.get(resolve(repo));
+      const branches = !o.refspecs?.length;
       if (github && !existsSync(repo)) {
         await this.make(github, repo, o.log);
-        if (!o.refspecs?.length) return;
+        if (branches) return;
       }
-      await fetchOrigin(this.exec, repo, { ...o, auth: this.auth, ...(github && !o.refspecs?.length ? { prune: true } : {}) });
+      await fetchOrigin(this.exec, repo, { ...o, auth: this.auth, prune: !!github && branches });
       if (github) await this.setHead(github, repo, o.deadlineMs);
     });
 
