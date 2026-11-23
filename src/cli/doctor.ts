@@ -12,11 +12,11 @@ import { UnreadableAnswerError, type HttpClient } from '../adapters/forge/github
 import { resolveGithubApp } from '../config/github-app.js';
 import { GITHUB_APP_OPTIONAL_PERMISSIONS, GITHUB_APP_PERMISSIONS } from './init.js';
 import { GITHUB_APP_SECRETS, LINEAR_SECRETS, loadSealedFactoryYml, serverSecretLines, serverSecretReport, type SecretReport } from '../config/server-secrets.js';
-import { effectiveInstance, validatorWarnings, type ProjectConfig } from '../config/instance.js';
+import { effectiveInstance, loadSecrets, validatorWarnings, type ProjectConfig } from '../config/instance.js';
 import type { Workflow } from '../core/workflow.js';
 import { isFantome } from '../presets/fantome.js';
 import { defaultWorkflow, missingStatusWarning } from '../presets/workflow.js';
-import { activeClaudeAccount, claudeAccountReader, stepSettings } from '../config/factory-yml.js';
+import { activeClaudeAccount, claudeAccountReader, stepSettings, type FactoryYml } from '../config/factory-yml.js';
 import { startRefusals } from '../config/start-refusals.js';
 import { cliLinearTracker } from './linear.js';
 import { originGithub, sameGithub } from '../app/project-github.js';
@@ -1079,6 +1079,8 @@ export interface DoctorCommandOptions {
   home: string;
   env?: NodeJS.ProcessEnv;
   json?: boolean;
+  /** `--secrets` (ORC-456): every server secret read as the start reads them, one that cannot be read refusing alike; never said. */
+  secrets?: boolean;
   out?: (line: string) => void;
   http?: HttpClient;
   exec?: Exec;
@@ -1091,15 +1093,15 @@ export interface DoctorCommandOptions {
  * The statuses factory.yml names that the Linear team of each project lacks (ORC-382): a warning, never the verdict. The daemon
  * cannot refuse them at load, before it reads the team: `doctor` reads it, through the daemon's Linear connection.
  */
-async function statusWarnings(projects: readonly Pick<ProjectConfig, 'id' | 'linearTeamKey' | 'preset'>[], o: { home: string; env: NodeJS.ProcessEnv; states: Workflow['states']; read?: ((teamKey: string) => Promise<string[]>) | undefined }): Promise<string[]> {
+async function statusWarnings(projects: readonly Pick<ProjectConfig, 'id' | 'linearTeamKey' | 'preset'>[], o: { home: string; env: NodeJS.ProcessEnv; states: Workflow['states']; read?: ((teamKey: string) => Promise<string[]>) | undefined; sealed?: FactoryYml | undefined }): Promise<string[]> {
   const mine = projects.filter((p) => !isFantome(p));
   if (!mine.length) return [];
   let teamStatuses = o.read;
   if (!teamStatuses) {
     let tracker;
     try {
-      // Linear's secrets read apart from the GitHub App's: one that cannot be read leaves the other checks as they were.
-      tracker = cliLinearTracker(o.home, (await loadSealedFactoryYml(o.home, o.env, { only: LINEAR_SECRETS })).yml);
+      // Linear's secrets read apart from the GitHub App's: one that cannot be read leaves the other checks as they were. Already read under `--secrets`.
+      tracker = cliLinearTracker(o.home, o.sealed ?? (await loadSealedFactoryYml(o.home, o.env, { only: LINEAR_SECRETS })).yml);
     } catch (error) {
       return [`Linear statuses not checked: ${errorMessage(error)}`];
     }
@@ -1148,13 +1150,19 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   let projects;
   let states;
   let knowledge;
+  let sealedYml: FactoryYml | undefined;
   try {
-    const { yml, sealed } = await loadSealedFactoryYml(options.home, env, { only: GITHUB_APP_SECRETS });
+    // The App's alone by default (ORC-448); `--secrets`, all of them, by the start's call (ORC-456).
+    const { yml, sealed } = await loadSealedFactoryYml(options.home, env, options.secrets ? {} : { only: GITHUB_APP_SECRETS });
+    if (options.secrets) sealedYml = yml;
     // Each refusal of the daemon's start, in its order and by the function it calls, with its message (ORC-448): the exposed
     // host's sign-in and secrets_key, the Smee relay (ORC-446). Its warnings are said here: the relay's, an old SQLite file's (ORC-463).
     const instance = effectiveInstance(yml);
     startWarnings = startRefusals(options.home, instance, yml, env).warnings;
     if (!options.json) for (const line of startWarnings) out(line);
+    // secrets.json, as the start reads it (ORC-456): encrypted with secrets_key when in clear, then read to connect Linear, it
+    // stops on one it cannot parse or open. `--secrets` reads it so, writing nothing, saying nothing of it.
+    if (options.secrets) loadSecrets(options.home, yml?.secretsKey);
     projects = typeof origin === 'string' ? instance.projects.filter((p) => sameGithub(p.github, origin)) : [];
     // The project of this repository whose spec gate no validator can pass (ORC-421): a warning, never the verdict.
     validators = validatorWarnings(projects);
@@ -1163,8 +1171,8 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     knowledge = instance.knowledge?.github;
     // factory.yml's step settings and statuses (ORC-382) the daemon refuses at load.
     states = defaultWorkflow(stepSettings(yml)).states;
-    // The Claude token (ORC-337). The active account's of a source other than env is unread here: the start, which reads it, never
-    // falls back to CLAUDE_CODE_OAUTH_TOKEN then, so neither is checked.
+    // The Claude token (ORC-337). The active account's of a source other than env is unread here without `--secrets`: the start,
+    // which reads it, never falls back to CLAUDE_CODE_OAUTH_TOKEN then, so neither is checked.
     const unread = yml?.claude && !activeClaudeAccount(yml)?.token;
     if (!unread) claudeAccountReader(options.home, env, undefined, sealed)();
   } catch (error) {
@@ -1172,7 +1180,7 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     return doctorFailure(reportOf(), errorMessage(error));
   }
   // Its Linear team's statuses against factory.yml's (ORC-382): a warning, never the verdict.
-  if (!options.json) for (const line of await statusWarnings(projects, { home: options.home, env, states, read: options.teamStatuses })) out(line);
+  if (!options.json) for (const line of await statusWarnings(projects, { home: options.home, env, states, read: options.teamStatuses, sealed: sealedYml })) out(line);
   const report = reportOf();
   if (!githubApp) {
     return doctorFailure(

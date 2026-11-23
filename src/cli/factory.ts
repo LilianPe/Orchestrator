@@ -27,11 +27,17 @@ async function main(): Promise<number> {
   if (process.argv[2] === 'baseline') return runBaselineCommand(factoryHome(), process.argv.slice(3));
   // Its own options, on the store and the projects; GitHub through the App, no running instance needed (ORC-231).
   if (process.argv[2] === 'ghost') return runGhostCommand(factoryHome(), process.argv.slice(3));
+  // Its own options, `--json` and `--secrets` (ORC-456): the instance read by the check itself. Before the command too
+  // (`factory --json doctor`), as the shared parser took them: its options and doctor's are flags, so the first word that is not
+  // one is the command. The commands above, whose options take values, are found by the first word alone.
+  const args = process.argv.slice(2);
+  const command = args.findIndex((a) => !a.startsWith('-'));
+  if (args[command] === 'doctor') return runDoctorCli(args.toSpliced(command, 1));
   // Its own option, `--dev` (ORC-411): a Smee channel without a public URL.
   if (process.argv[2] === 'init') return runInitCommand(process.argv.slice(3));
   // The repository's file, the budgets, max_diff and tools of factory.yml (ORC-216, ORC-381, ORC-383), its secrets left unresolved: no running instance needed.
   if (process.argv[2] === 'validate') return runValidateCommand({ checkout: process.argv[3] ?? process.cwd(), out: (l) => console.log(l), factoryYml: () => loadFactoryLimits(factoryHome()) });
-  const { positionals, values } = parseArgs({
+  const { positionals } = parseArgs({
     allowPositionals: true,
     options: { json: { type: 'boolean' } },
   });
@@ -52,8 +58,6 @@ async function main(): Promise<number> {
   const control = { api, ...(process.platform === 'win32' ? {} : { socket: homePaths(home).socket }), out: (l: string) => console.log(l) };
 
   switch (cmd) {
-    case 'doctor':
-      return runDoctorCommand({ checkout: arg ?? process.cwd(), home, json: values.json });
     case 'up': {
       const app = await startFactory({ home });
       console.log(`${PRODUCT_NAME} is running: ${app.url}  (Ctrl+C to stop)`);
@@ -78,6 +82,11 @@ async function main(): Promise<number> {
   }
   console.log(USAGE);
   return 1;
+}
+
+function runDoctorCli(args: string[]): Promise<number> {
+  const { positionals, values } = parseArgs({ args, allowPositionals: true, options: { json: { type: 'boolean' }, secrets: { type: 'boolean' } } });
+  return runDoctorCommand({ checkout: positionals[0] ?? process.cwd(), home: factoryHome(), json: values.json, secrets: values.secrets });
 }
 
 async function runInitCommand(args: string[]): Promise<number> {
