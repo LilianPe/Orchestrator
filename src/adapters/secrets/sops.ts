@@ -41,7 +41,7 @@ function at(doc: unknown, path: string): unknown {
   return node;
 }
 
-/** When sops last wrote the file, from its metadata in clear: `sops.lastmodified` (YAML, JSON), `sops_lastmodified=` (dotenv, INI). */
+/** When sops last wrote the file, from its metadata in clear: `sops.lastmodified` (YAML, JSON), `sops_lastmodified=` (dotenv), `[sops]` (INI). */
 export function sopsRotation(text: string): Date | undefined {
   let stamp: unknown;
   try {
@@ -49,7 +49,7 @@ export function sopsRotation(text: string): Date | undefined {
   } catch {
     // Not YAML: a dotenv file.
   }
-  stamp ??= /^sops_lastmodified\s*=\s*(\S+)\s*$/m.exec(text)?.[1];
+  stamp ??= /^sops_lastmodified\s*=\s*(\S+)\s*$/m.exec(text)?.[1] ?? /^\[sops\](?:(?!^\[)[\s\S])*?^lastmodified\s*=\s*(\S+)\s*$/ms.exec(text)?.[1];
   const date = typeof stamp === 'string' ? new Date(stamp) : undefined;
   return date && !Number.isNaN(date.getTime()) ? date : undefined;
 }

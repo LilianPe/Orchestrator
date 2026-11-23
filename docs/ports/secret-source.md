@@ -112,7 +112,7 @@ sops encrypt --age "$(age-keygen -y /etc/factory/age.key)" secrets.yaml > /etc/f
 - A path is a key path of the decrypted document: names of letters, digits, `_`, `-`, joined by `.` (`github.private_key`); an index reaches an item of a list (`hosts.0`). A key whose name holds a dot cannot be reached.
 - The value must be a text: a number, a list or a section is refused (`the key port of the sops file is not a text`), without its content. A missing key: `no key github.absent in the sops file`.
 - sops that cannot decrypt rejects with its first line of error (`sops could not decrypt the file: Failed to get the data key required to decrypt the SOPS file.`); sops missing from the `PATH`: `sops is not installed (no sops in the PATH)`. A read is limited to 30 seconds.
-- `describe` gives the date sops writes in the file's metadata, in clear (`sops.lastmodified`, `sops_lastmodified=` in a dotenv file), as its rotation date: every `sops edit` or `sops set` that changes a value dates it, whichever value changed. It decrypts the file to check that the key exists.
+- `describe` gives the date sops writes in the file's metadata, in clear (`sops.lastmodified`, `sops_lastmodified=` in a dotenv file, `lastmodified` of the `[sops]` section in an INI one), as its rotation date: every `sops edit` or `sops set` that changes a value dates it, whichever value changed. It decrypts the file to check that the key exists.
 
 ### `vault`
 
@@ -124,11 +124,11 @@ secret_sources:
 github: { app_id: 123456, private_key: vault:factory/github#private_key }
 ```
 
-- `address`, required: an `https://` URL, or `http://` on the loopback alone (`127.0.0.1`, `localhost`, `[::1]`), where the token never crosses a network.
-- `token` or `token_file`, one of them. `token` is written `env:NAME` (`env:VAULT_TOKEN`): resolved at the start and masked as the daemon's own secrets, never written in clear in `factory.yml` (`factory doctor` says it `in clear in the daemon's environment`). `token_file`, an absolute path, is re-read at each read: where a [Vault Agent](https://developer.hashicorp.com/vault/docs/agent-and-proxy/agent) writes the token it renews (its `sink`), the way to keep a short-lived token without restarting the daemon.
+- `address`, required: the server alone, an `https://` URL, or `http://` on the loopback alone (`127.0.0.1`, `localhost`, `[::1]`), where the token never crosses a network; no path, query or credentials. A redirect is never followed (`Vault answered 307: a redirect is not followed`): it would carry the token to wherever it points.
+- `token` or `token_file`, one of them. `token` is written `env:NAME` (`env:VAULT_TOKEN`): resolved at the start and masked as the daemon's own secrets (`factory doctor` says it `in clear in the daemon's environment`). Nothing checks it: a token written in clear in `factory.yml` is read, but neither masked nor reported, so never write one. `token_file`, an absolute path, is re-read at each read (an empty file is refused): where a [Vault Agent](https://developer.hashicorp.com/vault/docs/agent-and-proxy/agent) writes the token it renews (its `sink`), the way to keep a short-lived token without restarting the daemon.
 - `mount`, optional: the engine's mount path, `secret` by default (`team/kv` is one). `namespace`, optional: sent as `X-Vault-Namespace` (Vault Enterprise, HCP Vault).
 - A path is `<path>#<field>`: the secret's path in the engine, segments of letters, digits, spaces, `_`, `.`, `-` (never `.` or `..`) joined by `/`, then the field of its data. The token's policy needs `read` on `<mount>/data/<path>`.
-- The field must be a text. A missing secret: `no secret factory/absent in Vault (secret)`; a missing field: `no field absent in the Vault secret factory/github`. A refused token, expired or without the policy: `Vault refused the token (403): …`; another status: `Vault answered 503`; no answer within 10 seconds, or no connection: `Vault is unreachable at <address>`. No error quotes Vault's body.
+- The field must be a text. A missing secret: `no secret factory/absent in Vault (secret)`; a missing field: `no field absent in the Vault secret factory/github`. A refused token, expired or without the policy: `Vault refused the token (403): …`; another status: `Vault answered 503`; no answer within 10 seconds, or no connection: `Vault is unreachable at <address>`. A token that is no header value (a space, a line break inside it) is refused before any request, without quoting it. No error quotes Vault's body.
 - `describe` gives the creation date of the secret's current version (`metadata.created_time`) as its rotation date: writing a new version of the secret dates it, whichever field changed.
 
 ## Known gaps

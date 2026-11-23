@@ -146,6 +146,7 @@ describe('sops secret source', () => {
     expect(sopsRotation(`db:\n    password: ENC[AES256_GCM,data:x]\nsops:\n    lastmodified: "${at}"\n    version: 3.9.0\n`)).toEqual(ROTATED);
     expect(sopsRotation(JSON.stringify({ db: 'ENC[AES256_GCM,data:x]', sops: { lastmodified: at } }))).toEqual(ROTATED);
     expect(sopsRotation(`DB_PASSWORD=ENC[AES256_GCM,data:x]\nsops_lastmodified=${at}\n`)).toEqual(ROTATED);
-    for (const none of ['', 'a: [', 'sops: { lastmodified: not-a-date }', 'sops_lastmodified=', '[unclosed']) expect(sopsRotation(none)).toBeUndefined();
+    expect(sopsRotation(`[db]\nlastmodified = ENC[AES256_GCM,data:x]\n\n[sops]\nmac = ENC[AES256_GCM,data:m]\nversion = 3.9.0\nlastmodified = ${at}\n`)).toEqual(ROTATED);
+    for (const none of ['', 'a: [', 'sops: { lastmodified: not-a-date }', 'sops_lastmodified=', '[unclosed', '[sops]\nversion = 3\n[db]\nlastmodified = 2026-09-01T10:00:00Z\n']) expect(sopsRotation(none)).toBeUndefined();
   });
 });

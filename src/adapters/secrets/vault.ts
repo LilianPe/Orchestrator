@@ -6,6 +6,8 @@ import type { SecretSourceKind } from './types.js';
 const SEGMENT = /^[A-Za-z0-9 _.-]+$/;
 const FIELD = /^[A-Za-z0-9_.-]+$/;
 const REQUEST_TIMEOUT_MS = 10_000;
+/** What a header value holds; fetch quotes any other value in its error, the token with it. */
+const TOKEN = /^[\x21-\x7e]+$/;
 
 const segments = (path: string): string[] | undefined => {
   const parts = path.split('/');
@@ -30,6 +32,9 @@ function addressFault(v: unknown): string | undefined {
     url = new URL(v);
   } catch {
     return fault;
+  }
+  if (url.username || url.password || url.search || url.hash || url.pathname !== '/') {
+    return 'address: the server alone is expected (`https://<host>:<port>`), no path, query or credentials';
   }
   if (url.protocol === 'https:') return undefined;
   const loopback = url.hostname === 'localhost' || url.hostname === '[::1]' || /^127\.\d+\.\d+\.\d+$/.test(url.hostname);
@@ -65,13 +70,18 @@ export const vaultKind: SecretSourceKind = {
     const namespace = options['namespace'] as string | undefined;
     const tokenFile = options['token_file'] as string | undefined;
     const token = async (): Promise<string> => {
-      if (!tokenFile) return options['token'] as string;
-      try {
-        return (await readFile(tokenFile, 'utf8')).trim();
-      } catch (err) {
-        // The cause carries a path, never a content.
-        throw new Error('the Vault token_file could not be read', { cause: err });
+      let value = options['token'] as string;
+      if (tokenFile) {
+        try {
+          value = (await readFile(tokenFile, 'utf8')).trim();
+        } catch (err) {
+          // The cause carries a path, never a content.
+          throw new Error('the Vault token_file could not be read', { cause: err });
+        }
+        if (!value) throw new Error('the Vault token_file is empty');
       }
+      if (!TOKEN.test(value)) throw new Error('the Vault token is not a valid header value (printable characters, no space)');
+      return value;
     };
     /** The fields of the secret's current version, and its date: undefined when Vault holds no such secret. */
     const fetchSecret = async (path: string): Promise<{ data: Record<string, unknown>; created?: string } | undefined> => {
@@ -80,12 +90,14 @@ export const vaultKind: SecretSourceKind = {
       if (namespace) headers['X-Vault-Namespace'] = namespace;
       let res: Response;
       try {
-        res = await fetch(url, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+        // A redirect would carry the token to wherever it points.
+        res = await fetch(url, { headers, redirect: 'manual', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
       } catch (err) {
         throw new Error(`Vault is unreachable at ${address}`, { cause: err });
       }
       if (res.status === 404) return undefined;
       if (res.status === 403) throw new Error('Vault refused the token (403): invalid, expired, or its policy does not grant this path');
+      if (res.status >= 300 && res.status < 400) throw new Error(`Vault answered ${res.status}: a redirect is not followed`);
       if (!res.ok) throw new Error(`Vault answered ${res.status}`);
       let body: { data?: { data?: unknown; metadata?: { created_time?: unknown } } };
       try {

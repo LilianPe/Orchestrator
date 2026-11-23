@@ -37,6 +37,10 @@ beforeAll(async () => {
     const path = decodeURIComponent((req.url ?? '').replace(/^\/v1\//, ''));
     if (path === 'kv/data/broken') return send(200, 'pem-secret-value, not json');
     if (path === 'kv/data/flaky') return send(503, { errors: ['Vault is sealed'] });
+    if (path === 'kv/data/moved') {
+      res.writeHead(307, { location: 'http://127.0.0.2:1/v1/kv/data/app/github' });
+      return res.end();
+    }
     const data = SECRETS[path];
     if (!data) return send(404, { errors: [] });
     send(200, { data: { data, metadata: { created_time: ROTATED.toISOString(), version: 3 } } });
@@ -96,6 +100,23 @@ describe('vault secret source', () => {
     await expect(vaultKind.create({ address: 'http://127.0.0.1:1', token: TOKEN }, {}).read('app/github#key')).rejects.toThrow('Vault is unreachable at http://127.0.0.1:1');
   });
 
+  it('never follows a redirect: the token would go to another host', async () => {
+    await expect(vault().read('moved#key')).rejects.toThrow('Vault answered 307: a redirect is not followed');
+  });
+
+  it('refuses a token that is no header value without quoting it: fetch would put it in its error', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vault-'));
+    const file = join(dir, 'token');
+    writeFileSync(file, 'hvs.first\nhvs.second\n');
+    for (const source of [vaultKind.create({ address, token_file: file }, {}), vaultKind.create({ address, token: 'hvs.a b' }, {})]) {
+      const err = (await rejection(source.read('app/github#key'))) as Error;
+      expect(err.message).toBe('the Vault token is not a valid header value (printable characters, no space)');
+      expect(err.cause).toBeUndefined();
+    }
+    writeFileSync(file, '\n');
+    await expect(vaultKind.create({ address, token_file: file }, {}).read('app/github#key')).rejects.toThrow('the Vault token_file is empty');
+  });
+
   it('accepts `<path>#<field>`: segments of letters, digits, spaces, _ . -, never a dot segment', () => {
     for (const valid of ['app/github#key', 'github#key', 'team a/db#password', 'a.b/c-d_e#f.g']) expect(vaultKind.checkPath(valid)).toBeUndefined();
     for (const invalid of ['', 'app/github', '#key', 'app/#key', '/app#key', 'app/../x#key', 'app/./x#key', 'app#', 'app#a#b', 'app?x#key']) {
@@ -108,6 +129,9 @@ describe('vault secret source', () => {
     expect(vaultKind.checkOptions({ address: 'http://127.0.0.1:8200', token_file: '/run/vault/token', mount: 'kv', namespace: 'team/a' })).toEqual([]);
     expect(vaultKind.checkOptions({ address: 'http://localhost:8200', token: 'hvs.x' })).toEqual([]);
     expect(vaultKind.checkOptions({ address: 'http://vault.example.com', token: 'hvs.x' })).toEqual(['address: an https URL is expected (http on the loopback only)']);
+    for (const address of ['https://u:p@vault.example.com', 'https://vault.example.com?x=1', 'https://vault.example.com#a', 'https://vault.example.com/v1']) {
+      expect(vaultKind.checkOptions({ address, token: 'hvs.x' })).toEqual(['address: the server alone is expected (`https://<host>:<port>`), no path, query or credentials']);
+    }
     expect(vaultKind.checkOptions({})).toEqual(['address: an https URL is expected (http on the loopback only)', 'token: required, or token_file']);
     expect(vaultKind.checkOptions({ address: 'https://v', token: 'hvs.x', token_file: '/t' })).toEqual(['token: token or token_file, not both']);
     expect(vaultKind.checkOptions({ address: 'https://v', token_file: 'token', mount: 'a/../b', namespace: 3, role: 'x' })).toEqual([
@@ -125,7 +149,7 @@ describe('vault secret source', () => {
 });
 
 describe('switching a server secret from systemd-creds to vault (ORC-418, criterion 1)', () => {
-  it('is a change of factory.yml alone: the same key read, sealed in doctor, the token masked', async () => {
+  it('is a change of factory.yml alone: the same key read, sealed in doctor, the token an env: reference', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-vault-'));
     const credentials = join(home, 'credentials');
     mkdirSync(credentials);
