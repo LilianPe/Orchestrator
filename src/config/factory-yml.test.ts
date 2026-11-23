@@ -320,9 +320,9 @@ describe('factory.yml (ORC-209, part B)', () => {
     });
 
     it('refuses an unknown adapter, a missing kind, options its adapter refuses, and a source named env', () => {
-      expect(faults('secret_sources:\n  a: { kind: vault }\n  b: { name: x }\n  c: { kind: fake }\n  env: { kind: fake, name: x }\n  d: fake\n')).toEqual([
-        'secret_sources.a.kind: no adapter vault (env, systemd-creds, file, fake)',
-        'secret_sources.b.kind: required (env, systemd-creds, file, fake)',
+      expect(faults('secret_sources:\n  a: { kind: aws-kms }\n  b: { name: x }\n  c: { kind: fake }\n  env: { kind: fake, name: x }\n  d: fake\n')).toEqual([
+        'secret_sources.a.kind: no adapter aws-kms (env, systemd-creds, file, sops, vault, fake)',
+        'secret_sources.b.kind: required (env, systemd-creds, file, sops, vault, fake)',
         'secret_sources.c.name: required',
         'secret_sources.env: built in, it is not declared',
         'secret_sources.d: an object `{ kind, … }` is expected',
@@ -330,8 +330,8 @@ describe('factory.yml (ORC-209, part B)', () => {
     });
 
     it('refuses a declared source of an unknown adapter once, not again at each reference to it', () => {
-      expect(faults('secret_sources: { coffre: { kind: vault } }\nrepos:\n  - { id: app, linear_team: ENG, github: org/app, secrets: { K: "coffre:kv/app#k" } }\n')).toEqual([
-        'secret_sources.coffre.kind: no adapter vault (env, systemd-creds, file, fake)',
+      expect(faults('secret_sources: { coffre: { kind: aws-kms } }\nrepos:\n  - { id: app, linear_team: ENG, github: org/app, secrets: { K: "coffre:kv/app#k" } }\n')).toEqual([
+        'secret_sources.coffre.kind: no adapter aws-kms (env, systemd-creds, file, sops, vault, fake)',
       ]);
     });
 
@@ -345,15 +345,18 @@ describe('factory.yml (ORC-209, part B)', () => {
       expect(violations('repos:\n  - { id: app, linear_team: ENG, github: org/app, secrets: { K: "constructor:foo" } }\n')).toEqual([
         'repos[0].secrets.K: its source is neither `env` nor declared under secret_sources',
       ]);
-      expect(violations('secret_sources: { a: { kind: toString } }\n')).toEqual(['secret_sources.a.kind: no adapter toString (env, systemd-creds, file)']);
+      expect(violations('secret_sources: { a: { kind: toString } }\n')).toEqual(['secret_sources.a.kind: no adapter toString (env, systemd-creds, file, sops, vault)']);
       expect(violations('secret_sources: { __proto__: { kind: env } }\nrepos:\n  - { id: app, linear_team: ENG, github: org/app, secrets: { K: "__proto__:FOO" } }\n')).toEqual([
         'secret_sources.__proto__: not a name a source can take',
         'repos[0].secrets.K: its source is neither `env` nor declared under secret_sources',
       ]);
     });
 
-    it('only knows env, systemd-creds and file by default: no adapter that needs a network credential before ORC-179', () => {
-      expect(violations('secret_sources: { coffre: { kind: vault } }\n')).toEqual(['secret_sources.coffre.kind: no adapter vault (env, systemd-creds, file)']);
+    it('knows env, systemd-creds, file, sops and vault by default, and checks a vault declaration through its adapter (ORC-418)', () => {
+      expect(violations('secret_sources: { coffre: { kind: vault } }\n')).toEqual([
+        'secret_sources.coffre.address: an https URL is expected (http on the loopback only)',
+        'secret_sources.coffre.token: required, or token_file',
+      ]);
     });
   });
 
