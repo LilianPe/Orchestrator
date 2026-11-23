@@ -101,13 +101,24 @@ export const vaultKind: SecretSourceKind = {
       } catch (err) {
         throw new Error(`Vault is unreachable at ${address}`, { cause: err });
       }
-      if (res.status === 404) return undefined;
-      if (res.status === 403) throw new Error('Vault refused the token (403): invalid, expired, or its policy does not grant this path');
-      if (res.status >= 300 && res.status < 400) throw new Error(`Vault answered ${res.status}: a redirect is not followed`);
-      if (!res.ok) throw new Error(`Vault answered ${res.status}`);
+      if (!res.ok) {
+        // An unread body holds its connection until the garbage collector runs.
+        await res.body?.cancel().catch(() => undefined);
+        if (res.status === 404) return undefined;
+        if (res.status === 403) throw new Error('Vault refused the token (403): invalid, expired, or its policy does not grant this path');
+        if (res.status >= 300 && res.status < 400) throw new Error(`Vault answered ${res.status}: a redirect is not followed`);
+        throw new Error(`Vault answered ${res.status}`);
+      }
+      let text: string;
+      try {
+        text = await res.text();
+      } catch (err) {
+        // The connection died, or the timeout ran out, in the middle of the answer.
+        throw new Error(`Vault is unreachable at ${address}`, { cause: err });
+      }
       let body: { data?: { data?: unknown; metadata?: { created_time?: unknown } } };
       try {
-        body = (await res.json()) as typeof body;
+        body = JSON.parse(text) as typeof body;
       } catch {
         // A JSON parse error quotes the text it read.
         throw new Error('Vault answered no JSON document');

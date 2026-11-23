@@ -37,6 +37,11 @@ beforeAll(async () => {
     const path = decodeURIComponent((req.url ?? '').replace(/^\/v1\//, ''));
     if (path === 'kv/data/broken') return send(200, 'pem-secret-value, not json');
     if (path === 'kv/data/flaky') return send(503, { errors: ['Vault is sealed'] });
+    if (path === 'kv/data/cut') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.write('{"data": {"data": {"key": "pem-sec');
+      return setTimeout(() => res.destroy(), 50);
+    }
     if (path === 'kv/data/moved') {
       res.writeHead(307, { location: 'http://127.0.0.2:1/v1/kv/data/app/github' });
       return res.end();
@@ -108,6 +113,11 @@ describe('vault secret source', () => {
     expect(err.message).toBe('Vault answered no JSON document');
     expect(err.cause).toBeUndefined();
     await expect(vaultKind.create({ address: 'http://127.0.0.1:1', token: TOKEN }, {}).read('app/github#key')).rejects.toThrow('Vault is unreachable at http://127.0.0.1:1');
+  });
+
+  it('says Vault is unreachable when the connection dies in the middle of its answer, not that it answered no JSON', async () => {
+    const err = (await rejection(vault().read('cut#key'))) as Error;
+    expect(err.message).toBe(`Vault is unreachable at ${address}`);
   });
 
   it('requests the path it was given, whatever ends the address or the path', async () => {
