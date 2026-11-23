@@ -48,7 +48,7 @@ describe('describePr (ORC-195)', () => {
 
   it('the room kept for the factory\'s facts holds the two worst measures at their longest (ORC-280)', () => {
     // Paths and names as long as `readQuality` keeps them, with a backquote, which widens their code spans.
-    const long = (c: string) => `${c.repeat(200)}\``;
+    const long = (c: string) => `\`${c.repeat(200)}`;
     const span = (c: string) => ({ path: long(c), start: 99_999, end: 99_999 });
     const report = { functions: [{ ...span('f'), name: long('n'), cc: 999, coverage: 99.9, crap: 99_999.9 }], pairs: [{ score: 0.99, left: span('l'), right: span('r') }] };
     const added = new Map([[long('f'), new Set([99_999])], [long('l'), new Set([99_999])]]);
