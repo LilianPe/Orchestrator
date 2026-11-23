@@ -82,8 +82,9 @@ def functions(root: Path, files: list[Path], coverage: Path | None, covered: set
         for fn in functions_in_file(language, file.read_text(encoding="utf-8", errors="replace"), path, str(root)):
             pct = None
             if bundle and language in covered:
+                # None: no report names the file (another package's tests, an `include`): unknown, never 0 %.
                 pct = bundle.percent_for(fn)
-                pct = 0.0 if pct is None else round(pct, 1)
+                pct = None if pct is None else round(pct, 1)
             crap = crap_score(fn.complexity, pct)
             out.append({"path": path, "name": fn.name, "start": fn.start_line, "end": fn.end_line, "cc": fn.complexity, "coverage": pct, "crap": None if crap is None else round(crap, 1)})
     return out

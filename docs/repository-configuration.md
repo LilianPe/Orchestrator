@@ -151,7 +151,7 @@ The manifests are read from the clone's objects, before any code of the branch h
 - [crapper](https://github.com/unclebob/crapper) gives each function its cyclomatic complexity (CC) and its CRAP score, `CC² × (1 − coverage)³ + CC`;
 - [dryer](https://github.com/unclebob/dryer) finds pairs of functions whose structure is at least 0.82 similar (the names and literals left out).
 
-They run once the commands have run, in the same sandbox at network `none`, on the files the diff adds lines to, test files left out. dryer compares each function of those files with every function of the repository in the same language. The check `factory/qualité-diff` lists the functions the diff touches whose CRAP is over 10, and the pairs with a side on a line the diff adds, worst first. It is a measure: it never blocks, and a breakdown of the tools is said on the check, neutral, without a verdict. Its two worst findings also go into the PR's *Where to look first*. The languages are TypeScript, JavaScript and Python.
+They run once the commands have run, in the same sandbox at network `none`, on the files the diff adds lines to, test files left out. dryer compares each function of those files with every function of the repository in the same language. The check `factory/qualité-diff` lists the functions the diff touches whose CRAP is over 10, and the pairs with a side on a line the diff adds, worst first. It is a measure: it never blocks, and a breakdown of the tools is said on the check, neutral, without a verdict. Its two worst findings also go into the PR's *Where to look first*. crapper scores TypeScript, JavaScript and Python; dryer pairs TypeScript and Python functions only. The measure has its own cap, 2 minutes.
 
 The coverage is that of the repository's own tests, asked for as an LCOV report on their first run, when the runner can write one without installing anything:
 
@@ -161,7 +161,7 @@ The coverage is that of the repository's own tests, asked for as an LCOV report 
 | jest | always: jest carries its coverage | `--coverage --coverageReporters=lcov`, `--coverageThreshold='{}'` |
 | pytest | `pytest-cov` in `pyproject.toml`, `setup.cfg`, `setup.py`, `Pipfile` or a root `requirements*.txt` | `--cov=. --cov-report=lcov:… --cov-fail-under=0` |
 
-The thresholds a repository sets are emptied, so that the measure never fails its tests. Without a report for its language, a function has no CRAP score: the check lists it by its complexity, past CC 5, with « coverage unknown ». The coverage is what the commit's tests report, measured after they ran: an indication for the reviewer, not a proof. Thresholds that block will come after twenty tickets measured, in a ticket of their own.
+The thresholds a repository sets are emptied, so that the measure never fails its tests; and a first run that fails with the coverage is run again without it, whose exit alone is the verdict (a coverage package declared but not installed, an instrumentation too slow). Without a report that names its file, a function has no CRAP score: the check lists it by its complexity, past CC 5, with « coverage unknown ». The coverage is what the commit's tests report, measured after they ran: an indication for the reviewer, not a proof. Thresholds that block will come after twenty tickets measured, in a ticket of their own.
 
 ## The agent's network
 

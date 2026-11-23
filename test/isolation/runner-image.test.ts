@@ -102,7 +102,7 @@ describe.skipIf(!built)(`factory/qualité-diff in verify on the runner image (${
   };
 
   /** A repository whose base holds `old`, and a branch that adds `added`: `verify` with the measure, one command that passes. */
-  const measure = async (name: string, old: Record<string, string>, added: Record<string, string>) => {
+  const measure = async (name: string, old: Record<string, string>, added: Record<string, string>, commands = ['true']) => {
     const origin = join(base, name, 'origin');
     mkdirSync(origin, { recursive: true });
     git(origin, 'init', '-q', '-b', 'main');
@@ -117,7 +117,7 @@ describe.skipIf(!built)(`factory/qualité-diff in verify on the runner image (${
     mkdirSync(workDir);
     return runCleanVerify({
       sandboxes: provider, runId: `isolation-verify-quality-${name}-${Date.now()}`, ticketId: 'ISO-280', branch: BRANCH, worktree: repo, originUrl: origin, workDir,
-      gitleaks: false, semgrep: false, quality: true, setup: [], commands: ['true'], env: async () => ({}), log: () => {},
+      gitleaks: false, semgrep: false, quality: true, setup: [], commands, env: async () => ({}), log: () => {},
     });
   };
 
@@ -131,6 +131,19 @@ describe.skipIf(!built)(`factory/qualité-diff in verify on the runner image (${
     expect(res.quality?.unavailable).toBeUndefined();
     expect(res.quality!.functions).toEqual([expect.objectContaining({ path: 'src/new.ts', name: 'grade', cc: 9, coverage: null })]);
     expect(res.quality!.pairs).toEqual([expect.objectContaining({ score: 1, left: expect.objectContaining({ path: 'src/new.ts' }), right: expect.objectContaining({ path: 'src/old.ts' }) })]);
+  }, 300_000);
+
+  it('criterion 1 with a coverage: the LCOV the tests write where the factory asks is read, and the CRAP computed from it', async () => {
+    // The repository's own pytest, which the factory runs as pytest: it writes the LCOV at the path `--cov-report=lcov:` names.
+    const pytest = '#!/bin/sh\nfor a in "$@"; do case "$a" in --cov-report=lcov:*) out="${a#--cov-report=lcov:}";; esac; done\n[ -n "$out" ] || exit 9\nmkdir -p "$(dirname "$out")"\nprintf "SF:app/grade.py\\nDA:1,1\\nDA:2,1\\nDA:3,1\\nDA:4,0\\nDA:5,0\\nDA:6,0\\nDA:7,0\\nDA:8,0\\nend_of_record\\n" > "$out"\n';
+    const grade = 'def grade(n, b=None):\n    s = n + (b or 0)\n    if s > 90 and n > 0:\n        return "A"\n    elif s > 80 or n < 0:\n        return "B"\n    return "F"\n\n\ndef unreported(n):\n    if n > 1 and n < 9:\n        return 1\n    elif n > 20 or n < -3:\n        return 2\n    return 3\n';
+    const res = await measure('cov', { 'requirements.txt': 'pytest-cov==6.0\n', 'bin/pytest': pytest }, { 'app/grade.py': grade }, ['sh bin/pytest']);
+    expect(res).toMatchObject({ ok: true, failures: [] });
+    expect(res.quality?.unavailable).toBeUndefined();
+    const graded = res.quality!.functions.find((f) => f.name === 'grade')!;
+    expect(graded.coverage).toBeGreaterThan(0);
+    expect(graded.coverage).toBeLessThan(100);
+    expect(graded.crap).toBeGreaterThan(10);
   }, 300_000);
 
   it('lists the same on a Python repository', async () => {

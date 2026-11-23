@@ -1552,6 +1552,48 @@ describe('factory/qualité-diff (ORC-280)', () => {
     expect(after(argv, '--covered')).toBe('typescript');
   });
 
+  it('a first run the coverage made fail is run again without it, whose exit is the verdict: the measure never fails the tests', async () => {
+    const pkg = JSON.stringify({ devDependencies: { '@vitest/coverage-v8': '^5' } });
+    const { sandboxes, req } = setup({ quality: true, commands: ['npx vitest run'] }, undefined, { 'package.json': pkg });
+    sandboxes.answer = (command) => (command.includes('vitest run') ? { stdout: '', stderr: 'MISSING DEPENDENCY', code: command.includes('--coverage') ? 1 : 0 } : undefined);
+    const res = await runCleanVerify(req);
+    expect(res).toMatchObject({ ok: true, failures: [] });
+    expect(sandboxes.ran.filter((r) => r.command.includes('vitest run')).map((r) => r.command.includes('--coverage'))).toEqual([true, false]);
+  });
+
+  it('asks for the coverage once: a failing command and its reruns go without it', async () => {
+    const pkg = JSON.stringify({ devDependencies: { '@vitest/coverage-v8': '^5' } });
+    const { sandboxes, req } = setup({ quality: true, commands: ['npx vitest run'] }, undefined, { 'package.json': pkg });
+    sandboxes.answer = (command) => (command.includes('vitest run') ? { stdout: '', stderr: 'AssertionError', code: 1 } : undefined);
+    const res = await runCleanVerify(req);
+    expect(res.ok).toBe(false);
+    expect(sandboxes.ran.filter((r) => r.command.includes('--coverage'))).toHaveLength(1);
+  });
+
+  it('runs under a cap of its own, and a sandbox that rejects it leaves the verdict as it was', async () => {
+    const { sandboxes, req } = setup({ quality: true });
+    let argv: readonly string[] = [];
+    sandboxes.quality = (a) => {
+      argv = a;
+      throw new Error('the sandbox no longer responds');
+    };
+    const res = await runCleanVerify(req);
+    expect(argv.slice(0, 2)).toEqual(['timeout', '120']);
+    expect(res).toMatchObject({ ok: true, failures: [], quality: { unavailable: expect.stringContaining('no longer responds') } });
+  });
+
+  it('says a diff over 500 files is not measured', async () => {
+    // `max_diff` off: past its bounds the size check refuses the branch before anything runs.
+    const { repo, sandboxes, req } = setup({ quality: true, maxDiff: 'off' });
+    for (let i = 0; i < 501; i++) write(repo, `src/f${i}.ts`, `export const v${i} = ${i};\n`);
+    commit(repo, 'wide');
+    let ran = false;
+    sandboxes.quality = () => ((ran = true), report());
+    const res = await runCleanVerify(req);
+    expect(ran).toBe(false);
+    expect(res.quality).toMatchObject({ unavailable: expect.stringContaining('502 files') });
+  });
+
   it('adds nothing to the tests when the commit has no coverage package, and reads no coverage', async () => {
     const { sandboxes, req } = setup({ quality: true, commands: ['npx vitest run'] }, undefined, { 'package.json': JSON.stringify({ devDependencies: { vitest: '^5' } }) });
     sandboxes.answer = (command) => (command.includes('vitest run') ? { stdout: '', stderr: '', code: 0 } : undefined);

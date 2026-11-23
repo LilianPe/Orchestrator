@@ -52,6 +52,18 @@ describe('readQuality', () => {
   });
 });
 
+describe('readQuality, what reaches the journal', () => {
+  it("clips a path or a name past 120 characters in what it keeps, not only in what it shows", () => {
+    const long = 'n'.repeat(300);
+    const q = readQuality(ok({ functions: [fn({ name: long, cc: 9 })], pairs: [] }), added({ 'src/a.ts': [2] }));
+    expect(q.functions[0]!.name.length).toBeLessThanOrEqual(120);
+  });
+
+  it("quotes the tools' stderr as code: it comes from the agent's sandbox", () => {
+    expect(readQuality({ code: 1, stdout: '', stderr: '# heading\n<b>x</b>' }, added({})).unavailable).toContain('`# heading?<b>x</b>`');
+  });
+});
+
 describe('qualityArgv', () => {
   it('runs the script with its own interpreter, isolated, under the cap, on the paths after a `--`', () => {
     const argv = qualityArgv({ coverageDir: '/tmp/cov', covered: ['typescript'], files: ['-odd.ts', 'src/a.ts'], timeoutS: 900 });
@@ -95,6 +107,10 @@ describe('coverageOf', () => {
     expect(c?.language).toBe('python');
     expect(c!.flags('/tmp/cov/2')).toContain('--cov-report=lcov:/tmp/cov/2/pytest.lcov');
     expect(c!.flags('/tmp/cov/2')).toContain('--cov-fail-under=0');
+  });
+
+  it('reads no pytest-cov from a commented line', async () => {
+    expect(await coverageOf('pytest', at({ 'requirements.txt': 'pytest==8.3\n# pytest-cov==6.0\n' }))).toBeUndefined();
   });
 
   it('adds nothing to a command of no known runner', async () => {

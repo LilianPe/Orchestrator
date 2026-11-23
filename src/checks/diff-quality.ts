@@ -22,6 +22,8 @@ export const CRAP_LIMIT = 10;
 export const CC_LIMIT = 5;
 /** What the check and the event keep of each list, worst first. */
 const LISTED = 20;
+/** The measure's own cap: about 4 s on a repository of a thousand files, dryer comparing the diff's functions with all of them. */
+export const QUALITY_TIMEOUT_S = 120;
 
 export interface QualityFunction {
   path: string;
@@ -85,7 +87,8 @@ export async function coverageOf(runner: Runner | undefined, at: { showAtHead(pa
   }
   if (runner === 'pytest') {
     for (const manifest of PYTHON_MANIFESTS) {
-      if (/pytest[-_]cov\b/i.test((await at.showAtHead(manifest)) ?? '')) return { language: 'python', flags: (dir) => `--cov=. --cov-report=lcov:${dir}/pytest.lcov --cov-fail-under=0` };
+      const declared = ((await at.showAtHead(manifest)) ?? '').split('\n').some((l) => /pytest[-_]cov\b/i.test(l.replace(/#.*/, '')));
+      if (declared) return { language: 'python', flags: (dir) => `--cov=. --cov-report=lcov:${dir}/pytest.lcov --cov-fail-under=0` };
     }
   }
   return undefined;
@@ -95,6 +98,10 @@ export async function coverageOf(runner: Runner | undefined, at: { showAtHead(pa
 export function qualityArgv(o: { coverageDir: string; covered: readonly string[]; files: readonly string[]; timeoutS: number }): string[] {
   return ['timeout', String(o.timeoutS), QUALITY_PYTHON, '-I', QUALITY_SCRIPT, '--coverage', o.coverageDir, '--covered', o.covered.join(','), '--', ...o.files];
 }
+
+/** A path or a name from the agent's code, cut so that no line of the journal, the check or the PR outgrows its room. */
+const CLIPPED = 120;
+const clip = (s: string): string => (s.length > CLIPPED ? `${s.slice(0, CLIPPED - 1)}…` : s);
 
 const touches = (s: QualitySpan, added: ReadonlyMap<string, ReadonlySet<number>>): boolean => {
   const lines = added.get(s.path);
@@ -118,7 +125,7 @@ const isPair = (p: unknown): p is QualityPair => isRecord(p) && typeof p['score'
  */
 export function readQuality({ code, stdout, stderr }: ExecResult, added: ReadonlyMap<string, ReadonlySet<number>>): DiffQuality {
   const none = (unavailable: string): DiffQuality => ({ functions: [], pairs: [], unavailable });
-  if (code !== 0) return none(`crapper and dryer could not run (code ${code})${stderr.trim() ? `: ${stderr.trim().slice(-300)}` : ''}`);
+  if (code !== 0) return none(`crapper and dryer could not run (code ${code})${stderr.trim() ? `: ${mdCode(stderr.trim().slice(-300))}` : ''}`);
   let report: unknown;
   try {
     report = JSON.parse(stdout);
@@ -128,15 +135,12 @@ export function readQuality({ code, stdout, stderr }: ExecResult, added: Readonl
   if (!isRecord(report) || !Array.isArray(report['functions']) || !Array.isArray(report['pairs']) || !report['functions'].every(isFunction) || !report['pairs'].every(isPair)) {
     return none('crapper and dryer returned no readable report');
   }
-  const functions = report['functions'].filter((f) => touches(f, added) && listed(f)).sort(worse);
-  const pairs = report['pairs'].filter((p) => touches(p.left, added) || touches(p.right, added)).sort((a, b) => b.score - a.score);
+  const functions = report['functions'].filter((f) => touches(f, added) && listed(f)).sort(worse).map((f) => ({ ...f, path: clip(f.path), name: clip(f.name) }));
+  const pairs = report['pairs'].filter((p) => touches(p.left, added) || touches(p.right, added)).sort((a, b) => b.score - a.score).map((p) => ({ ...p, left: { ...p.left, path: clip(p.left.path) }, right: { ...p.right, path: clip(p.right.path) } }));
   const more = Math.max(0, functions.length - LISTED) + Math.max(0, pairs.length - LISTED);
   return { functions: functions.slice(0, LISTED), pairs: pairs.slice(0, LISTED), ...(more ? { more } : {}) };
 }
 
-/** A path or a name from the agent's code, cut so that no line of the check or the PR outgrows its room. */
-const clip = (s: string): string => (s.length > CLIPPED ? `${s.slice(0, CLIPPED - 1)}…` : s);
-const CLIPPED = 120;
 const at = (s: QualitySpan) => mdCode(`${clip(s.path)}:${s.start}-${s.end}`);
 const functionLine = (f: QualityFunction) =>
   `${at(f)} ${mdCode(clip(f.name))}: ${f.crap === null ? `CC ${f.cc}, coverage unknown` : `CRAP ${f.crap} (CC ${f.cc}, coverage ${f.coverage} %)`}`;

@@ -12,7 +12,7 @@ import { DIFF_SIZE_CHECK, diffSizeCheck } from '../checks/diff-size.js';
 import { needsBase, rerunOnBase, runAndRerun, settle, type CommandRun, type FlakyTest, type KnownFlaky, type Run, type Standing } from '../checks/flaky.js';
 import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '../checks/freeze.js';
 import { checkForbiddenPaths, FORBIDDEN_CHECK, type ForbiddenView } from '../checks/forbidden-paths.js';
-import { coverageOf, qualityArgv, readQuality, type CoverageAsk, type DiffQuality } from '../checks/diff-quality.js';
+import { coverageOf, QUALITY_TIMEOUT_S, qualityArgv, readQuality, type CoverageAsk, type DiffQuality } from '../checks/diff-quality.js';
 import { mdCode } from '../checks/markdown.js';
 import { REPORT_FLAGS, testCommand, type Runner } from '../checks/red.js';
 import type { PackageRegistry, RegistryOpener } from '../checks/registry.js';
@@ -234,7 +234,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     // Read before any code of the agent has run: the runner of each command, and the base checked out for the reruns there.
     const tests = await testCommands(git, sha, commands);
     const coverage = req.quality ? await coverageAsks(git, sha, commands, tests) : new Map<string, CoverageAsk>();
-    const measured = req.quality && diff ? await scanned(git, from, sha, diff) : undefined;
+    const measured = req.quality && diff ? (added.size ? added : await scanned(git, from, sha, diff)) : undefined;
     const onBase = from !== EMPTY_TREE && [...tests.values()].some((t) => t.runner) && !failures.length;
     if (shooting || onBase) await checkoutBase(req, cloneDir, { dir: beforeDir, index: beforeIndex }, from);
     let flaky: FlakyTest[] = [];
@@ -366,13 +366,18 @@ async function coverageAsks(git: CloneGit, sha: string, commands: readonly strin
   return asks;
 }
 
-/** `run`, its first line with `flags`: the reruns of failing tests do not overwrite the whole run's coverage. */
+/**
+ * `run`, its first line with `flags`, the coverage the measure asks for: the reruns of failing tests do not overwrite the whole
+ * run's. A first run that fails with them is run again without: its exit is the verdict, so a measure never fails the tests
+ * (a coverage package declared and not installed, an instrumentation too slow).
+ */
 function firstWith(run: Run, flags: string): Run {
   let first = true;
-  return (line, runner) => {
-    const extra = first ? ` ${flags}` : '';
+  return async (line, runner) => {
+    if (!first) return run(line, runner);
     first = false;
-    return run(`${line}${extra}`, runner);
+    const measured = await run(`${line} ${flags}`, runner);
+    return measured.exitCode === 0 ? measured : run(line, runner);
   };
 }
 
@@ -385,7 +390,11 @@ async function measureQuality(sandboxes: Boxes, id: string, added: ReadonlyMap<s
   const files = [...added.keys()];
   if (!files.length) return { functions: [], pairs: [] };
   if (files.length > SCAN_BATCH) return { functions: [], pairs: [], unavailable: `the diff adds lines to ${files.length} files, past the ${SCAN_BATCH} measured in one run` };
-  return readQuality(await sandboxes.exec(id, qualityArgv({ ...at, files, timeoutS: VERIFY_TIMEOUT_MS / 1000 })), added);
+  try {
+    return readQuality(await sandboxes.exec(id, qualityArgv({ ...at, files, timeoutS: QUALITY_TIMEOUT_S })), added);
+  } catch (err) {
+    return { functions: [], pairs: [], unavailable: `crapper and dryer could not run: ${(err as Error).message}` };
+  }
 }
 
 /**
