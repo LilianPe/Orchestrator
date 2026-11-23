@@ -81,9 +81,11 @@ describe('GitHub App configuration', () => {
   it('refuses at the start a pinned installation that is not a positive integer, saying what to write (ORC-490)', () => {
     const start = (installationId: string) => () => resolveGithubApp({ ...base(), github: { appId: '7', privateKey: PEM, installationId } }, {});
     for (const written of ['abc', '0', '-42', '4.2', '42abc', '1e3', '99999999999999999999']) {
-      expect(start(written)).toThrow(`github.installation_id (or GH_APP_INSTALLATION_ID): "${written}" is not an installation id.`);
+      expect(start(written)).toThrow(`github.installation_id: "${written}" is not an installation id.`);
     }
     expect(start('abc')).toThrow(/Write the positive integer GitHub shows at the end of the installation's URL .*settings\/installations\/<id>/);
-    expect(() => resolveGithubApp(base(), { GH_APP_ID: '7', GH_APP_KEY: PEM, GH_APP_INSTALLATION_ID: 'abc' })).toThrow(/"abc" is not an installation id/);
+    expect(() => resolveGithubApp(base(), { GH_APP_ID: '7', GH_APP_KEY: PEM, GH_APP_INSTALLATION_ID: 'abc' })).toThrow(/^GH_APP_INSTALLATION_ID: "abc" is not an installation id/);
+    // factory.yml's key hides the variable: the refusal names the key read.
+    expect(() => resolveGithubApp({ ...base(), github: { appId: '7', privateKey: PEM, installationId: 'abc' } }, { GH_APP_INSTALLATION_ID: '42' })).toThrow(/^github\.installation_id: "abc"/);
   });
 });

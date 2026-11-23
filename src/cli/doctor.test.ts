@@ -1131,7 +1131,7 @@ describe("the daemon's start refusals, each one doctor's", () => {
     'a pinned installation that is not an integer': {
       factoryYml: 'github: { app_id: 456, private_key: env:GH_APP_KEY, installation_id: abc }\n',
       env: { GH_APP_KEY: '-----BEGIN PRIVATE KEY-----\nMIIBfake\n-----END PRIVATE KEY-----' },
-      reason: /^github\.installation_id \(or GH_APP_INSTALLATION_ID\): "abc" is not an installation id\. Write the positive integer/,
+      reason: /^github\.installation_id: "abc" is not an installation id\. Write the positive integer/,
     },
     'a status no step shows': { factoryYml: 'statuses: { nope: Todo }\n', reason: /^factory\.yml: statuses\.nope: is not a step/ },
     'a step setting of no agent step': { factoryYml: 'budgets: { max_turns: { nope: 3 } }\n', reason: /^factory\.yml: budgets\.max_turns\.nope: not an agent step/ },

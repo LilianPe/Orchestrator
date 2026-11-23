@@ -59,8 +59,10 @@ export function resolveGithubApp(config: InstanceConfig, env: NodeJS.ProcessEnv 
         'or remove the github section to start without the App (nothing is then read or published on GitHub).',
     );
   }
-  const pinned = (fromConfig?.installationId ?? env['GH_APP_INSTALLATION_ID'] ?? '').trim();
-  const installationId = pinned ? installationNumber(pinned) : undefined;
+  // The source read, the one a refusal names: factory.yml's key hides the variable.
+  const [source, written] = fromConfig?.installationId !== undefined ? ['github.installation_id', fromConfig.installationId] : ['GH_APP_INSTALLATION_ID', env['GH_APP_INSTALLATION_ID']];
+  const pinned = (written ?? '').trim();
+  const installationId = pinned ? installationNumber(source, pinned) : undefined;
   return {
     appId,
     privateKey: readPrivateKey(key),
@@ -73,11 +75,11 @@ export function resolveGithubApp(config: InstanceConfig, env: NodeJS.ProcessEnv 
  * would otherwise start and ask its tokens of an installation that cannot exist. A leading zero is read in decimal, as YAML
  * reads an unquoted `042`.
  */
-function installationNumber(written: string): number {
+function installationNumber(source: string, written: string): number {
   const id = /^\d+$/.test(written) ? Number(written) : Number.NaN;
   if (id > 0 && Number.isSafeInteger(id)) return id;
   throw new Error(
-    `github.installation_id (or GH_APP_INSTALLATION_ID): "${written}" is not an installation id. ` +
+    `${source}: "${written}" is not an installation id. ` +
       "Write the positive integer GitHub shows at the end of the installation's URL (…/settings/installations/<id>), as in `installation_id: 987654`, " +
       "or remove it to let the daemon find each repository's installation.",
   );
