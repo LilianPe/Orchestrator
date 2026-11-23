@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { fakeSecretKind } from '../adapters/secrets/fake.js';
 import { SECRET_SOURCE_KINDS } from '../adapters/secrets/registry.js';
-import { activeClaudeToken, claudeAccountReader, claudeToken, disabledControls, FactoryYmlError, loadFactoryLimits, loadFactoryYml, parseFactoryYml, parseInstanceKeys, readCapsOf, SPEC_PUBLICATION, specPublicationOf, stepSettings, ticketCapOf } from './factory-yml.js';
+import { activeClaudeToken, claudeAccountReader, claudeToken, disabledControls, CREDENTIAL_ENV_ONLY, FactoryYmlError, loadFactoryLimits, loadFactoryYml, parseFactoryYml, parseInstanceKeys, readCapsOf, SPEC_PUBLICATION, specPublicationOf, stepSettings, ticketCapOf } from './factory-yml.js';
 import { READ_CAPS } from '../network/reads.js';
 
 const PEM = '-----BEGIN RSA PRIVATE KEY-----\\nabc\\n-----END RSA PRIVATE KEY-----';
@@ -359,10 +359,12 @@ describe('factory.yml (ORC-209, part B)', () => {
       ]);
     });
 
-    it('refuses a source credential written in clear: a reference `env:NAME` is expected, resolved and masked (ORC-418)', () => {
+    it('refuses a source credential not written env:NAME: resolved and masked, never in clear in factory.yml (ORC-418)', () => {
       const env = { VAULT_TOKEN: 'hvs.from-env' };
       const yml = (token: string) => `secret_sources: { coffre: { kind: vault, address: "https://vault.example.com", token: "${token}" } }\n`;
-      expect(violations(yml('hvs.in-clear'), env)).toEqual(['secret_sources.coffre.token: a reference `env:NAME` is expected, never a secret in clear in factory.yml']);
+      expect(violations(yml('hvs.in-clear'), env)).toEqual([`secret_sources.coffre.token: ${CREDENTIAL_ENV_ONLY}`]);
+      // A reference of another source is no secret in clear, but a source's options are read from the environment alone.
+      expect(violations(yml('creds:vault-token'), env)).toEqual([`secret_sources.coffre.token: ${CREDENTIAL_ENV_ONLY}`]);
       expect(parseFactoryYml(yml('env:VAULT_TOKEN'), env).secretSources?.['coffre']?.options['token']).toBe('hvs.from-env');
     });
   });

@@ -12,6 +12,7 @@ import { isSealed, SECRETS_KEY_REQUIRED } from './secrets-file.js';
 export const ROTATION_MAX_DAYS = 180;
 
 const IN_CLEAR_ENV = "in clear in the daemon's environment: a sealed source (systemd-creds) keeps it off the disk";
+const IN_CLEAR_ENV_OPTION = "in clear in the daemon's environment, where a source's options are read from: a file option (vault's token_file) keeps it out of it";
 const IN_CLEAR_KEY_FILE = 'in clear in a file, the key to every secret of its source: keep it the daemon user\'s alone';
 const IN_CLEAR_FILE = "in clear in a file, its owner's alone: for a workstation; on a server, a sealed source (systemd-creds) keeps it off the disk";
 
@@ -137,7 +138,8 @@ export async function serverSecretReport(
 async function describeRef(key: string, ref: SecretRef, yml: FactoryYml | undefined, sources: Record<string, SecretSource>, now: number): Promise<SecretReport> {
   const reference = refText(ref);
   const kind = ref.source === 'env' ? 'env' : yml?.secretSources?.[ref.source]?.kind;
-  if (kind === 'env') return { key, reference, inClear: true, warnings: [IN_CLEAR_ENV] };
+  // A source's option cannot move to a sealed source (only `env:NAME` resolves one).
+  if (kind === 'env') return { key, reference, inClear: true, warnings: [key.startsWith('secret_sources.') ? IN_CLEAR_ENV_OPTION : IN_CLEAR_ENV] };
   // A workstation's key, mode 0600 (ORC-470): in clear on its disk all the same.
   const inClear = kind === 'file';
   const clear = inClear ? [IN_CLEAR_FILE] : [];

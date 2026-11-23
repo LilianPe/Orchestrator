@@ -385,6 +385,9 @@ export function loadFactoryLimits(home: string): Pick<FactoryYml, 'budgets' | 'm
   return (text === undefined ? undefined : parseSection(text, ['budgets', 'max_diff', 'tools'])) ?? {};
 }
 
+/** Why a source's credential option (`credentialOptions`) not written `env:NAME` is refused (ORC-418). */
+export const CREDENTIAL_ENV_ONLY = "`env:NAME` alone: a source's options are read from the daemon's environment, never in clear in factory.yml nor from another source";
+
 /**
  * Validates the file and resolves its `env:` values, but for `repos[].secrets`, references whose syntax alone is checked
  * against `kinds` (ORC-308); throws a FactoryYmlError naming the path of every faulty key. A server secret written with another
@@ -514,7 +517,7 @@ export function parseFactoryYml(
         );
         for (const key of adapter.credentialOptions ?? []) {
           const v = written[key];
-          if (typeof v === 'string' && !v.startsWith('env:')) violations.push(`${path}.${key}: a reference \`env:NAME\` is expected, never a secret in clear in factory.yml`);
+          if (typeof v === 'string' && !v.startsWith('env:')) violations.push(`${path}.${key}: ${CREDENTIAL_ENV_ONLY}`);
         }
         // Kept despite faulty options: its references are still checked against its adapter.
         violations.push(...adapter.checkOptions(options).map((v) => `${path}.${v}`));

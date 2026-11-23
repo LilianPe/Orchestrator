@@ -195,7 +195,12 @@ describe('switching a server secret from systemd-creds to vault (ORC-418, criter
     expect(parsed?.github?.privateKey).toBe('pem-secret-value');
     expect(reader.values()).toContain('pem-secret-value');
     expect(parsed?.secretRefs?.['secret_sources.coffre.token']).toEqual({ source: 'env', path: 'VAULT_TOKEN' });
-    expect((await serverSecretReport(home, env, { now: ROTATED.getTime() })).find((r) => r.key === 'github.private_key')).toEqual({
+    const reports = await serverSecretReport(home, env, { now: ROTATED.getTime() });
+    // A source's option cannot move to a sealed source: doctor points to what can keep it out of the environment.
+    expect(reports.find((r) => r.key === 'secret_sources.coffre.token')?.warnings).toEqual([
+      "in clear in the daemon's environment, where a source's options are read from: a file option (vault's token_file) keeps it out of it",
+    ]);
+    expect(reports.find((r) => r.key === 'github.private_key')).toEqual({
       key: 'github.private_key',
       reference: 'coffre:factory/github#private_key',
       inClear: false,
