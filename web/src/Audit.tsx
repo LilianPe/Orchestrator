@@ -122,8 +122,27 @@ export function draftAfterKept(d: Pick<DefectDraft, 'prNumber'>): DefectDraft {
   return { prNumber: d.prNumber, description: '', level: '', category: '', findingId: '', file: '', line: '' };
 }
 
+/**
+ * Runs one send at a time (ORC-494): a second call while one is in flight does nothing, so a double click on a slow connection
+ * enters a defect once. The flag is set before React renders the button disabled, which a second click can come before.
+ */
+export function oneAtATime<A>(run: (a: A) => Promise<unknown>, busy: (on: boolean) => void): (a: A) => void {
+  let inFlight = false;
+  return (a) => {
+    if (inFlight) return;
+    inFlight = true;
+    busy(true);
+    void run(a).finally(() => {
+      inFlight = false;
+      busy(false);
+    });
+  };
+}
+
 function DefectForm({ sheet, onDefect }: { sheet: AuditSheetView; onDefect: OnDefect }) {
   const [draft, setDraft] = useState(() => draftAfterKept({ prNumber: sheet.result.prs.at(-1)?.number ?? 0 }));
+  const [sending, setSending] = useState(false);
+  const [enter] = useState(() => oneAtATime((send: () => Promise<unknown>) => send(), setSending));
   const { prNumber, description, level, category, findingId, file, line } = draft;
   const set = (patch: Partial<DefectDraft>) => setDraft((d) => ({ ...d, ...patch }));
   const submit = (e: FormEvent) => {
@@ -131,9 +150,9 @@ function DefectForm({ sheet, onDefect }: { sheet: AuditSheetView; onDefect: OnDe
     if (!level || !category) return;
     const at = Number(line);
     // What was typed stays until the server keeps it: a refusal leaves it to correct.
-    void onDefect({ prNumber, description, level, category, ...(findingId ? { findingId } : {}), ...(file.trim() ? { file: file.trim() } : {}), ...(Number.isInteger(at) && at > 0 ? { line: at } : {}) }).then((kept) => {
+    enter(() => onDefect({ prNumber, description, level, category, ...(findingId ? { findingId } : {}), ...(file.trim() ? { file: file.trim() } : {}), ...(Number.isInteger(at) && at > 0 ? { line: at } : {}) }).then((kept) => {
       if (kept) setDraft(draftAfterKept);
-    });
+    }));
   };
   return (
     <form className="defect" onSubmit={submit}>
@@ -162,7 +181,7 @@ function DefectForm({ sheet, onDefect }: { sheet: AuditSheetView; onDefect: OnDe
       </label>
       <label>File <input value={file} onChange={(e) => set({ file: e.target.value })} /></label>
       <label>Line <input type="number" min={1} step={1} value={line} onChange={(e) => set({ line: e.target.value })} /></label>
-      <button type="submit" disabled={!sheet.result.prs.length}>Enter the defect</button>
+      <button type="submit" disabled={sending || !sheet.result.prs.length}>Enter the defect</button>
     </form>
   );
 }
