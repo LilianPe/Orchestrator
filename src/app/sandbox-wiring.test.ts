@@ -39,6 +39,13 @@ describe('sandboxRefusals (ORC-449)', () => {
   it('is what checkSandboxes throws, at the start before anything opens', () => {
     expect(() => checkSandboxes({ FACTORY_CONTAINER_CLI: 'podman' })).toThrow('FACTORY_RUNNER_IMAGE is required with FACTORY_CONTAINER_CLI.');
   });
+
+  it('throws every refusal at once, as makeSandboxes does: one start says them all (ORC-455)', () => {
+    const env = { FACTORY_CONTAINER_CLI: 'lxc', FACTORY_SANDBOX_PIDS: '1.5' };
+    const refusals = sandboxRefusals(env);
+    expect(refusals).toHaveLength(3);
+    expect(() => checkSandboxes(env)).toThrow(refusals.join(' '));
+  });
 });
 
 // ORC-450: the limits and the daemon's uid/gid, refused by sandboxConfig before anything opens rather than by makeSandboxes.
@@ -50,14 +57,14 @@ describe('the sandboxes the start refuses before anything opens (ORC-450)', () =
     for (const [k, v] of [['FACTORY_SANDBOX_PIDS', '1.5'], ['FACTORY_SANDBOX_MEMORY', 'lots'], ['FACTORY_SANDBOX_CPUS', 'two']]) {
       const env = { ...ENGINE, [k!]: v };
       const { refused } = sandboxLimits(env) as { refused: string };
-      expect(sandboxConfig(env)).toEqual({ cli: 'docker', refusal: refused });
+      expect(sandboxConfig(env)).toEqual({ cli: 'docker', refusals: [refused] });
       expect(() => checkSandboxes(env)).toThrow(refused);
     }
   });
 
   it('refuses a daemon without a uid or a gid, with its message', () => {
     vi.spyOn(process, 'getgid').mockReturnValue(undefined as unknown as number);
-    expect(sandboxConfig(ENGINE)).toEqual({ cli: 'docker', refusal: 'The sandboxes require a daemon on Linux (uid and gid).' });
+    expect(sandboxConfig(ENGINE)).toEqual({ cli: 'docker', refusals: ['The sandboxes require a daemon on Linux (uid and gid).'] });
     expect(() => checkSandboxes(ENGINE)).toThrow('The sandboxes require a daemon on Linux (uid and gid).');
   });
 
@@ -96,6 +103,18 @@ describe('sandboxLimits', () => {
     for (const [k, v] of [['FACTORY_SANDBOX_PIDS', '1.5'], ['FACTORY_SANDBOX_PIDS', '-1'], ['FACTORY_SANDBOX_MEMORY', '4 GB'], ['FACTORY_SANDBOX_MEMORY', 'lots'], ['FACTORY_SANDBOX_CPUS', 'two'], ['FACTORY_SANDBOX_CPUS', '1.']]) {
       expect(sandboxLimits({ [k!]: v })).toEqual({ refused: expect.stringMatching(`^${k}=${v}: `) });
     }
+  });
+
+  it('says every refused limit together, not only the first (ORC-455)', () => {
+    expect(sandboxLimits({ FACTORY_SANDBOX_PIDS: 'many', FACTORY_SANDBOX_MEMORY: '4m', FACTORY_SANDBOX_CPUS: 'two' })).toEqual({
+      refused:
+        'FACTORY_SANDBOX_PIDS=many: a whole number of processes expected, or 0 / none for no limit. ' +
+        'FACTORY_SANDBOX_MEMORY=4m: at least 6m expected, or 0 / none for no limit. ' +
+        'FACTORY_SANDBOX_CPUS=two: a number of CPUs such as 2 or 0.5 expected, or 0 / none for no limit.',
+    });
+    expect(sandboxLimits({ FACTORY_SANDBOX_PIDS: '128', FACTORY_SANDBOX_MEMORY: 'lots', FACTORY_SANDBOX_CPUS: 'two' })).toEqual({
+      refused: expect.stringMatching(/^FACTORY_SANDBOX_MEMORY=lots: .* FACTORY_SANDBOX_CPUS=two: /),
+    });
   });
 
   it('refuses a FACTORY_SANDBOX_MEMORY under 6m, the engines\' minimum, giving it (ORC-452)', () => {
