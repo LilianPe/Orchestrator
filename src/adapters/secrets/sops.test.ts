@@ -56,7 +56,10 @@ const calls = (f: Fixture) =>
     .filter(Boolean)
     .map((l) => JSON.parse(l) as { args: string[]; key: string | null });
 
-describeSecretSourceContract('sops', () => {
+// The simulated sops is a `#!/usr/bin/env node` script on a `:`-joined PATH: POSIX alone, as file.test.ts's mode cases.
+const posix = process.platform !== 'win32';
+
+if (posix) describeSecretSourceContract('sops', () => {
   const f = fixture();
   return {
     source: sops(f),
@@ -68,7 +71,7 @@ describeSecretSourceContract('sops', () => {
   };
 });
 
-describe('sops secret source', () => {
+describe.skipIf(!posix)('sops secret source', () => {
   it('decrypts the file with sops into JSON, its age key handed to sops through SOPS_AGE_KEY_FILE', async () => {
     const f = fixture();
     expect(await sops(f).read('github.key')).toBe('pem-secret-value');
@@ -82,7 +85,7 @@ describe('sops secret source', () => {
     expect(calls(f)[0]?.key).toBe(f.keyFile);
   });
 
-  it.skipIf(process.platform === 'win32')('refuses an age_key_file others than its owner can read, before running sops: it opens every secret', async () => {
+  it('refuses an age_key_file others than its owner can read, before running sops: it opens every secret', async () => {
     const f = fixture();
     chmodSync(f.keyFile, 0o640);
     await expect(sops(f).read('github.key')).rejects.toThrow(`the age_key_file ${f.keyFile} is readable by others than its owner: chmod 600 it`);
