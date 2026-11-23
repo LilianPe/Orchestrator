@@ -1560,19 +1560,43 @@ describe('factory/qualité-diff (ORC-280)', () => {
     expect(sandboxes.ran.filter((r) => r.command.includes('vitest run')).map((r) => r.command.includes('--coverage'))).toEqual([true, false]);
   });
 
-  it('a red first run that wrote its LCOV is the verdict: a failing suite is not run twice', async () => {
+  /** The runner's JSON report where the command asks for it (`reportRun`): its tests, with their outcome. */
+  const reportTests = (command: string, tests: Record<string, 'passed' | 'failed'>) => {
+    const f = /factory-report-[\w-]+/.exec(command)?.[0];
+    const assertionResults = Object.entries(tests).map(([name, status]) => ({ fullName: name, title: name, status, duration: 5, failureMessages: status === 'failed' ? [`AssertionError: ${name}`] : [] }));
+    if (f) writeFileSync(join(process.env['TMPDIR'] || '/tmp', f), JSON.stringify({ testResults: [{ name: '/work/src/a.test.ts', assertionResults }] }));
+  };
+  /** The whole suite's runs, not the reruns of a test (`-t`): whether each asked for the coverage. */
+  const suiteRuns = (sandboxes: LocalSandboxes) => sandboxes.ran.filter((r) => r.command.includes('vitest run') && !r.command.includes(' -t ')).map((r) => r.command.includes('--coverage'));
+
+  it('a red first run whose report names a failing test is the verdict: a failing suite is not run twice', async () => {
     const pkg = JSON.stringify({ devDependencies: { '@vitest/coverage-v8': '^5' } });
     const { sandboxes, req } = setup({ quality: true, commands: ['npx vitest run'] }, undefined, { 'package.json': pkg });
     sandboxes.answer = (command) => {
       if (!command.includes('vitest run')) return undefined;
-      const dir = /--coverage\.reportsDirectory=(\S+)/.exec(command)?.[1];
-      if (dir) write(dir, 'lcov.info', 'SF:src/a.ts\nend_of_record\n');
+      reportTests(command, { 'cart total': 'failed' });
       return { stdout: '', stderr: 'AssertionError', code: 1 };
     };
     const res = await runCleanVerify(req);
-    rmSync(/factory-coverage-[^/]+/.exec(sandboxes.ran.find((r) => r.command.includes('reportsDirectory'))!.command)![0].replace(/^/, '/tmp/'), { recursive: true, force: true });
     expect(res.ok).toBe(false);
-    expect(sandboxes.ran.filter((r) => r.command.includes('vitest run')).map((r) => r.command.includes('--coverage'))).toEqual([true]);
+    expect(suiteRuns(sandboxes)).toEqual([true]);
+  });
+
+  it('a red first run whose report names no failing test failed for the coverage (a threshold the flags leave), and is run again without it', async () => {
+    const pkg = JSON.stringify({ devDependencies: { '@vitest/coverage-v8': '^5' } });
+    const { sandboxes, req } = setup({ quality: true, commands: ['npx vitest run'] }, undefined, { 'package.json': pkg });
+    sandboxes.answer = (command) => {
+      if (!command.includes('vitest run')) return undefined;
+      reportTests(command, { 'cart total': 'passed' });
+      // vitest writes its LCOV, then exits 1 on a glob's threshold (`thresholds: { 'src/**': { lines: 95 } }`).
+      const dir = /--coverage\.reportsDirectory=(\S+)/.exec(command)?.[1];
+      if (dir) write(dir, 'lcov.info', 'SF:src/a.ts\nend_of_record\n');
+      return { stdout: '', stderr: dir ? 'ERROR: Coverage for lines (80%) does not meet "src/**" threshold (95%)' : '', code: dir ? 1 : 0 };
+    };
+    const res = await runCleanVerify(req);
+    rmSync(/factory-coverage-[^/]+/.exec(sandboxes.ran.find((r) => r.command.includes('reportsDirectory'))!.command)![0].replace(/^/, '/tmp/'), { recursive: true, force: true });
+    expect(res).toMatchObject({ ok: true, failures: [] });
+    expect(suiteRuns(sandboxes)).toEqual([true, false]);
   });
 
   it('asks for the coverage once: a failing command and its reruns go without it', async () => {

@@ -9,7 +9,7 @@ import { ANTI_CHEAT_CHECK, antiCheatCheck, justifiedRemovals } from '../checks/a
 import { checkDependencies, DEPENDENCY_CHECK, manifestKind, type ManifestChange } from '../checks/deps.js';
 import { parseDiff, type DiffFile } from '../checks/diff.js';
 import { DIFF_SIZE_CHECK, diffSizeCheck } from '../checks/diff-size.js';
-import { needsBase, rerunOnBase, runAndRerun, settle, type CommandRun, type FlakyTest, type KnownFlaky, type Run, type Standing } from '../checks/flaky.js';
+import { needsBase, readTests, rerunOnBase, runAndRerun, settle, type CommandRun, type FlakyTest, type KnownFlaky, type Run, type Standing } from '../checks/flaky.js';
 import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '../checks/freeze.js';
 import { checkForbiddenPaths, FORBIDDEN_CHECK, type ForbiddenView } from '../checks/forbidden-paths.js';
 import { coverageOf, QUALITY_MAX_FILES, qualityArgv, readQuality, unmeasured, type CoverageAsk, type DiffQuality } from '../checks/diff-quality.js';
@@ -286,7 +286,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
       for (const [i, command] of commands.entries()) {
         const { line, runner, coverage } = tests.get(command)!;
         const run = reportRun(sandboxes, id, env);
-        const failed = await runAndRerun(command, runner, coverage ? firstWith(run, coverage.flags(`${coverageDir}/${i}`), lcovIn(sandboxes, id, `${coverageDir}/${i}`)) : run, standing, line);
+        const failed = await runAndRerun(command, runner, coverage ? firstWith(run, coverage.flags(`${coverageDir}/${i}`)) : run, standing, line);
         if (failed) ran.push(failed);
       }
       const covered = [...new Set([...tests.values()].flatMap((t) => (t.coverage ? [t.coverage.language] : [])))];
@@ -354,22 +354,19 @@ export function reportRun(sandboxes: Boxes, id: string, env: Record<string, stri
   };
 }
 
-/** Whether a run wrote its LCOV in `dir`, in sandbox `id`: one that failed without writing it failed for the coverage asked of it. */
-const lcovIn = (sandboxes: Boxes, id: string, dir: string) => async (): Promise<boolean> =>
-  (await sandboxes.exec(id, ['bash', '--norc', '-c', `find ${dir} -name lcov.info -o -name '*.lcov' 2>/dev/null | grep -q .`])).code === 0;
-
 /**
  * `run`, its first line with `flags`, the coverage the measure asks for: the reruns of failing tests do not overwrite the whole
- * run's. A first run that fails without writing its report (`wrote`) failed for the coverage (a package declared and not installed,
- * an instrumentation too slow): it is run again without, whose exit is the verdict. A measure never fails the tests.
+ * run's. A first run that fails with no failing test in its runner's report failed for the coverage (a threshold the flags could
+ * not empty, a package declared and not installed, an instrumentation too slow): it is run again without, whose exit is the
+ * verdict. A measure never fails the tests, and a run whose tests failed is not run twice.
  */
-function firstWith(run: Run, flags: string, wrote: () => Promise<boolean>): Run {
+function firstWith(run: Run, flags: string): Run {
   let first = true;
   return async (line, runner) => {
     if (!first) return run(line, runner);
     first = false;
     const measured = await run(`${line} ${flags}`, runner);
-    return measured.exitCode === 0 || (await wrote()) ? measured : run(line, runner);
+    return measured.exitCode === 0 || readTests(measured.report)?.some((t) => t.status === 'failed') ? measured : run(line, runner);
   };
 }
 
