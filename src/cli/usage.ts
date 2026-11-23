@@ -4,7 +4,7 @@ import { PRODUCT_NAME } from '../product.js';
 export const USAGE = `Usage: factory <command>
   init [--dev]       set up ${PRODUCT_NAME} for the current repository (--dev: a smee.io relay for Linear's webhooks without a public URL, on a workstation)
   validate [repo]    check .factory/config.yml against the baseline (it can only add)
-  doctor [repo] [--json] refuse a host without cgroup v2, a repository without a protected default branch or whose CI can expose secrets to the factory's branches
+  doctor [repo] [--json] [--secrets] refuse a host without cgroup v2, a repository without a protected default branch or whose CI can expose secrets to the factory's branches
   up                 start ${PRODUCT_NAME} (interface on http://localhost:4100)
   status             state of the running instance
   stop <ID>          stop a ticket's run

@@ -1079,6 +1079,8 @@ export interface DoctorCommandOptions {
   home: string;
   env?: NodeJS.ProcessEnv;
   json?: boolean;
+  /** `--secrets` (ORC-456): every server secret read as the start reads them, one that cannot be read refusing alike; never said. */
+  secrets?: boolean;
   out?: (line: string) => void;
   http?: HttpClient;
   exec?: Exec;
@@ -1149,7 +1151,8 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   let states;
   let knowledge;
   try {
-    const { yml, sealed } = await loadSealedFactoryYml(options.home, env, { only: GITHUB_APP_SECRETS });
+    // The App's alone by default (ORC-448); `--secrets`, all of them, by the start's call (ORC-456).
+    const { yml, sealed } = await loadSealedFactoryYml(options.home, env, options.secrets ? {} : { only: GITHUB_APP_SECRETS });
     // Each refusal of the daemon's start, in its order and by the function it calls, with its message (ORC-448): the exposed
     // host's sign-in and secrets_key, the Smee relay (ORC-446). Its warnings are said here: the relay's, an old SQLite file's (ORC-463).
     const instance = effectiveInstance(yml);
@@ -1163,8 +1166,8 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     knowledge = instance.knowledge?.github;
     // factory.yml's step settings and statuses (ORC-382) the daemon refuses at load.
     states = defaultWorkflow(stepSettings(yml)).states;
-    // The Claude token (ORC-337). The active account's of a source other than env is unread here: the start, which reads it, never
-    // falls back to CLAUDE_CODE_OAUTH_TOKEN then, so neither is checked.
+    // The Claude token (ORC-337). The active account's of a source other than env is unread here without `--secrets`: the start,
+    // which reads it, never falls back to CLAUDE_CODE_OAUTH_TOKEN then, so neither is checked.
     const unread = yml?.claude && !activeClaudeAccount(yml)?.token;
     if (!unread) claudeAccountReader(options.home, env, undefined, sealed)();
   } catch (error) {

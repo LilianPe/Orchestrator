@@ -46,4 +46,11 @@ describe('factory (ORC-200)', () => {
     expect(fake.code).toBe(1);
     expect(fake.out).toMatch(/Unknown option '--fake-runner'/);
   });
+
+  it('takes `doctor --secrets` (ORC-456): refused by the missing factory.yml, not by the option', async () => {
+    const doctor = await factory('doctor', '--secrets');
+    expect(doctor.code).toBe(1);
+    expect(doctor.out).not.toMatch(/Unknown option/);
+    expect(doctor.out).toMatch(/^no factory\.yml in FACTORY_HOME/m);
+  });
 });

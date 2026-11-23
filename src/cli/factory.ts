@@ -33,7 +33,7 @@ async function main(): Promise<number> {
   if (process.argv[2] === 'validate') return runValidateCommand({ checkout: process.argv[3] ?? process.cwd(), out: (l) => console.log(l), factoryYml: () => loadFactoryLimits(factoryHome()) });
   const { positionals, values } = parseArgs({
     allowPositionals: true,
-    options: { json: { type: 'boolean' } },
+    options: { json: { type: 'boolean' }, secrets: { type: 'boolean' } },
   });
   const [cmd, arg] = positionals;
   // The help, before any configuration is read: `factory` alone, or a command it does not have (`plan`, `pause` and `resume`
@@ -53,7 +53,7 @@ async function main(): Promise<number> {
 
   switch (cmd) {
     case 'doctor':
-      return runDoctorCommand({ checkout: arg ?? process.cwd(), home, json: values.json });
+      return runDoctorCommand({ checkout: arg ?? process.cwd(), home, json: values.json, secrets: values.secrets });
     case 'up': {
       const app = await startFactory({ home });
       console.log(`${PRODUCT_NAME} is running: ${app.url}  (Ctrl+C to stop)`);
