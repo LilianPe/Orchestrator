@@ -1299,10 +1299,10 @@ describe('doctor --secrets', () => {
 
   // ORC-494: a file with the sealed format's mark but cut short, never Node's TypeError, which names no file.
   it.each([
-    { what: 'its salt', drop: (f: Record<string, unknown>) => ({ ...f, salt: undefined }) },
-    { what: 'its key', drop: (f: Record<string, unknown>) => ({ ...f, key: undefined }) },
-    { what: 'its key', drop: (f: Record<string, unknown>) => ({ ...f, key: { iv: (f['key'] as { iv: string }).iv } }) },
-  ])('refuses a sealed secrets.json without $what as the start does, naming the file', async ({ what, drop }) => {
+    { cut: 'no salt', what: 'its salt', drop: (f: Record<string, unknown>) => ({ ...f, salt: undefined }) },
+    { cut: 'no key', what: 'its key', drop: (f: Record<string, unknown>) => ({ ...f, key: undefined }) },
+    { cut: 'a key box without tag nor data', what: 'its key', drop: (f: Record<string, unknown>) => ({ ...f, key: { iv: (f['key'] as { iv: string }).iv } }) },
+  ])('refuses a sealed secrets.json with $cut as the start does, naming the file', async ({ what, drop }) => {
     const home = sealedHome();
     saveSecrets(home, { linear: { clientId: 'cid', clientSecret: '', webhookSecret: '', accessToken: `${WITNESS}-token` } }, files['secrets.key'] ?? '');
     const path = join(home, 'secrets.json');
