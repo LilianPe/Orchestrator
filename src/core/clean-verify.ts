@@ -286,6 +286,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const withServices = { ...DEFAULT_REQUIREMENTS, services: config.services };
     await setUp('verify', cloneDir, config.services);
     const ran: CommandRun[] = [];
+    const rerun = (id: string) => rerunProperties([...propertySources.keys()], linesOf(tests), sandboxRerun(sandboxes, id, env, propertySources));
     const standing: Standing = { known: req.knownFlaky ?? [], ...(req.frozen ? { frozen: req.frozen } : {}) };
     // Where the tests write their LCOV for the measure: a dir per command, out of the checkout.
     const coverageDir = `/tmp/factory-coverage-${randomUUID()}`;
@@ -299,7 +300,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
       const covered = [...new Set([...tests.values()].flatMap((t) => (t.coverage ? [t.coverage.language] : [])))];
       if (measured) quality = await measureQuality(sandboxes, id, measured, { coverageDir, covered });
       // Last: the rewritten tests stay in the checkout, and only on commands that passed, whose properties are then all that can find a defect.
-      if (propertySources.size && !ran.length) properties = await rerunProperties([...propertySources.keys()], linesOf(tests), sandboxRerun(sandboxes, id, env, propertySources));
+      if (propertySources.size && !ran.length) properties = await rerun(id);
     }, withServices);
     // The base's tests get services as the commit's do, new ones.
     if (onBase && needsBase(ran, standing)) {
@@ -307,7 +308,13 @@ export const runCleanVerify: CleanVerifier = async (req) => {
       await inBox('verify-base', beforeDir, [], (id) => rerunOnBase(ran, reportRun(sandboxes, id, env), standing), withServices);
     }
     const settled = settle(ran, standing);
-    failures.push(...settled.failures, ...(properties?.failures ?? []));
+    failures.push(...settled.failures);
+    // The commands passed once their failures were all indicative (a known flaky test, ORC-164): their properties run again in a sandbox of their own.
+    if (propertySources.size && !properties && !failures.length) {
+      await setUp('verify-properties', cloneDir, config.services);
+      properties = await inBox('verify-properties', cloneDir, [], rerun, withServices);
+    }
+    failures.push(...(properties?.failures ?? []));
     flaky = settled.flaky;
     if (failures.length) return verdict();
     if (!shooting) {
@@ -443,13 +450,25 @@ function linesOf(tests: ReadonlyMap<string, { line: string; runner?: Runner }>):
   return { ...(js ? { js } : {}), ...(py ? { py } : {}) };
 }
 
-/** The rerun of the property tests in sandbox `id`, where the commands ran: what it writes goes in base64, whose letters no shell reads. */
+/** What one write of a file into a sandbox carries, in base64: well under the 128 KiB a single argument may weigh on Linux. */
+const WRITE_CHUNK = 64 * 1024;
+
+/**
+ * The rerun of the property tests in sandbox `id`, where the commands ran: what it writes goes in base64, whose letters no shell
+ * reads, a chunk per exec.
+ */
 function sandboxRerun(sandboxes: Boxes, id: string, env: Record<string, string>, sources: ReadonlyMap<string, string | undefined>) {
   return {
     show: async (path: string) => sources.get(path),
     write: async (path: string, content: string) => {
-      const out = await sandboxes.exec(id, ['bash', '--norc', '-c', `mkdir -p "$(dirname ${quote(path)})" && printf %s ${Buffer.from(content).toString('base64')} | base64 -d > ${quote(path)}`]);
-      if (out.code !== 0) throw new Error(`${path} not written (sandbox): ${out.stderr.trim()}`);
+      const b64 = Buffer.from(content).toString('base64');
+      const at = quote(path);
+      const steps = [`mkdir -p -- "$(dirname -- ${at})" && : > ${at}`];
+      for (let i = 0; i < b64.length; i += WRITE_CHUNK) steps.push(`printf %s ${b64.slice(i, i + WRITE_CHUNK)} | base64 -d >> ${at}`);
+      for (const step of steps) {
+        const out = await sandboxes.exec(id, ['bash', '--norc', '-c', step]);
+        if (out.code !== 0) throw new Error(`${path} not written (sandbox): ${out.stderr.trim()}`);
+      }
     },
     run: async (line: string, extra: Record<string, string>) => {
       const started = Date.now();

@@ -31,6 +31,8 @@ export interface PropertyRerun extends PropertySettings {
 }
 
 const FAST_CHECK = 'fast-check';
+/** fast-check's parameters that end the runs before their number: set to their defaults, over any global configuration. */
+export const UNCUT = 'path: undefined, interruptAfterTimeLimit: undefined, skipAllAfterTimeLimit: undefined, ignoreEqualValues: false';
 const PROP_PACKAGES = new Set(['@fast-check/vitest', '@fast-check/jest']);
 /** fast-check's runners and the place of their parameters. */
 const RUNNERS: Record<string, number> = { assert: 1, check: 1 };
@@ -68,20 +70,30 @@ function bindings(sf: ts.SourceFile): { modules: Set<string>; runners: Set<strin
 function paramsAt(call: ts.CallExpression, b: ReturnType<typeof bindings>): number | undefined {
   const callee = call.expression;
   if (ts.isIdentifier(callee)) return b.runners.has(callee.text) ? RUNNERS.assert : undefined;
+  if (ts.isPropertyAccessExpression(callee) && ts.isPropertyAccessExpression(callee.expression)) return modifiedProp(call, b);
   if (!ts.isPropertyAccessExpression(callee) || !ts.isIdentifier(callee.expression)) return undefined;
   const [owner, method] = [callee.expression.text, callee.name.text];
   if (b.modules.has(owner) && method in RUNNERS) return RUNNERS[method];
   return b.props.has(owner) && method === 'prop' ? 1 : undefined;
 }
 
+/** `test.skip.prop(arbs, params)`, `it.concurrent.prop(…)`: a modifier between the test and its `prop`. */
+function modifiedProp(call: ts.CallExpression, b: ReturnType<typeof bindings>): number | undefined {
+  const callee = call.expression;
+  if (!ts.isPropertyAccessExpression(callee) || callee.name.text !== 'prop' || !ts.isPropertyAccessExpression(callee.expression)) return undefined;
+  const owner = callee.expression.expression;
+  return ts.isIdentifier(owner) && b.props.has(owner.text) ? 1 : undefined;
+}
+
 /**
  * A JS or TS property test with the factory's settings after those of each fast-check call, so that they win: `{ ...(theirs),
- * numRuns, seed, path: undefined }`, `path` being a replay that would cut the runs short. `calls`: how many it changed. Pure.
+ * numRuns, seed, … }`, with what else would cut the runs short, from the file or from `configureGlobal` anywhere (a setup file,
+ * the code under test): a replay `path`, a time limit, equal values skipped. `calls`: how many it changed. Pure.
  */
 export function underFactorySettings(path: string, source: string, at: PropertySettings): { source: string; calls: number } {
   const sf = parse(path, source);
   const b = bindings(sf);
-  const set = `numRuns: ${at.runs}, seed: ${at.seed}, path: undefined`;
+  const set = `numRuns: ${at.runs}, seed: ${at.seed}, ${UNCUT}`;
   const edits: { from: number; to: number; text: string }[] = [];
   const visit = (node: ts.Node): void => {
     const i = ts.isCallExpression(node) ? paramsAt(node, b) : undefined;
@@ -103,17 +115,21 @@ export function underFactorySettings(path: string, source: string, at: PropertyS
 /**
  * The pytest plugin of the factory (`-p factory_properties`): on each Hypothesis test once collected, its runs and seed, with no
  * database to replay and every phase, over what `@settings`, `@seed` or `@reproduce_failure` set. It writes the names of the files
- * it settled where `FACTORY_PROPERTY_SETTLED` says.
+ * it settled where `FACTORY_PROPERTY_SETTLED` says. Without Hypothesis installed, it settles nothing, and the tests run as written.
  */
 export const HYPOTHESIS_PLUGIN = `import os
-from hypothesis import Phase, settings
+
+try:
+    from hypothesis import Phase, settings
+except ImportError:
+    settings = None
 
 
 def pytest_collection_modifyitems(items):
     runs = int(os.environ["FACTORY_PROPERTY_RUNS"])
     seed = int(os.environ["FACTORY_PROPERTY_SEED"])
     settled = set()
-    for item in items:
+    for item in items if settings else []:
         obj = getattr(item, "obj", None)
         test = getattr(obj, "__func__", obj)
         if not getattr(test, "is_hypothesis_test", False):

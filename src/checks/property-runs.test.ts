@@ -4,10 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { PROPERTY_RUNS, drawSeed, rerunProperties, underFactorySettings, type RerunDeps } from './property-runs.js';
+import { HYPOTHESIS_PLUGIN, PROPERTY_RUNS, UNCUT, drawSeed, rerunProperties, underFactorySettings, type RerunDeps } from './property-runs.js';
 
 const at = { runs: 50, seed: 42 };
-const SET = 'numRuns: 50, seed: 42, path: undefined';
+const SET = `numRuns: 50, seed: 42, ${UNCUT}`;
 
 describe('the factory settings written into a property test (ORC-261)', () => {
   it('puts its runs and seed after those of fast-check calls, so they win, and counts the calls', () => {
@@ -32,12 +32,18 @@ describe('the factory settings written into a property test (ORC-261)', () => {
     expect(out.calls).toBe(2);
     expect(out.source).toContain(`test.prop([fc.integer()], { ...({ numRuns: 1 }), ${SET} })('x'`);
     expect(underFactorySettings('a.test.ts', "import { it as t } from '@fast-check/jest';\nt.prop([a])('x', () => {});", at).source).toContain(`t.prop([a], { ${SET} })`);
+    expect(underFactorySettings('a.test.ts', "import { test } from '@fast-check/vitest';\ntest.skip.prop([a])('x', () => {});\ntest.concurrent.prop([a], p)('y', () => {});", at).calls).toBe(2);
   });
 
   it('leaves alone what is not fast-check: another assert, a shadowing name, a file without it', () => {
     expect(underFactorySettings('a.test.ts', "import { assert } from 'node:assert';\nassert(x);", at).calls).toBe(0);
     expect(underFactorySettings('a.test.ts', "import { test } from 'vitest';\ntest.prop([a]);", at).calls).toBe(0);
     expect(underFactorySettings('a.test.ts', 'other.assert(x);', at)).toEqual({ source: 'other.assert(x);', calls: 0 });
+  });
+
+  it('settles nothing without Hypothesis installed, so that the tests run as written instead of pytest failing to load the plugin', () => {
+    expect(HYPOTHESIS_PLUGIN).toMatch(/try:\n {4}from hypothesis import Phase, settings\nexcept ImportError:\n {4}settings = None/);
+    expect(HYPOTHESIS_PLUGIN).toContain('for item in items if settings else []:');
   });
 
   it('draws a seed fast-check takes: a positive 32-bit integer', () => {
@@ -56,8 +62,10 @@ describe('a rewritten fast-check test runs under the factory settings, whatever 
     const source = [
       "import fc from 'fast-check';",
       'export const seen = [];',
-      'fc.configureGlobal({ numRuns: 2 });',
-      "fc.assert(fc.property(fc.integer(), (n) => { seen.push(n); }), { numRuns: 3, seed: 7, path: '0:0' });",
+      // What a setup file or the code under test could set, past the test's own parameters, to end the runs early.
+      'fc.configureGlobal({ numRuns: 2, interruptAfterTimeLimit: 1, skipAllAfterTimeLimit: 1, ignoreEqualValues: true });',
+      'const busy = () => { const end = Date.now() + 1; while (Date.now() < end); };',
+      "fc.assert(fc.property(fc.integer(), (n) => { busy(); seen.push(n); }), { numRuns: 3, seed: 7, path: '0:0' });",
     ].join('\n');
     const rewritten = underFactorySettings('p.test.mjs', source, at).source;
     const fastCheck = pathToFileURL(createRequire(import.meta.url).resolve('fast-check')).href;
