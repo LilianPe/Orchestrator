@@ -14,32 +14,16 @@ export type DefectLevel = (typeof DEFECT_LEVELS)[number];
 export const DEFECT_CATEGORIES = ['security', 'data', 'wrong_behavior', 'bypassed_control'] as const;
 export type DefectCategory = (typeof DEFECT_CATEGORIES)[number];
 
-export const LEVEL_LABELS: Record<DefectLevel, string> = { serious: 'Serious', important: 'Important' };
-export const CATEGORY_LABELS: Record<DefectCategory, string> = {
-  security: 'Security',
-  data: 'Data',
-  wrong_behavior: 'Wrong behavior',
-  bypassed_control: 'Bypassed control',
-};
-/** A defect entered before ORC-378, with no category. */
-export const NO_CATEGORY_LABEL = 'No category';
-
-/** The level of a stored defect: one entered before ORC-378 has none, and counts as serious. */
-export function levelOf(stored: string | null | undefined): DefectLevel {
-  return stored === 'important' ? 'important' : 'serious';
-}
-
-/** The category of a stored defect: null for one entered before ORC-378. */
-export function categoryOf(stored: string | null | undefined): DefectCategory | null {
-  return (DEFECT_CATEGORIES as readonly (string | null | undefined)[]).includes(stored) ? (stored as DefectCategory) : null;
-}
-
 /** Missed over counted: `rate` null, never a zero, with no defect to count. */
 export interface MissCount {
   defects: number;
   missed: number;
   rate: number | null;
 }
+
+/** The count of a category within a level; `category` null for the defects entered before ORC-378. */
+export type CategoryMiss = MissCount & { category: DefectCategory | null };
+export type LevelMiss = MissCount & { level: DefectLevel; categories: CategoryMiss[] };
 
 /**
  * The AI reviewers' miss rate (ORC-229): the human defects with no matching AI finding over the defects counted. Nothing is
@@ -53,5 +37,5 @@ export type MissRate =
       counted: true;
       definition: string;
       leftOut: number;
-      levels: (MissCount & { level: DefectLevel; categories: (MissCount & { category: DefectCategory | null })[] })[];
+      levels: LevelMiss[];
     } & MissCount);

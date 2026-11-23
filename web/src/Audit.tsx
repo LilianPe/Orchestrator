@@ -1,8 +1,8 @@
 import { useState, type FormEvent } from 'react';
-import { CATEGORY_LABELS, DEFECT_CATEGORIES, DEFECT_LEVELS, LEVEL_LABELS, NO_CATEGORY_LABEL, NO_DEFINITION, type DefectCategory, type DefectLevel } from '../../src/core/serious-defect.js';
+import { DEFECT_CATEGORIES, DEFECT_LEVELS, NO_DEFINITION, type DefectCategory, type DefectLevel } from '../../src/core/serious-defect.js';
 import { PrLink } from './Flow.js';
 import { runHash } from './Measures.js';
-import { REWORK_LABELS } from './Overview.js';
+import { CATEGORY_LABELS, categoryLabel, LEVEL_LABELS, REWORK_LABELS } from './Overview.js';
 import { Checks, Steps } from './RunDetail.js';
 import type { AuditListView, AuditSheetView, DefectEntry, ReviewDefectView } from './types.js';
 
@@ -177,7 +177,7 @@ function Defects({ sheet, onDefect, notice }: { sheet: AuditSheetView; onDefect:
         <ul>
           {sheet.defects.map((d) => (
             <li key={d.id}>
-              {time(d.at)} · <strong>{LEVEL_LABELS[d.level]} · {d.category === null ? NO_CATEGORY_LABEL : CATEGORY_LABELS[d.category]}</strong> · PR #{d.prNumber}{d.file ? ` · ${d.file}${d.line ? `:${d.line}` : ''}` : ''}: {d.description}{' '}
+              {time(d.at)} · <strong>{LEVEL_LABELS[d.level]} · {categoryLabel(d.category)}</strong> · PR #{d.prNumber}{d.file ? ` · ${d.file}${d.line ? `:${d.line}` : ''}` : ''}: {d.description}{' '}
               <em>{d.findingId === null ? 'missed by the AI reviewers' : `seen by finding ${d.findingId}${kept.has(d.findingId) ? '' : ' (no longer kept)'}`}</em>
               <span className="note"> · {d.enteredBy}{standing(d, sheet.definition)}</span>
             </li>

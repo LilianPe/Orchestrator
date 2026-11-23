@@ -21,8 +21,11 @@ const BASELINE = {
   },
 } satisfies OverviewView['baseline'];
 const tile = (o: OverviewView, label: string) => overviewTiles(o).find((t) => t.label === label);
-const NO_LEVELS = [{ level: 'serious', defects: 0, missed: 0, rate: null, categories: [] }, { level: 'important', defects: 0, missed: 0, rate: null, categories: [] }] as const;
-const counted = (patch: object = {}) => ({ counted: true as const, definition: 'Loses data', defects: 0, missed: 0, rate: null, leftOut: 0, levels: NO_LEVELS.map((l) => ({ ...l, categories: [] })), ...patch });
+const counted = (patch: object = {}) => ({
+  counted: true as const, definition: 'Loses data', defects: 0, missed: 0, rate: null, leftOut: 0,
+  levels: [{ level: 'serious' as const, defects: 0, missed: 0, rate: null, categories: [] }, { level: 'important' as const, defects: 0, missed: 0, rate: null, categories: [] }],
+  ...patch,
+});
 
 describe("the AI reviewers' miss rate (ORC-229)", () => {
   it('shows no figure while no definition of a serious defect is set, and says why', () => {

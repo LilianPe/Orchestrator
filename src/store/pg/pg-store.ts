@@ -14,7 +14,7 @@ import {
 import type { ReviewLens } from '../../core/workflow.js';
 import type { Finding } from '../../core/agent-output.js';
 import type { KeptFinding, ReviewDefect } from '../../core/audit.js';
-import { categoryOf, levelOf } from '../../core/serious-defect.js';
+import { DEFECT_CATEGORIES, type DefectCategory, type DefectLevel } from '../../core/serious-defect.js';
 import type { Baseline, BaselineMeasure } from '../../core/baseline.js';
 import type { DryRun } from '../../core/dry-run.js';
 import type { GhostGrade, GhostJudgment, GhostReplay, GhostSide, GhostTicket } from '../../ghost/replay.js';
@@ -201,6 +201,10 @@ const deadLetterRow = (r: DeadLetterPgRow): DeadLetter => ({
 });
 
 /** An attempt's label column on update: kept once the attempt has labels, else the write's (ORC-226). */
+/** A defect's level as stored: one entered before ORC-378 has none, and counts as serious. */
+const levelOf = (stored: string | null): DefectLevel => (stored === 'important' ? 'important' : 'serious');
+const isCategory = (stored: string | null): stored is DefectCategory => (DEFECT_CATEGORIES as readonly (string | null)[]).includes(stored);
+
 const FIRST_LABELS = (column: string) =>
   sql.raw(`case when attempts.data ? 'labels' then attempts.${column} else excluded.${column} end`);
 
@@ -1226,7 +1230,7 @@ export class PgStore implements AsyncStore {
     `);
     return rows.rows.map((r) => ({
       id: r.id, projectId: r.project_id, ticketId: r.ticket_id, prNumber: r.pr_number, description: r.description, findingId: r.finding_id,
-      ...(r.file === null ? {} : { file: r.file }), ...(r.line === null ? {} : { line: r.line }), level: levelOf(r.level), category: categoryOf(r.category), definition: r.definition, enteredBy: r.entered_by, at: Number(r.at),
+      ...(r.file === null ? {} : { file: r.file }), ...(r.line === null ? {} : { line: r.line }), level: levelOf(r.level), category: isCategory(r.category) ? r.category : null, definition: r.definition, enteredBy: r.entered_by, at: Number(r.at),
     }));
   }
 

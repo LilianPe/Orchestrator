@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { MeasureFacts, RunRecord } from '../store/types.js';
-import { auditSheet, humanReviewed, missRate, NO_DEFINITION, type KeptFinding, type ReviewDefect } from './audit.js';
+import { auditSheet, humanReviewed, missRate, NO_DEFINITION, type KeptFinding, type MissRate, type ReviewDefect } from './audit.js';
+import type { DefectLevel } from './serious-defect.js';
 import { TRUSTED, type EventPayloads, type EventType, type FactoryEvent } from './types.js';
 
 const ev = <T extends EventType>(id: string, type: T, at: number, payload: EventPayloads[T], signed: { actor?: string } = {}): FactoryEvent =>
@@ -153,11 +154,10 @@ describe('missRate (ORC-229)', () => {
 
   it('counts an important defect the AI missed in the important rate only: the serious rate does not move (ORC-378)', () => {
     const before = [defect({ id: 'd1' }), defect({ id: 'd2', findingId: 'rv1:correctness:0' })];
-    const serious = (r: ReturnType<typeof missRate>) => (r.counted ? r.levels.find((l) => l.level === 'serious') : undefined);
-    const important = (r: ReturnType<typeof missRate>) => (r.counted ? r.levels.find((l) => l.level === 'important') : undefined);
+    const at = (r: MissRate, level: DefectLevel) => (r.counted ? r.levels.find((l) => l.level === level) : undefined);
     const without = missRate(period, before, 'breaks a user flow');
     const withIt = missRate(period, [...before, defect({ id: 'd3', level: 'important', category: 'data' })], 'breaks a user flow');
-    expect(serious(withIt)).toEqual(serious(without));
-    expect(important(withIt)).toMatchObject({ defects: 1, missed: 1, rate: 1 });
+    expect(at(withIt, 'serious')).toEqual(at(without, 'serious'));
+    expect(at(withIt, 'important')).toMatchObject({ defects: 1, missed: 1, rate: 1 });
   });
 });

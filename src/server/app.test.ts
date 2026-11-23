@@ -355,8 +355,8 @@ describe('server', () => {
     it('refuses a defect on an unknown ticket, a PR not of the ticket, a finding not of the ticket, or an empty description; and one from another origin', async () => {
       const { app, store } = await setup();
       await reviewedPr(store);
-      expect((await app.request('/api/audit/p/REL-9/defects', { method: 'POST', body: JSON.stringify({ prNumber: 3, description: 'x', level: 'serious', category: 'security' }) })).status).toBe(404);
       const ok = { level: 'serious', category: 'security' };
+      expect((await app.request('/api/audit/p/REL-9/defects', { method: 'POST', body: JSON.stringify({ prNumber: 3, description: 'x', ...ok }) })).status).toBe(404);
       for (const bad of [
         { prNumber: 4, description: 'x', ...ok },
         { prNumber: 3, description: 'x', findingId: 'other:correctness:0', ...ok },
