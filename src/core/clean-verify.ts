@@ -358,15 +358,20 @@ export function reportRun(sandboxes: Boxes, id: string, env: Record<string, stri
 const lcovIn = (sandboxes: Boxes, id: string, dir: string) => async (): Promise<boolean> =>
   (await sandboxes.exec(id, ['bash', '--norc', '-c', `find ${dir} -name lcov.info -o -name '*.lcov' 2>/dev/null | grep -q .`])).code === 0;
 
-/** vitest's words for a threshold its coverage misses (`ERROR: Coverage for lines (80%) does not meet global threshold (95%)`). */
-const THRESHOLD_MISSED = /^ERROR: Coverage for .+ does not meet .*threshold/m;
+/**
+ * vitest's two lines for a threshold its coverage misses (vitest 5.0.3's dist): a percentage (`ERROR: Coverage for lines (80%)
+ * does not meet global threshold (95%)`), or a negative one, a count of uncovered lines (`ERROR: Uncovered lines (42) exceed
+ * "src/**" threshold (10)`).
+ */
+const THRESHOLD_MISSED = /^ERROR: (?:Coverage for .+ does not meet|Uncovered .+ exceed) .*threshold/m;
 
 /**
  * `run`, its first line with `flags`, the coverage the measure asks for: the reruns of failing tests do not overwrite the whole
  * run's. A red first run is the verdict, and is not run twice, unless the coverage is shown to have failed it: it wrote no LCOV
  * (`wrote`: a package declared and not installed, an instrumentation too slow), or every test its runner's report names passed
  * and vitest says a threshold the flags could not empty (keyed by a glob) is missed. Then it is run again without, whose exit
- * is the verdict. A measure never fails the tests; a failure with no test to name (a hook, an unhandled error) stays the run's.
+ * is the verdict. A threshold or a package the coverage needs never fails the tests; a failure with no test to name (a hook,
+ * an unhandled error, one the instrumentation slowed) stays the run's.
  */
 function firstWith(run: Run, flags: string, wrote: () => Promise<boolean>): Run {
   let first = true;

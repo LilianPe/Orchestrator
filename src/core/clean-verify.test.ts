@@ -1582,7 +1582,10 @@ describe('factory/qualité-diff (ORC-280)', () => {
     expect(suiteRuns(sandboxes)).toEqual([true]);
   });
 
-  it('a red first run whose report names no failing test failed for the coverage (a threshold the flags leave), and is run again without it', async () => {
+  it.each([
+    'ERROR: Coverage for lines (80%) does not meet "src/**" threshold (95%)',
+    'ERROR: Uncovered lines (42) exceed "src/**" threshold (10)',
+  ])('a red first run whose report names no failing test failed for the coverage (a threshold the flags leave: %s), and is run again without it', async (missed) => {
     const pkg = JSON.stringify({ devDependencies: { '@vitest/coverage-v8': '^5' } });
     const { sandboxes, req } = setup({ quality: true, commands: ['npx vitest run'] }, undefined, { 'package.json': pkg });
     sandboxes.answer = (command) => {
@@ -1591,7 +1594,7 @@ describe('factory/qualité-diff (ORC-280)', () => {
       // vitest writes its LCOV, then exits 1 on a glob's threshold (`thresholds: { 'src/**': { lines: 95 } }`).
       const dir = /--coverage\.reportsDirectory=(\S+)/.exec(command)?.[1];
       if (dir) write(dir, 'lcov.info', 'SF:src/a.ts\nend_of_record\n');
-      return { stdout: '', stderr: dir ? 'ERROR: Coverage for lines (80%) does not meet "src/**" threshold (95%)' : '', code: dir ? 1 : 0 };
+      return { stdout: '', stderr: dir ? missed : '', code: dir ? 1 : 0 };
     };
     const res = await runCleanVerify(req);
     rmSync(/factory-coverage-[^/]+/.exec(sandboxes.ran.find((r) => r.command.includes('reportsDirectory'))!.command)![0].replace(/^/, '/tmp/'), { recursive: true, force: true });
