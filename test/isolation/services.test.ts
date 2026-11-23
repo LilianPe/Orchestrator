@@ -76,6 +76,12 @@ describe.skipIf(!enabled)(`an attempt's Postgres (${cli}, ORC-309)`, () => {
     expect(holdsSecret(Buffer.from(dump.stdout), SECRET)).toBe(true);
   });
 
+  it('a service and the sandbox joining it destroyed at once, as recover() and this file\'s cleanup do: both gone, the engine still answering (ORC-491)', async () => {
+    const box = await provider.create(request({ requirements: PG }));
+    await Promise.all([provider.destroy(box.services!), provider.destroy(box.id)]);
+    expect(execFileSync(cli, ['ps', '-aq', '--filter', `id=${box.id}`, '--filter', `id=${box.services}`], { encoding: 'utf8', timeout: 30_000 }).trim()).toBe('');
+  });
+
   it('a daemon restart finds the services under the attempt they serve, for recover() to destroy', async () => {
     const attempt = request();
     const setup = await provider.create({ ...attempt, runId: `${attempt.runId}-setup`, servicesOf: attempt.runId, requirements: PG });

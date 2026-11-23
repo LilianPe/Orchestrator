@@ -203,6 +203,8 @@ export class ContainerSandboxProvider implements SandboxProvider {
    * the services it owns only if it joined some.
    */
   private readonly known = new Map<string, { runId: string; joined: boolean }>();
+  /** The last `rm` asked: the next one waits for it (`remove`). */
+  private removing: Promise<void> = Promise.resolve();
 
   constructor(private readonly opts: ContainerSandboxOptions) {
     this.run = opts.exec ?? execCmd;
@@ -333,12 +335,19 @@ export class ContainerSandboxProvider implements SandboxProvider {
   /**
    * `-v`: an anonymous volume of the image goes with its container. `--depend`: Podman refuses to remove a service a
    * container still joins (a `setup` left by a crash, which `recover()` destroys at the same time); Docker removes it.
+   * One at a time (ORC-491): a service and a container joining it removed at once, Podman 5.7's two `rm --depend`
+   * never returned, and every later command of the engine waited behind them.
    */
-  private async remove(id: string): Promise<void> {
-    // Its flags depend on the engine: asked first, perhaps the provider's first command.
-    await this.kind();
-    const r = await this.engine(['rm', '-f', '-v', ...(this.podman ? ['--depend'] : []), id]);
-    if (r.code !== 0 && !/no such container|already in progress/i.test(r.stderr)) throw new Error(`container sandbox: rm ${id}: ${r.stderr.trim()}`);
+  private remove(id: string): Promise<void> {
+    const done = this.removing.then(async () => {
+      // Its flags depend on the engine: asked first, perhaps the provider's first command.
+      await this.kind();
+      const r = await this.engine(['rm', '-f', '-v', ...(this.podman ? ['--depend'] : []), id]);
+      if (r.code !== 0 && !/no such container|already in progress/i.test(r.stderr)) throw new Error(`container sandbox: rm ${id}: ${r.stderr.trim()}`);
+    });
+    // A failed one does not hold the next ones back.
+    this.removing = done.catch(() => undefined);
+    return done;
   }
 
   /**
