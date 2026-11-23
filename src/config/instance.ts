@@ -55,6 +55,8 @@ export function homePaths(home: string) {
     socket: join(home, 'cli', 'factory.sock'),
     transcripts: join(home, 'transcripts'),
     workspaces: join(home, 'workspaces'),
+    /** The daemon's bare mirror of each repository (ORC-479), `<owner>/<name>`: its git source, never mounted in a sandbox. */
+    repos: join(home, 'repos'),
     /** Each ticket's Claude session dir, mounted as `~/.claude` of its sandboxes (ORC-204). */
     sessions: join(home, 'sessions'),
     /** Each sandboxed run's own dir: its refusals log, its `~/.claude` out of the ticket session (ORC-217). */

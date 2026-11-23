@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { TIMED_OUT, type Exec, type ExecOpts } from '../adapters/exec.js';
 import { parseRepoConfig, RepoConfigError } from '../config/repo-config.js';
 import { NO_REPO_VARIABLES } from '../config/repo-variables.js';
-import { makeDryRunFiles, makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint, pyprojectStart } from './repo-variables.js';
+import { ignoredWorkflowFilesOn, makeDryRunFiles, makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint, pyprojectStart } from './repo-variables.js';
 
 const YML = { repos: [{ linearTeam: 'REL', github: 'Org/App', env: { NODE_ENV: 'test' }, secrets: { REGISTRY_TOKEN: { source: 'env', path: 'ORG_REGISTRY_TOKEN' } } }] };
 const CONFIG = 'env: [NODE_ENV]\nsetup_secrets: [REGISTRY_TOKEN]\n';
@@ -30,7 +30,7 @@ function git(o: { origin?: string; head?: string; config?: string; mode?: string
 }
 
 
-const PROJECT = { id: 'p', repoPath: '/repo', teamKey: 'REL' };
+const PROJECT = { id: 'p', mirror: '/repo', teamKey: 'REL' };
 
 /** A real forge (bare) and the factory's clone of it, in `root`, the clone's default branch holding `config`. */
 function forgeAndClone(root: string, config: string) {
@@ -92,7 +92,7 @@ describe('makeRepoConfig (ORC-209 C)', () => {
       run(repo, 'remote', 'set-url', 'origin', `ext::${stall}`);
       const started = Date.now();
       const logged: string[] = [];
-      await expect(makeRepoConfig({ fetchDeadlineMs: 300, log: (m) => logged.push(m) })({ repoPath: repo })).rejects.toThrow(/^the forge no longer responds after 0.3 s$/);
+      await expect(makeRepoConfig({ fetchDeadlineMs: 300, log: (m) => logged.push(m) })({ mirror: repo })).rejects.toThrow(/^the forge no longer responds after 0.3 s$/);
       expect(Date.now() - started).toBeLessThan(15_000);
       // The ticket names neither the path nor the command: the daemon's log does.
       expect(logged).toEqual([expect.stringContaining(`git -C ${repo} fetch`)]);
@@ -177,7 +177,7 @@ describe('makeRepoConfig (ORC-209 C)', () => {
       run(repo, 'commit', '--quiet', '-am', 'widen');
       run(repo, 'push', '--quiet', 'origin', 'widen', 'widen:refs/tags/origin/main');
       run(repo, 'remote', 'set-head', 'origin', '--delete');
-      expect((await makeRepoConfig()({ repoPath: repo })).network).toEqual({ level: 'none', allow: [] });
+      expect((await makeRepoConfig()({ mirror: repo })).network).toEqual({ level: 'none', allow: [] });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -194,7 +194,7 @@ describe('makeRepoConfig (ORC-209 C)', () => {
       run(repo, 'add', '-A');
       run(repo, 'commit', '--quiet', '-m', 'link');
       run(repo, 'push', '--quiet', 'origin', 'main');
-      await expect(makeRepoConfig()({ repoPath: repo })).rejects.toThrow(/\.factory is not a folder/);
+      await expect(makeRepoConfig()({ mirror: repo })).rejects.toThrow(/\.factory is not a folder/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -208,14 +208,14 @@ describe('makeRepoConfig (ORC-209 C)', () => {
       writeFileSync(join(repo, '.factory', 'config.yml'), 'network: { level: custom, allow: [evil.exemple.com] }\n');
       run(repo, 'commit', '--quiet', '-am', 'widen');
       const read = makeRepoConfig();
-      expect((await read({ repoPath: repo })).network).toEqual({ level: 'none', allow: [] });
+      expect((await read({ mirror: repo })).network).toEqual({ level: 'none', allow: [] });
       // Merged on the forge since: the next launch takes it, without a fetch of its own before.
       const human = join(root, 'human');
       execFileSync('git', ['clone', '--quiet', forge, human]);
       writeFileSync(join(human, '.factory', 'config.yml'), 'network: { level: custom, allow: [docs.exemple.com] }\n');
       run(human, 'commit', '--quiet', '-am', 'allow docs');
       run(human, 'push', '--quiet', 'origin', 'main');
-      expect((await read({ repoPath: repo })).network).toEqual({ level: 'custom', allow: ['docs.exemple.com'] });
+      expect((await read({ mirror: repo })).network).toEqual({ level: 'custom', allow: ['docs.exemple.com'] });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -258,11 +258,31 @@ describe('makeRepoVariables (ORC-211)', () => {
 
 describe('makeOriginUrl (ORC-151, ORC-478)', () => {
   it('gives the URL of the repository on GitHub the start resolved, whatever a clone says', async () => {
-    expect(await makeOriginUrl()({ github: 'Org/App', repoPath: '/repo' })).toBe('https://github.com/Org/App');
+    expect(await makeOriginUrl()({ github: 'Org/App', mirror: '/repo' })).toBe('https://github.com/Org/App');
   });
 
   it("gives a replayed ticket its clone at the start, never the forge's default branch, which holds what came after (ORC-376)", async () => {
-    expect(await makeOriginUrl()({ github: 'Org/App', repoPath: '/ghost/g1/REL-1/repo', replayed: {} })).toBe('file:///ghost/g1/REL-1/repo');
+    expect(await makeOriginUrl()({ github: 'Org/App', mirror: '/ghost/g1/REL-1/repo', replayed: {} })).toBe('file:///ghost/g1/REL-1/repo');
+  });
+});
+
+describe('ignoredWorkflowFilesOn (ORC-388, ORC-479)', () => {
+  it("names the old workflow files of the mirror's default branch, never of a working tree, and none on a branch git cannot read", async () => {
+    const root = mkdtempSync(join(tmpdir(), 'factory-ignored-'));
+    try {
+      const { run, forge, repo } = forgeAndClone(root, 'env: []\n');
+      writeFileSync(join(repo, '.factory', 'workflow.yml'), 'version: 1\n');
+      run(repo, 'add', '.');
+      run(repo, 'commit', '--quiet', '-m', 'old workflow');
+      run(repo, 'push', '--quiet', 'origin', 'main');
+      mkdirSync(join(repo, '.relais')); // transition, à retirer
+      writeFileSync(join(repo, '.relais', 'workflow.yml'), 'version: 1\n'); // transition, à retirer
+      expect(await ignoredWorkflowFilesOn(repo)).toEqual(['.factory/workflow.yml']);
+      expect(await ignoredWorkflowFilesOn(forge)).toEqual([]);
+      expect(await ignoredWorkflowFilesOn(join(root, 'nowhere'))).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -280,34 +300,34 @@ describe('makeStartFingerprint (ORC-406)', () => {
         run(repo, 'fetch', '--quiet', 'origin');
       };
       commit('package.json', JSON.stringify({ name: 'shop', version: '1.0.0', scripts: { dev: 'vite' } }));
-      const first = await fingerprint({ repoPath: repo });
+      const first = await fingerprint({ mirror: repo });
       expect(first).toMatch(/^[0-9a-f]{64}$/);
       // The README, the package's version: not how it starts.
       commit('README.md', '# Shop\n');
       commit('package.json', JSON.stringify({ name: 'shop', version: '1.1.0', scripts: { dev: 'vite' } }));
-      expect(await fingerprint({ repoPath: repo })).toBe(first);
+      expect(await fingerprint({ mirror: repo })).toBe(first);
       // Its scripts are.
       commit('package.json', JSON.stringify({ name: 'shop', version: '1.1.0', scripts: { dev: 'vite --host' } }));
-      const scripts = await fingerprint({ repoPath: repo });
+      const scripts = await fingerprint({ mirror: repo });
       expect(scripts).not.toBe(first);
       // A dependency bump is not: no lockfile counts.
       for (const lock of ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'poetry.lock', 'uv.lock', 'go.sum', 'Cargo.lock']) commit(lock, `${lock} v2\n`);
-      expect(await fingerprint({ repoPath: repo })).toBe(scripts);
+      expect(await fingerprint({ mirror: repo })).toBe(scripts);
       // A Makefile, the scripts of a pyproject.toml, a compose file are.
       commit('pyproject.toml', '[project]\nname = "shop"\nversion = "1.0"\n\n[project.scripts]\nshop = "shop.cli:main"\n');
-      let last = await fingerprint({ repoPath: repo });
+      let last = await fingerprint({ mirror: repo });
       expect(last).not.toBe(scripts);
       commit('pyproject.toml', '[project]\nname = "shop"\nversion = "1.1"\ndependencies = ["flask>=3"]\n\n[project.scripts]\nshop = "shop.cli:main"\n');
-      expect(await fingerprint({ repoPath: repo }), 'pyproject version and dependencies').toBe(last);
+      expect(await fingerprint({ mirror: repo }), 'pyproject version and dependencies').toBe(last);
       for (const [path, text] of [['pyproject.toml', '[project]\nname = "shop"\n\n[project.scripts]\nshop = "shop.app:serve"\n'], ['Makefile', 'serve:\n\tnpm run dev\n'], ['compose.yaml', 'services: {}\n']] as const) {
         commit(path, text);
-        const now = await fingerprint({ repoPath: repo });
+        const now = await fingerprint({ mirror: repo });
         expect(now, path).not.toBe(last);
         last = now;
       }
       // Never the agent's worktree: what is not on the default branch does not count.
       writeFileSync(join(repo, 'Makefile'), 'serve:\n\tmake other\n');
-      expect(await fingerprint({ repoPath: repo })).toBe(last);
+      expect(await fingerprint({ mirror: repo })).toBe(last);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -320,14 +340,14 @@ describe('makeStartFingerprint (ORC-406)', () => {
       if (args.includes('ls-tree')) return { stdout: '100644 blob abc123\tpyproject.toml\0', stderr: '', code: 0 };
       return { stdout: '', stderr: 'fatal: unable to read abc123', code: 128 };
     };
-    expect(await makeStartFingerprint({ exec, log: (m) => logged.push(m) })({ repoPath: '/repo' })).toBeUndefined();
+    expect(await makeStartFingerprint({ exec, log: (m) => logged.push(m) })({ mirror: '/repo' })).toBeUndefined();
     expect(logged).toHaveLength(1);
   });
 
   it('is undefined, logged, when git cannot read the default branch', async () => {
     const logged: string[] = [];
     const exec: Exec = async () => ({ stdout: '', stderr: 'fatal', code: 128 });
-    expect(await makeStartFingerprint({ exec, log: (m) => logged.push(m) })({ repoPath: '/repo' })).toBeUndefined();
+    expect(await makeStartFingerprint({ exec, log: (m) => logged.push(m) })({ mirror: '/repo' })).toBeUndefined();
     expect(logged).toHaveLength(1);
   });
 });
@@ -395,7 +415,7 @@ describe('makeDryRunFiles (ORC-409)', () => {
       const blob = (path: string) => run(repo, 'rev-parse', `origin/main:${path}`).trim();
       // Not on the default branch: not read.
       writeFileSync(join(repo, '.factory', 'config.yml'), 'env: [X]\n');
-      expect(await makeDryRunFiles()({ repoPath: repo })).toEqual({
+      expect(await makeDryRunFiles()({ mirror: repo })).toEqual({
         sha: run(repo, 'rev-parse', 'origin/main').trim(),
         lockfiles: { 'uv.lock': blob('uv.lock') },
         config: blob('.factory/config.yml'),
@@ -408,7 +428,7 @@ describe('makeDryRunFiles (ORC-409)', () => {
   it('a default branch git cannot read rejects, without the server path in what reaches the ticket', async () => {
     const logs: string[] = [];
     const { exec } = git({ head: 'origin/main' });
-    await expect(makeDryRunFiles({ exec, log: (m) => logs.push(m) })({ repoPath: '/srv/secret/repo' })).rejects.toThrow(/^the dry run's fingerprint: unreadable default branch \(origin\/main\)$/);
+    await expect(makeDryRunFiles({ exec, log: (m) => logs.push(m) })({ mirror: '/srv/secret/repo' })).rejects.toThrow(/^the dry run's fingerprint: unreadable default branch \(origin\/main\)$/);
     expect(logs.join('\n')).toContain('/srv/secret/repo');
   });
 });

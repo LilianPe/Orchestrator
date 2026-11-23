@@ -6,9 +6,10 @@ import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { execCmd, mustExec } from '../adapters/exec.js';
 import type { GitHubAppForge } from '../adapters/forge/github-app.js';
-import type { CloneAuth, PullRequestView } from '../adapters/forge/types.js';
+import type { PullRequestView } from '../adapters/forge/types.js';
 import { projectGithub } from '../app/project-github.js';
-import { fetchOrigin, originHeadOf } from '../adapters/workspace/git-workspaces.js';
+import { originHeadOf } from '../adapters/workspace/git-workspaces.js';
+import { RepoMirrors } from '../adapters/workspace/repo-mirrors.js';
 import { repoRoot } from '../app/root.js';
 import { homePaths, loadInstance } from '../config/instance.js';
 import { GITHUB_APP_SECRETS, loadSealedFactoryYml } from '../config/server-secrets.js';
@@ -303,7 +304,7 @@ async function githubForge(home: string): Promise<GitHubAppForge> {
   return forge;
 }
 
-/** The command line, on the instance's store and projects; the PRs read by the GitHub App, the clones and diffs from each project's origin. */
+/** The command line, on the instance's store and projects; the PRs read by the GitHub App, the clones and diffs from each project's mirror (ORC-479). */
 export async function runGhostCommand(home: string, args: readonly string[]): Promise<number> {
   const instance = loadInstance(home);
   // The daemon migrates the schema; this only reads and writes rows.
@@ -316,13 +317,23 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
   let forge: Promise<GitHubAppForge> | undefined;
   // A private repository read with the App's token (ORC-442), as the daemon reads it: in git's environment alone. Without the App,
   // the user's own git credentials, as before: `judge` needs no App.
-  // Each project's origin read once: its repository on GitHub, and whether its clone fetches it over HTTPS (the App's token then).
-  const origins = new Map<string, ReturnType<typeof projectGithub>>();
-  const originOf = (repoPath: string) => origins.get(repoPath) ?? origins.set(repoPath, projectGithub({ repoPath })).get(repoPath)!;
-  const auth: CloneAuth = async (repoPath) => {
-    const app = await (forge ??= githubForge(home)).catch(() => undefined);
-    const origin = app && (await originOf(repoPath).catch(() => undefined));
-    return origin?.https ? app!.fetchEnv(origin.github) : {};
+  const mirrors = new RepoMirrors({
+    root: homePaths(home).repos,
+    auth: async (github) => {
+      const app = await (forge ??= githubForge(home)).catch(() => undefined);
+      return app ? app.fetchEnv(github) : {};
+    },
+  });
+  // Each project's repository on GitHub, read from its clone's origin until ORC-471 part 3, and its mirror, made if the daemon has not
+  // made it yet: once per command, for every ticket after; a failure is not kept, the next ticket tries again.
+  const repos = new Map<string, Promise<{ github: string; mirror: string }>>();
+  const repoOf = (repoPath: string) => {
+    const known = repos.get(repoPath);
+    if (known) return known;
+    const reading = projectGithub({ repoPath }).then(async ({ github }) => ({ github, mirror: await mirrors.ready(github) }));
+    repos.set(repoPath, reading);
+    reading.catch(() => repos.delete(repoPath));
+    return reading;
   };
   try {
     let user = 'cli';
@@ -339,19 +350,21 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
         const said = await store.getMeta(SANDBOXES_META);
         return said === undefined ? undefined : said === '1';
       },
-      humanPr: async (repoPath, number) => (await (forge ??= githubForge(home))).pullRequest((await originOf(repoPath)).github, number),
-      // The merge commit fetched from origin, with its history: the start is one of its ancestors.
+      humanPr: async (repoPath, number) => (await (forge ??= githubForge(home))).pullRequest((await repoOf(repoPath)).github, number),
+      // The merge commit fetched from the forge into the mirror, with its history: the start is one of its ancestors.
       humanDiff: async (repoPath, { start, mergeSha }) => {
-        await fetchOrigin(execCmd, repoPath, { refspecs: [mergeSha], auth });
+        const { mirror } = await repoOf(repoPath);
+        await mirrors.fetch(mirror, { refspecs: [mergeSha] });
         // The format of the factory's side whatever the user's git config, which would tell the sides apart on a blind screen.
-        return mustExec(execCmd, 'git', ['-C', repoPath, 'diff', '--no-color', '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/', start, mergeSha]);
+        return mustExec(execCmd, 'git', ['-C', mirror, 'diff', '--no-color', '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/', start, mergeSha]);
       },
       environment: async ({ repoPath, mergeSha, prCommits, dir, memory }) => {
-        const remote = (await mustExec(execCmd, 'git', ['-C', repoPath, 'remote', 'get-url', 'origin'])).trim();
+        const { github, mirror } = await repoOf(repoPath);
         const repo = join(dir, 'repo');
-        const start = await cloneAtStart({ remote, mergeSha, prCommits, dir: repo, env: await auth(repoPath) });
+        // From the forge, as the mirror names it: never a URL read from a clone.
+        const start = await cloneAtStart({ remote: mirrors.url(github), mergeSha, prCommits, dir: repo, env: await mirrors.auth(mirror) });
         // The run's repository (ORC-376): the start on the project's default branch, its own origin.
-        branches[repoPath] ??= originHeadOf(execCmd, repoPath).then((h) => h.name.replace(/^origin\//, ''));
+        branches[repoPath] ??= originHeadOf(execCmd, mirror).then((h) => h.name.replace(/^origin\//, ''));
         await asRepository({ dir: repo, branch: await branches[repoPath] });
         if (!memory || !instance.knowledge) return { start };
         // Transaction time: the knowledge base as it stood when the start commit was made.

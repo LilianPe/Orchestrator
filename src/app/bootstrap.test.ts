@@ -21,8 +21,26 @@ import { MemoryStore } from '../store/memory-store.js';
 import { oldDatabaseWarnings } from '../store/old-databases.js';
 import { TrackerSwitch } from './tracker-switch.js';
 
-/** A start on a MemoryStore of its own, Postgres being the instance's only store (ORC-178): test/integration/open-store.test.ts starts on it. */
-const startOnMemory = (o: BootOptions) => startFactory({ store: new MemoryStore(), ...o });
+/**
+ * A start on a MemoryStore of its own, Postgres being the instance's only store (ORC-178): test/integration/open-store.test.ts starts on it.
+ * Its mirrors fetch a local path no repository is at (ORC-479), never GitHub: each fails at once, and the start goes on.
+ */
+const startOnMemory = (o: BootOptions) => startFactory({ store: new MemoryStore(), githubUrl: (github) => join(tmpdir(), 'factory-no-github', github), ...o });
+
+/** A local bare repository standing for GitHub's `github`, its `main` holding `files`: what a project's mirror is made from (ORC-479). */
+function localGithub(github: string, files: Record<string, string> = { 'README.md': 'hi\n' }): { url: (repo: string) => string } {
+  const root = mkdtempSync(join(tmpdir(), 'factory-github-'));
+  const work = join(root, 'work');
+  execFileSync('git', ['init', '--quiet', '-b', 'main', work]);
+  for (const [path, text] of Object.entries(files)) {
+    mkdirSync(join(work, path, '..'), { recursive: true });
+    writeFileSync(join(work, path), text);
+  }
+  execFileSync('git', ['-C', work, 'add', '.']);
+  execFileSync('git', ['-C', work, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '--quiet', '-m', 'init']);
+  execFileSync('git', ['clone', '--quiet', '--bare', work, join(root, `${github}.git`)]);
+  return { url: (repo) => join(root, `${repo}.git`) };
+}
 
 /** A clone whose origin is `origin`, the GitHub repository `acme/app` by default: a project's repository (ORC-478). */
 function githubClone(origin = 'https://github.com/acme/app.git'): string {
@@ -175,11 +193,14 @@ describe('bootstrap', () => {
     });
   });
 
-  it("runs a project on the factory/default workflow, its repository's .factory/workflow.yml ignored (ORC-388)", async () => {
+  it("runs a project on the factory/default workflow, its repository's .factory/workflow.yml ignored and said, as its mirror's default branch has it (ORC-388, ORC-479)", async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    // No local clone: `repo_path` names an origin, nothing more; the file is on the forge's default branch alone.
     const repo = githubClone();
-    mkdirSync(join(repo, '.factory'));
-    writeFileSync(join(repo, '.factory/workflow.yml'), 'version: 1\nlimits: { verify_attempts: 9 }\njobs:\n  dev:\n    model: opus\n');
+    const github = localGithub('acme/app', { '.factory/workflow.yml': 'version: 1\nlimits: { verify_attempts: 9 }\njobs:\n  dev:\n    model: opus\n' });
+    // In the working tree only: not what the runs start from, not said.
+    mkdirSync(join(repo, '.relais')); // transition, à retirer
+    writeFileSync(join(repo, '.relais/workflow.yml'), 'version: 1\n'); // transition, à retirer
     saveInstance(home, { port: 4178, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', repoPath: repo, linearTeamKey: 'REL' }] });
     appendFileSync(join(home, 'factory.yml'), 'budgets: { max_turns: { build: 40 } }\n');
     let deps: DaemonDeps | undefined;
@@ -188,13 +209,28 @@ describe('bootstrap', () => {
     });
     const logs: string[] = [];
     try {
-      const app = await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
+      const app = await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {}, githubUrl: github.url });
+      // Made in the background: the start does not wait for a first clone.
+      await vi.waitFor(() => expect(logs.join('\n')).toContain('is ignored'));
       await app.stop();
     } finally {
       recover.mockRestore();
     }
     expect(deps!.projects[0]!.workflow).toEqual(defaultWorkflow({ budgets: { maxTurns: { build: 40 } } }));
-    expect(logs).toContain('p: Warning: .factory/workflow.yml is ignored: the workflow is the factory/default preset. Delete it; its setup and checks go in .factory/config.yml.');
+    expect(logs.filter((l) => l.includes('is ignored'))).toEqual(['p: Warning: .factory/workflow.yml is ignored: the workflow is the factory/default preset. Delete it; its setup and checks go in .factory/config.yml.']);
+    // The daemon's own mirror, made at the start, is the project's git source.
+    expect(deps!.projects[0]!.mirror).toBe(join(home, 'repos', 'acme', 'app'));
+    expect(execFileSync('git', ['-C', deps!.projects[0]!.mirror, 'rev-parse', '--is-bare-repository'], { encoding: 'utf8' }).trim()).toBe('true');
+  });
+
+  it('starts when a mirror cannot be made, saying so: its launches fetch it again (ORC-479)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    saveInstance(home, { port: 4181, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', repoPath: githubClone(), linearTeamKey: 'REL' }] });
+    const logs: string[] = [];
+    const app = await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
+    await vi.waitFor(() => expect(logs).toContainEqual(expect.stringMatching(/^Warning: p: the mirror of acme\/app could not be fetched, its launches fetch it again: the forge could not be read/)));
+    await app.stop();
+    expect(existsSync(join(home, 'repos', 'acme', 'app'))).toBe(false);
   });
 
   it("knows each project's repository on GitHub from the start: its team's factory.yml entry, else its origin (ORC-478)", async () => {

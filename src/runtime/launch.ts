@@ -217,7 +217,7 @@ export abstract class DaemonLaunch extends DaemonEffects {
    */
   private async declaredAtBase(project: ProjectRuntime, ws: Workspace): Promise<DeclaredReads | undefined> {
     try {
-      const show = await this.d.workspaces.baseReader(project.repoPath, ws.path);
+      const show = await this.d.workspaces.baseReader(project.mirror, ws.path);
       if (!show) throw new Error('no worktree with a commit');
       return await declaredReads(show);
     } catch (err) {
@@ -828,7 +828,7 @@ export abstract class DaemonLaunch extends DaemonEffects {
       // when it names the ticket: the agent's HEAD is recorded as it left it, detached or on a branch of its own.
       const recorded = t.branch && namesTicket(issue.identifier, t.branch) ? t.branch : undefined;
       const branch = worktree ? (recorded ?? branchName(issue.identifier, issue.title, issue.labels, naming)) : undefined;
-      const asked = { projectId: project.id, repoPath: project.repoPath, ticketId, title: issue.title, kind: job.workspace, runId, ...(reviewed ? { sha: reviewed } : {}), ...(branch ? { branch, fetched } : {}) };
+      const asked = { projectId: project.id, mirror: project.mirror, ticketId, title: issue.title, kind: job.workspace, runId, ...(reviewed ? { sha: reviewed } : {}), ...(branch ? { branch, fetched } : {}) };
       let ws = await workspaces.prepare(asked);
       // Left by a daemon killed before the end of its setup (ORC-211): half installed, perhaps holding a secret the
       // configuration no longer names, so sealing it again proves nothing. It is made anew; no agent has worked in it.
@@ -1165,7 +1165,7 @@ export abstract class DaemonLaunch extends DaemonEffects {
     };
     const [lines, diff] = await Promise.all([
       dir ? quiet('the transcript', lastTranscript(dir)) : undefined,
-      t.worktreePath ? quiet('the diff', this.d.workspaces.ticketDiff(project.repoPath, t.worktreePath)).then((d) => d ?? '(the diff could not be read)') : undefined,
+      t.worktreePath ? quiet('the diff', this.d.workspaces.ticketDiff(project.mirror, t.worktreePath)).then((d) => d ?? '(the diff could not be read)') : undefined,
     ]);
     const transcript = lines && formatTranscript(lines);
     const linked = formatLinked(blockers);

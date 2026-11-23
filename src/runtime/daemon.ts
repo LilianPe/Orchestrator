@@ -40,8 +40,11 @@ import { DaemonLaunch } from './launch.js';
 
 export interface ProjectRuntime {
   id: string;
-  /** The factory's clone of the repository: its workspaces, diffs and config are read there (ORC-471 part 2 replaces it). */
-  repoPath: string;
+  /**
+   * The repository the daemon's git reads (ORC-479): its bare mirror of `github` (`RepoMirrors`), where the workspaces, the diffs,
+   * the repository's config and the fingerprints are read. A replayed ticket's is its clone at the start.
+   */
+  mirror: string;
   /**
    * The repository on GitHub, `owner/name` (ORC-478), resolved once at the start (`projectGithub`): what the forge, its writer,
    * the captures, the App's git token and the roles name it by. A replayed ticket's is its project's.
@@ -56,7 +59,7 @@ export interface ProjectRuntime {
   effects?: 'none';
   /**
    * Set by `runtimeFor` on a ticket of a replay of closed tickets (ORC-376): its run reads the ticket as it was at its start, its
-   * thread and linked tickets with it, and works on the clone at that start, which `repoPath` then names.
+   * thread and linked tickets with it, and works on the clone at that start, which `mirror` then names.
    */
   replayed?: Pick<ReplayedTicket, 'issue' | 'history' | 'knowledge'>;
 }

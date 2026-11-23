@@ -241,7 +241,7 @@ describe('a search bounded at three failures (ORC-406)', () => {
     commit('package-lock.json', '{"lockfileVersion":3}');
     git(clone, 'remote', 'set-head', 'origin', 'main');
     const read = makeStartFingerprint();
-    const { h, recipes } = preview({ tickets: 5, fingerprint: () => read({ repoPath: clone }) });
+    const { h, recipes } = preview({ tickets: 5, fingerprint: () => read({ mirror: clone }) });
     h.runner.enqueue(dev(), dev(), dev(), dev(), dev());
     for (const i of [1, 2, 3]) await delegate(h, `REL-${i}`);
     expect(recipes.read('p')).toMatchObject({ status: 'not_found', failures: 3 });

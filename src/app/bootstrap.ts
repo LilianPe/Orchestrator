@@ -32,13 +32,14 @@ import { Reconciler, reconcileOnce } from '../adapters/tracker/linear/reconcile.
 import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
+import { RepoMirrors } from '../adapters/workspace/repo-mirrors.js';
 import { saveAgentOutput, type AgentOutput } from '../core/agent-output.js';
 import { claudeAccountReader, disabledControls, readCapsOf, specPublicationOf, stepSettings, ticketCapOf } from '../config/factory-yml.js';
 import { loadSealedFactoryYml } from '../config/server-secrets.js';
 import { startRefusals, type StartChecks } from '../config/start-refusals.js';
-import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../config/repo-config.js';
+import { ignoredWorkflowWarning } from '../config/repo-config.js';
 import { cloneAuth, httpsGithub, projectGithub } from './project-github.js';
-import { makeDryRunFiles, makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint } from './repo-variables.js';
+import { ignoredWorkflowFilesOn, makeDryRunFiles, makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint } from './repo-variables.js';
 import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens, sealSecretsAtRest, validatorWarnings } from '../config/instance.js';
 import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { fantome, isFantome, projectEffects } from '../presets/fantome.js';
@@ -106,6 +107,8 @@ export interface BootOptions {
    * would open its own, and closes it when it stops or fails to start from there on.
    */
   store?: Store;
+  /** Where the daemon's mirrors fetch each repository (`owner/name`, ORC-479): GitHub by default, a test's local bare repositories. */
+  githubUrl?: (github: string) => string;
 }
 
 /** The dashboard's GitHub sign-in off the loopback (ORC-399), from what `startRefusals` checked; none on the loopback, where nobody signs in. */
@@ -164,20 +167,23 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     }))),
     instance.knowledge ? httpsGithub(instance.knowledge.repoPath) : undefined,
   ]);
+  // Without the App, no forge at all (ORC-181): every read says the App is missing, and nothing is published.
+  const appForge = githubApp ? new GitHubAppForge({ ...githubApp, log }) : undefined;
+  // The daemon's own git reads a private repository with the App's token (ORC-442); without the App, with the machine's credentials.
+  const gitAuth = appForge?.fetchEnv.bind(appForge);
+  // The daemon's own mirror of each repository (ORC-479), its git source in place of the operator's clone.
+  const mirrors = new RepoMirrors({ root: paths.repos, log, ...(gitAuth ? { auth: gitAuth } : {}), ...(o.githubUrl ? { url: o.githubUrl } : {}) });
   const projects: ProjectRuntime[] = instance.projects.map((p, i) => ({
     id: p.id,
-    repoPath: p.repoPath,
+    mirror: mirrors.path(origins[i]!.github),
     github: origins[i]!.github,
     teamKey: p.linearTeamKey,
     // The replay of closed tickets (ORC-231): nothing of the project leaves the factory.
     workflow: isFantome(p) ? ghost : workflow,
     ...(projectEffects(p) ? { effects: 'none' as const } : {}),
   }));
-  // The clones fetch by their path until ORC-471 part 2: each project's, and the knowledge base's, fetched over HTTPS from GitHub.
-  const clones = new Map(projects.flatMap((p, i) => (origins[i]!.https ? [[p.repoPath, p.github] as const] : [])));
-  if (knowledgeGithub) clones.set(instance.knowledge!.repoPath, knowledgeGithub);
-  // Said at each start, not only by `factory doctor`.
-  for (const p of projects) for (const file of ignoredWorkflowFiles(p.repoPath)) log(`${p.id}: ${ignoredWorkflowWarning(file)}`);
+  // The knowledge base's clone fetches by its path until ORC-471 part 4, over HTTPS from GitHub with the App's token.
+  const clones = new Map(knowledgeGithub ? [[instance.knowledge!.repoPath, knowledgeGithub] as const] : []);
   for (const line of validatorWarnings(instance.projects)) log(line);
   // The projects that replay closed tickets (ORC-376): only the daemon's own delegations reach them, nothing of Linear, whose tickets
   // of the same team stay the other projects'.
@@ -265,12 +271,23 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const runner: Runner = sandboxes
       ? new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets, proxyHasToken: () => !!claudeTokenOf(), log, sandboxes })
       : Object.assign(new FakeRunner(), { submit: (runId: string, output: AgentOutput) => saveAgentOutput(store, runId, output) });
-    // Without the App, no forge at all (ORC-181): every read says the App is missing, and nothing is published.
-    const appForge = githubApp ? new GitHubAppForge({ ...githubApp, log }) : undefined;
-    // The daemon's own git reads a private repository with the App's token (ORC-442); without the App, with the machine's credentials.
-    const gitAuth = appForge?.fetchEnv.bind(appForge);
     const clonesAuth = cloneAuth(gitAuth, clones);
-    const workspaces = new GitWorkspaces({ root: paths.workspaces, log, auth: clonesAuth });
+    // Each mirror made or fetched in the background: a first clone can take minutes, and the server, its webhooks and /health do not
+    // wait for it. A launch that comes meanwhile waits for it (`RepoMirrors.fetch`, one git at a time); a failure is logged and left to
+    // the launches, which fetch it again.
+    // Once per repository: two projects of one repository share its mirror.
+    const readies = new Map<string, Promise<unknown>>();
+    void Promise.all(projects.map(async (p) => {
+      const ready = readies.get(p.mirror) ?? readies.set(p.mirror, mirrors.ready(p.github)).get(p.mirror)!;
+      try {
+        await ready;
+      } catch (err) {
+        log(`Warning: ${p.id}: the mirror of ${p.github} could not be fetched, its launches fetch it again: ${(err as Error).message}`);
+      }
+      // Said at each start, not only by `factory doctor`: on the default branch the runs start from, not in a working tree.
+      for (const file of await ignoredWorkflowFilesOn(p.mirror)) log(`${p.id}: ${ignoredWorkflowWarning(file)}`);
+    })).catch((err: Error) => log(`Warning: the mirrors' start: ${err.message}`));
+    const workspaces = new GitWorkspaces({ root: paths.workspaces, log, auth: mirrors.auth, fetch: mirrors.fetch });
     const forge = appForge ?? new NoForge();
     if (githubApp) {
       log(
@@ -363,7 +380,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       roles,
       repoVariables: makeRepoVariables({ yml, log }),
       readSecrets: (refs) => repoSecrets.read(refs),
-      repoConfig: makeRepoConfig({ log, auth: clonesAuth }),
+      repoConfig: makeRepoConfig({ log, fetch: mirrors.fetch }),
       originUrl,
       gitAuth,
       fullReadPaths: (t) => Object.keys(t.frozenTests?.files ?? {}),

@@ -369,7 +369,7 @@ export async function runInit(d: InitDeps): Promise<void> {
   // every ticket blocks at the tests step. A file git cannot read there is `factory validate`'s and `factory doctor`'s to name.
   const commands = detected
     ? detected.commands
-    : await makeRepoConfig({ exec: d.exec })({ repoPath }, { fetch: false }).then((c) => c.commands, () => undefined);
+    : await makeRepoConfig({ exec: d.exec })({ mirror: repoPath }, { fetch: false }).then((c) => c.commands, () => undefined);
   for (const warning of testCommandWarnings(commands)) io.print(warning);
   if (detected?.commands['pytest']) io.print(PYTEST_BESIDE_TEST);
 

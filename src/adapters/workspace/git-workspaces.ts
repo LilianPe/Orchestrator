@@ -9,23 +9,17 @@ import { STALLED } from '../../publish/publish.js';
 import { execCmd, execFailure, HARDENING, mustExec, TIMED_OUT, type Exec } from '../exec.js';
 import { readCapped } from '../read-capped.js';
 import type { CloneAuth } from '../forge/types.js';
+import { FACTORY_GIT_IDENTITY } from '../../product.js';
 import type { StepDiff, Workspace, WorkspaceManager, WorkspaceRequest } from './types.js';
 
 function assertSafe(id: string): void {
   if (/[\\/]/.test(id) || id.includes('..')) throw new Error(`Invalid identifier: ${id}`);
 }
 
-/**
- * What the agent's repository takes of the repository's own config, and nothing else (ORC-341): its identity and line
- * endings for a commit, Git LFS's filter, its remotes' URLs and what they fetch, each value without the credentials of a
- * URL (`withoutUserinfo`).
- * Left out, whatever its key: what reaches the forge with a credential (an extraheader, `credential.*`, a push URL, an
- * `insteadOf` that names a token), runs a command of the host's (`core.sshCommand`, a hooks path), or describes the
- * repository's layout. The agent has no token (ORC-125): the factory alone pushes, with its own.
- */
-const INHERITED = /^(user\.(name|email)|core\.(autocrlf|eol)|filter\.lfs\.(clean|smudge|process|required)|remote\..+\.(url|fetch))$/i;
-/** What the checkout that makes it (`agentRepository`) never takes of that config either: the layout of that repository, or a host's path for its hooks. */
-const LAYOUT = /^(core\.(bare|repositoryformatversion|worktree|hookspath|fsmonitor|sparsecheckout|sparsecheckoutcone)$|extensions\.)/i;
+/** A Git LFS filter the host's config installs, off for the checkout that makes an agent's repository: the files stay its pointers. */
+const NO_LFS = ['filter.lfs.smudge=', 'filter.lfs.process=', 'filter.lfs.required=false'].flatMap((c) => ['-c', c]);
+/** What a daemon's mirror and an agent's repository fetch from their `origin`, as a clone's: every branch of the forge, as remote-tracking refs. */
+export const ORIGIN_REFSPEC = '+refs/heads/*:refs/remotes/origin/*';
 /** A commit's full id, SHA-1 or SHA-256. */
 export const SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
 const MAX_REFS_BYTES = 16 * 1024 * 1024;
@@ -115,6 +109,9 @@ export async function originHeadOf(exec: Exec, repo: string): Promise<{ ref: str
   return { ref, name: ref.replace(/^refs\/remotes\//, ''), set: r.code === 0 };
 }
 
+/** A `fetchOrigin` of the repository at `repo`, its token and its turn the caller's (`RepoMirrors.fetch`). */
+export type FetchOrigin = (repo: string, o?: { deadlineMs?: number; log?: (message: string) => void; refspecs?: readonly string[] }) => Promise<void>;
+
 /** A launch waits this long for the forge, at most: past it, it is refused (ORC-209 C). */
 export const FETCH_DEADLINE_MS = 2 * 60_000;
 /** What the launch still gives git, killed at its deadline, to end: past it, it stops waiting for a process that left git's group. */
@@ -174,8 +171,12 @@ async function trunkDiff(git: CloneGit, trunk: string, head: string, past?: stri
 export class GitWorkspaces implements WorkspaceManager {
   private exec: Exec;
 
-  /** `log`: the detail of a failed fetch (the server's path, git's own words), which the ticket never gets. `auth`: what reads a private forge (ORC-442). */
-  constructor(private o: { root: string; exec?: Exec; fetchDeadlineMs?: number; log?: (message: string) => void; auth?: CloneAuth }) {
+  /**
+   * `log`: the detail of a failed fetch (the server's path, git's own words), which the ticket never gets. `auth`: what reads a
+   * private forge (ORC-442), by the repository's path. `fetch`: what fetches a mirror (`RepoMirrors.fetch`, ORC-479), one fetch at
+   * a time there; `fetchOrigin` with `auth` by default.
+   */
+  constructor(private o: { root: string; exec?: Exec; fetchDeadlineMs?: number; log?: (message: string) => void; auth?: CloneAuth; fetch?: FetchOrigin }) {
     this.exec = o.exec ?? execCmd;
   }
 
@@ -185,7 +186,8 @@ export class GitWorkspaces implements WorkspaceManager {
 
   /** Bounded: a forge that does not answer refuses the launch, which never waits for it forever (ORC-209). */
   private fetch(repo: string, refspecs?: readonly string[]): Promise<void> {
-    return fetchOrigin(this.exec, repo, { deadlineMs: this.o.fetchDeadlineMs, log: this.o.log, auth: this.o.auth, ...(refspecs ? { refspecs } : {}) });
+    const o = { deadlineMs: this.o.fetchDeadlineMs, log: this.o.log, ...(refspecs ? { refspecs } : {}) };
+    return this.o.fetch ? this.o.fetch(repo, o) : fetchOrigin(this.exec, repo, { ...o, auth: this.o.auth });
   }
 
   async prepare(req: WorkspaceRequest): Promise<Workspace> {
@@ -203,37 +205,28 @@ export class GitWorkspaces implements WorkspaceManager {
       }
       return { path, branch };
     }
-    if (!req.fetched) await this.fetch(req.repoPath);
+    if (!req.fetched) await this.fetch(req.mirror);
     const has = async (ref: string) =>
-      (await this.exec('git', ['-C', req.repoPath, 'rev-parse', '--verify', '--quiet', ref])).code === 0;
-    const trunk = await originHead(this.exec, req.repoPath);
+      (await this.exec('git', ['-C', req.mirror, 'rev-parse', '--verify', '--quiet', ref])).code === 0;
+    const trunk = await originHead(this.exec, req.mirror);
     // The name asked, else the legacy one a ticket already has (ORC-283): its open PR stays the one, never a second beside it.
     const names = [...new Set([req.branch ?? branchName(req.ticketId, req.title), legacyBranchName(req.ticketId, req.title)])];
-    // The forge first: an agent's commits reach it, never the repository's own branch, which can only lag behind.
+    // The forge alone: an agent's commits reach it, and the mirror has no branch of its own (ORC-479).
     const onForge = await findAsync(names, (n) => has(`refs/remotes/origin/${n}`));
-    const inRepo = onForge === undefined ? await findAsync(names, (n) => has(`refs/heads/${n}`)) : undefined;
-    const branch = onForge ?? inRepo ?? names[0]!;
-    let existing: string | undefined;
-    let checkout = ['--no-track', '-b', branch, trunk];
-    let local: string | undefined;
-    if (onForge !== undefined) {
-      existing = `refs/remotes/origin/${branch}`;
-      // In full, as the trunk: a short `origin/<branch>` resolves a tag of that name first.
-      checkout = ['-b', branch, existing];
-    } else if (inRepo !== undefined) {
-      existing = local = `refs/heads/${branch}`;
-      checkout = [branch];
-    }
+    const branch = onForge ?? names[0]!;
+    // In full, as the trunk: a short `origin/<branch>` resolves a tag of that name first.
+    const existing = onForge === undefined ? undefined : `refs/remotes/origin/${branch}`;
+    const checkout = existing ? ['-b', branch, existing] : ['--no-track', '-b', branch, trunk];
     // On a branch that already existed: only its commits beyond the default branch count.
-    const ahead = !!existing && (await this.git(req.repoPath, 'rev-list', '--count', `${trunk}..${existing}`)).trim() !== '0';
-    await this.agentRepository(req.repoPath, path, trunk, checkout, local);
+    const ahead = !!existing && (await this.git(req.mirror, 'rev-list', '--count', `${trunk}..${existing}`)).trim() !== '0';
+    await this.agentRepository(req.mirror, path, trunk, checkout);
     return { path, branch, fresh: true, ...(ahead ? { ahead } : {}) };
   }
 
   /**
    * The agent's own repository at `path`, its `.git` inside its worktree (ORC-317). Everything in it, config, hooks,
-   * refs, the `.git` itself, is the agent's: the repository of `repo`, its config, its hooks and its refs, is never
-   * mounted in a sandbox, so that git can go on running on it on the host. No git of the host runs in `path` afterwards:
+   * refs, the `.git` itself, is the agent's: the repository of `repo` (the daemon's mirror, ORC-479), its config, its hooks
+   * and its refs, is never mounted in a sandbox, so that git can go on running on it on the host. No git of the host runs in `path` afterwards:
    * `agentHead` and `stepDiff` read it as data, and what git must do in it is done here, before any agent.
    *
    * Left out of its sparse checkout but for `.claude/CLAUDE.md`, which the factory reads as the
@@ -244,10 +237,18 @@ export class GitWorkspaces implements WorkspaceManager {
    * `!/.claude/*`, not `!/.claude/`: git re-includes a file only if its parent directory is not excluded.
    *
    * Its objects are copied, not shared: a hard link would let the agent rewrite the factory's, and an alternate needs a
-   * mount at the same path. What is fetched is what the forge has and the ticket's own branch, not another ticket's.
+   * mount at the same path. What is fetched is what the forge has, nothing of the mirror's own.
    * Made aside, then renamed: a daemon killed halfway leaves no directory the next launch would take for a worktree.
+   *
+   * Its config is written here, key by key, never taken from `repo`'s (ORC-479, after ORC-341's allow list): the factory's
+   * identity for a commit (`FACTORY_GIT_IDENTITY`), and `origin` as `repo` names it, without the credentials of a URL
+   * (`withoutUserinfo`), fetching every branch. No Git LFS filter: the runner's image has no `git-lfs`, and a filter naming a
+   * missing command fails each checkout (`filter-process`) or each file. The checkout on the host runs no LFS filter either
+   * (`NO_LFS`), whatever the host's own config installs: the worktree holds the pointers its index has, which the agent's git,
+   * with no clean filter, reads as unchanged; a file it downloaded would be committed whole in place of its pointer. The agent
+   * has no token (ORC-125): the factory alone pushes, with its own, and the checkout needs none.
    */
-  private async agentRepository(repo: string, path: string, trunk: string, checkout: readonly string[], localRef?: string): Promise<void> {
+  private async agentRepository(repo: string, path: string, trunk: string, checkout: readonly string[]): Promise<void> {
     const making = `${path}.new`;
     await rm(making, { recursive: true, force: true });
     mkdirSync(dirname(path), { recursive: true });
@@ -257,25 +258,17 @@ export class GitWorkspaces implements WorkspaceManager {
       // Its refs as files, which `agentHead` reads as data, whatever the host's git makes by default (reftable from git 3,
       // ORC-348): the variable wins over any config, and a git older than 2.45 ignores it.
       await here(['init', '--quiet', '--template=', making], { GIT_DEFAULT_REF_FORMAT: 'files' });
-      // A key without a value is a boolean's true: `-z --list` gives it without the newline.
-      const config = zFields(await this.git(repo, 'config', '--local', '-z', '--list')).map((entry): [string, string] => {
-        const at = entry.indexOf('\n');
-        return at < 0 ? [entry, 'true'] : [entry.slice(0, at), entry.slice(at + 1)];
-      });
-      // Every value: a URL is never inherited with its credentials, whatever key the list admits next.
-      for (const [key, value] of config) if (INHERITED.test(key)) await here(['-C', making, 'config', '--add', key, withoutUserinfo(value)]);
-      // The checkout's LFS filter reaches the forge as the repository does, its credentials included: in the env of that
-      // checkout alone, never on a command line nor in the agent's config.
-      const forHost = config.filter(([key]) => !LAYOUT.test(key));
-      const asRepo = Object.fromEntries([
-        ['GIT_CONFIG_COUNT', String(forHost.length)],
-        ...forHost.flatMap(([key, value], i) => [[`GIT_CONFIG_KEY_${i}`, key], [`GIT_CONFIG_VALUE_${i}`, value]]),
-      ]);
-      // Resolved: it is read from `making`, and `repoPath` can be relative.
-      await here(['-C', making, 'fetch', '--quiet', '--no-tags', '--', resolve(repo), '+refs/remotes/origin/*:refs/remotes/origin/*', '+refs/tags/*:refs/tags/*', ...(localRef ? [`+${localRef}:${localRef}`] : [])]);
+      const origin = (await this.exec('git', ['-C', repo, 'config', '--get', 'remote.origin.url'])).stdout.trim();
+      const config: [string, string][] = [
+        ...Object.entries(FACTORY_GIT_IDENTITY),
+        ...(origin ? ([['remote.origin.url', withoutUserinfo(origin)], ['remote.origin.fetch', ORIGIN_REFSPEC]] as [string, string][]) : []),
+      ];
+      for (const [key, value] of config) await here(['-C', making, 'config', key, value]);
+      // Resolved: it is read from `making`, and the mirror's root can be relative.
+      await here(['-C', making, 'fetch', '--quiet', '--no-tags', '--', resolve(repo), '+refs/remotes/origin/*:refs/remotes/origin/*', '+refs/tags/*:refs/tags/*']);
       await here(['-C', making, 'symbolic-ref', 'refs/remotes/origin/HEAD', trunk]);
-      await here(['-C', making, 'checkout', '--quiet', ...checkout], asRepo);
-      await here(['-C', making, 'sparse-checkout', 'set', '--no-cone', '/*', '!/.claude/*', '/.claude/CLAUDE.md'], asRepo);
+      await here([...NO_LFS, '-C', making, 'checkout', '--quiet', ...checkout]);
+      await here([...NO_LFS, '-C', making, 'sparse-checkout', 'set', '--no-cone', '/*', '!/.claude/*', '/.claude/CLAUDE.md']);
       renameSync(making, path);
     } catch (err) {
       await rm(making, { recursive: true, force: true });
@@ -286,15 +279,15 @@ export class GitWorkspaces implements WorkspaceManager {
   /** One per question, gone with it (`release`): what a question's agent left is for nobody else, and nothing has to be put back. */
   private async trunkWorkspace(req: WorkspaceRequest): Promise<Workspace> {
     const { path, trunk } = await this.runClone(req);
-    await this.agentRepository(req.repoPath, path, trunk, ['--detach', trunk]);
+    await this.agentRepository(req.mirror, path, trunk, ['--detach', trunk]);
     return { path };
   }
 
   /** Where a run's own repository goes (`_trunk/<runId>`, gone with it), and the trunk, read once the forge is fetched. */
   private async runClone(req: WorkspaceRequest): Promise<{ path: string; trunk: string }> {
     assertSafe(req.runId);
-    await this.fetch(req.repoPath);
-    return { path: join(this.o.root, req.projectId, '_trunk', req.runId), trunk: await originHead(this.exec, req.repoPath) };
+    await this.fetch(req.mirror);
+    return { path: join(this.o.root, req.projectId, '_trunk', req.runId), trunk: await originHead(this.exec, req.mirror) };
   }
 
   /**
@@ -306,13 +299,13 @@ export class GitWorkspaces implements WorkspaceManager {
     if (!req.sha) throw new Error('An AI review needs the published commit, and there is no published commit to review.');
     if (!SHA.test(req.sha)) throw new Error(`Not a commit id: ${req.sha}`);
     const { path, trunk } = await this.runClone(req);
-    const diff = await trunkDiff(gitAt(this.exec, req.repoPath, {}), trunk, req.sha);
-    await this.agentRepository(req.repoPath, path, trunk, ['--detach', req.sha]);
+    const diff = await trunkDiff(gitAt(this.exec, req.mirror, {}), trunk, req.sha);
+    await this.agentRepository(req.mirror, path, trunk, ['--detach', req.sha]);
     return { path, diff };
   }
 
-  async ticketDiff(repoPath: string, path: string): Promise<string | undefined> {
-    const [at, trunk] = await Promise.all([this.worktreeGit(repoPath, path), originHead(this.exec, repoPath)]);
+  async ticketDiff(mirror: string, path: string): Promise<string | undefined> {
+    const [at, trunk] = await Promise.all([this.worktreeGit(mirror, path), originHead(this.exec, mirror)]);
     return at && trunkDiff(at.git, trunk, at.head, 'only the changed files are named here, and the clone is the trunk, which holds none of these changes');
   }
 
@@ -335,20 +328,20 @@ export class GitWorkspaces implements WorkspaceManager {
   }
 
   /**
-   * A worktree's head, and git on the factory's repository, its config and its hooks, to read it: the agent's objects are
+   * A worktree's head, and git on the factory's mirror, its config and its hooks, to read it: the agent's objects are
    * only one more place to read objects from, whatever their `info/alternates` says. A link for `objects` could reach
    * another repository's: not followed. None for a path that is no worktree.
    */
-  private async worktreeGit(repoPath: string, path: string): Promise<{ head: string; git: CloneGit } | undefined> {
+  private async worktreeGit(mirror: string, path: string): Promise<{ head: string; git: CloneGit } | undefined> {
     const head = await this.head(path);
-    // Absolute: read from `repoPath`, and the workspaces' root can be relative.
+    // Absolute: read from `mirror`, and the workspaces' root can be relative.
     const objects = resolve(path, '.git', 'objects');
     if (!head || !isDir(objects)) return undefined;
-    return { head, git: gitAt(this.exec, repoPath, { GIT_ALTERNATE_OBJECT_DIRECTORIES: objects }) };
+    return { head, git: gitAt(this.exec, mirror, { GIT_ALTERNATE_OBJECT_DIRECTORIES: objects }) };
   }
 
-  async stepDiff(repoPath: string, path: string, base: string): Promise<StepDiff | undefined> {
-    const at = await this.worktreeGit(repoPath, path);
+  async stepDiff(mirror: string, path: string, base: string): Promise<StepDiff | undefined> {
+    const at = await this.worktreeGit(mirror, path);
     if (!at) return undefined;
     const { head, git } = at;
     // Without renames, a source file moved into a test is its deletion: a change outside the tests.
@@ -378,15 +371,15 @@ export class GitWorkspaces implements WorkspaceManager {
    * `origin/HEAD`, which no fetch refreshes, still names an old one (ORC-358); a forge that does not answer rejects.
    * Without, against the repository's default branch as it is, no forge read.
    */
-  async branchReader(repoPath: string, path: string, o: { fetch: boolean }): Promise<BranchReader | undefined> {
-    const at = await this.worktreeGit(repoPath, path);
+  async branchReader(mirror: string, path: string, o: { fetch: boolean }): Promise<BranchReader | undefined> {
+    const at = await this.worktreeGit(mirror, path);
     if (!at) return undefined;
-    const base = o.fetch ? await this.forgeHead(repoPath) : await originHead(this.exec, repoPath);
+    const base = o.fetch ? await this.forgeHead(mirror) : await originHead(this.exec, mirror);
     return gitReader(at.git, base, await forkPoint(at.git, at.head, base), at.head);
   }
 
-  async baseReader(repoPath: string, path: string): Promise<BranchReader['showAtFork'] | undefined> {
-    const [at, trunk] = await Promise.all([this.worktreeGit(repoPath, path), originHead(this.exec, repoPath)]);
+  async baseReader(mirror: string, path: string): Promise<BranchReader['showAtFork'] | undefined> {
+    const [at, trunk] = await Promise.all([this.worktreeGit(mirror, path), originHead(this.exec, mirror)]);
     if (!at) return undefined;
     // A head with no commit in common with the default branch, an orphan the agent wrote, would declare nothing: the branch
     // instead. A failure of git (the branch missing) throws: no base is not an empty one.
@@ -421,8 +414,11 @@ export class GitWorkspaces implements WorkspaceManager {
     else for (const e of entries) if (e !== 'CLAUDE.md') rmSync(join(dir, e), { recursive: true, force: true });
   }
 
-  async remoteBranchExists(repoPath: string, matches: (name: string) => boolean): Promise<boolean> {
-    const out = await this.git(repoPath, 'ls-remote', '--heads', 'origin');
+  /** Asked of the forge, with its token as a fetch has it: never a prompt, never a wait past the fetch's deadline. */
+  async remoteBranchExists(mirror: string, matches: (name: string) => boolean): Promise<boolean> {
+    const deadlineMs = this.o.fetchDeadlineMs ?? FETCH_DEADLINE_MS;
+    const env = await remoteGitEnv(this.o.auth, mirror, deadlineMs);
+    const out = await mustExec(this.exec, 'git', ['-C', mirror, 'ls-remote', '--heads', 'origin'], { env, timeoutMs: deadlineMs });
     return out
       .split('\n')
       .map((l) => l.split('\t')[1]?.replace(/^refs\/heads\//, ''))

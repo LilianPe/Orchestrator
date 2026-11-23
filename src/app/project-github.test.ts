@@ -28,13 +28,13 @@ describe('projectGithub (ORC-478)', () => {
 
   it('reads the origin of the clone once, and nothing else of it', async () => {
     const { exec, calls } = clone('https://github.com/org/site.git');
-    expect(await projectGithub({ repoPath: '/repo', teamKey: 'REL', repos: REPOS, exec })).toEqual({ github: 'org/site', https: true });
+    expect(await projectGithub({ repoPath: '/repo', teamKey: 'REL', repos: REPOS, exec })).toEqual({ github: 'org/site' });
     expect(calls).toEqual([['-C', '/repo', 'remote', 'get-url', 'origin']]);
   });
 
   it("falls back on the origin's own name when no entry of the team names it: another team's entry is never taken", async () => {
-    expect(await projectGithub({ repoPath: '/repo', teamKey: 'REL', repos: REPOS, exec: clone('https://github.com/org/infra').exec })).toEqual({ github: 'org/infra', https: true });
-    expect(await projectGithub({ repoPath: '/repo', teamKey: 'NEW', exec: clone('git@github.com:acme/tool.git').exec })).toEqual({ github: 'acme/tool', https: false });
+    expect(await projectGithub({ repoPath: '/repo', teamKey: 'REL', repos: REPOS, exec: clone('https://github.com/org/infra').exec })).toEqual({ github: 'org/infra' });
+    expect(await projectGithub({ repoPath: '/repo', teamKey: 'NEW', exec: clone('git@github.com:acme/tool.git').exec })).toEqual({ github: 'acme/tool' });
   });
 
   it.each([
