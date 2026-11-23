@@ -200,11 +200,11 @@ const deadLetterRow = (r: DeadLetterPgRow): DeadLetter => ({
   ...(r.resolved_by === null ? {} : { resolvedBy: r.resolved_by }),
 });
 
-/** An attempt's label column on update: kept once the attempt has labels, else the write's (ORC-226). */
 /** A defect's level as stored: one entered before ORC-378 has none, and counts as serious. */
 const levelOf = (stored: string | null): DefectLevel => (stored === 'important' ? 'important' : 'serious');
 const isCategory = (stored: string | null): stored is DefectCategory => (DEFECT_CATEGORIES as readonly (string | null)[]).includes(stored);
 
+/** An attempt's label column on update: kept once the attempt has labels, else the write's (ORC-226). */
 const FIRST_LABELS = (column: string) =>
   sql.raw(`case when attempts.data ? 'labels' then attempts.${column} else excluded.${column} end`);
 
