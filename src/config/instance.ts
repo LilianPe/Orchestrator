@@ -229,13 +229,19 @@ function parseSecrets(text: string | undefined, key?: string): Secrets {
   return secretsJson(openSecretsFile(text, key));
 }
 
-/** The file's JSON, refused without JSON.parse's message (ORC-456): it quotes the text around the error, a token's characters among it. */
+/**
+ * The file's JSON object, refused without JSON.parse's message (ORC-456): it quotes the text around the error, a token's
+ * characters among it. Any other JSON value (`null`, an array, a string) is refused too: its readers take `.linear` of it.
+ */
 function secretsJson(text: string): Secrets {
+  let value: unknown;
   try {
-    return JSON.parse(text) as Secrets;
+    value = JSON.parse(text);
   } catch {
     throw new Error('secrets.json is not valid JSON (its text left unquoted: it holds secrets)');
   }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('secrets.json is not a JSON object (its text left unquoted: it holds secrets)');
+  return value as Secrets;
 }
 
 /** The secret values of the secrets file (identifiers left out): masked in run transcripts. */
