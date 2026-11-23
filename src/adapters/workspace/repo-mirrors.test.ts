@@ -90,6 +90,30 @@ describe('RepoMirrors (ORC-479)', () => {
     expect(git(mirror, 'rev-parse', 'refs/remotes/origin/HEAD')).toBe(git(f.work, 'rev-parse', 'HEAD'));
   });
 
+  it('says origin/HEAD names a branch the forge no longer has when setting it again fails, at each failure, and sets it at a next fetch (ORC-486)', async () => {
+    const f = forge();
+    const logs: string[] = [];
+    let refuse = true;
+    const exec: Exec = async (cmd, args, opts) =>
+      refuse && args.includes('set-head') ? { code: 128, stdout: '', stderr: 'fatal: unable to access the forge\n' } : execCmd(cmd, args, opts);
+    const mirrors = new RepoMirrors({ root: f.root, url: f.url, exec, log: (m) => logs.push(m) });
+    refuse = false;
+    const mirror = await mirrors.ready('acme/app');
+    refuse = true;
+    git(f.work, 'push', '--quiet', 'origin', 'main:trunk');
+    git(f.base, '--git-dir', f.url('acme/app'), 'symbolic-ref', 'HEAD', 'refs/heads/trunk');
+    git(f.work, 'push', '--quiet', 'origin', '--delete', 'main');
+    await mirrors.fetch(mirror);
+    await mirrors.fetch(mirror);
+    const said = logs.filter((m) => m.includes('origin/HEAD names refs/remotes/origin/main, which the forge no longer has'));
+    expect(said).toHaveLength(2);
+    expect(said[0]).toMatch(/unable to access the forge$/);
+    expect(logs.join('\n')).not.toMatch(/origin\/HEAD not set/);
+    refuse = false;
+    await mirrors.fetch(mirror);
+    expect(git(mirror, 'symbolic-ref', 'refs/remotes/origin/HEAD')).toBe('refs/remotes/origin/trunk');
+  });
+
   it('makes a missing mirror at its first fetch, whoever asks: a workspace from a mirror the start could not make', async () => {
     const f = forge();
     const mirrors = new RepoMirrors({ root: f.root, url: f.url });

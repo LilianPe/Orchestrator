@@ -135,7 +135,11 @@ export class RepoMirrors {
     if ((await this.exec('git', ['-C', repo, 'rev-parse', '--verify', '--quiet', 'refs/remotes/origin/HEAD'])).code === 0) return;
     const env = await remoteGitEnv(this.tokenOf(github), repo, deadlineMs);
     const r = await this.exec('git', ['-C', repo, 'remote', 'set-head', 'origin', '--auto'], { env, timeoutMs: deadlineMs });
-    if (r.code !== 0) this.sayHeadless(github, r.stderr);
+    if (r.code === 0) return;
+    // Pruned after a rename: a reader of the default branch fails until a next fetch sets it, said at each failure.
+    const gone = await this.exec('git', ['-C', repo, 'symbolic-ref', 'refs/remotes/origin/HEAD']);
+    if (gone.code === 0) this.o.log?.(`mirror of ${github}: origin/HEAD names ${gone.stdout.trim()}, which the forge no longer has, set again at a next fetch: ${r.stderr.trim().split('\n')[0] ?? ''}`);
+    else this.sayHeadless(github, r.stderr);
   }
 
   /** An empty repository has no default branch yet: `origin/main` is assumed until it has one, said once. */
