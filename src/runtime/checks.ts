@@ -99,12 +99,13 @@ export abstract class DaemonChecks extends DaemonBase {
         };
       }
       const count = t.spec?.approval ? (t.spec.spec.properties?.length ?? 0) : 0;
-      const red = await checkRed(command, { ...diff, uncommitted, run: runTests, ...(count ? { properties: { ticketId: t.ticketId, count } } : {}) });
+      const atHead = count ? await diff.filesAtHead() : [];
+      const red = await checkRed(command, { ...diff, uncommitted, run: runTests, ...(count ? { properties: { ticketId: t.ticketId, count, atHead } } : {}) });
       // The freeze (ORC-131) on the same commit: the step's tests and the harness, whatever the red's verdict.
       // ponytail: committed files only; a test left uncommitted is not frozen (verify reads commits once ORC-151 lands).
       const tests = diff.changed.filter((f) => !f.deleted && isTestFile(f.path)).map((f) => f.path);
       // The generators of the property tests (ORC-261), whoever wrote them and whenever: what a property draws its inputs from.
-      const read = await freezeTests([...tests, ...(count ? await propertySupport(propertyTests(t.ticketId, count, tests), diff) : [])], diff);
+      const read = await freezeTests([...tests, ...(count ? await propertySupport(propertyTests(t.ticketId, count, atHead), diff) : [])], diff);
       return { ...red, frozen: t.frozenTests ? newTestsOnly(read) : read };
     } catch (err) {
       return { verified: false, cause: 'infra', command: '', exitCode: null, detail: `The red check could not run: ${(err as Error).message}` };

@@ -997,7 +997,7 @@ export abstract class DaemonLaunch extends DaemonEffects {
         ...(project.replayed?.history ? { history: project.replayed.history } : {}),
         branch: job.queue === 'dev' ? t.branch : undefined,
         prUrl: t.prUrl,
-        spec: specShown && t.spec ? { version: t.spec.version, approved: !!t.spec.approval, text: formatSpec(t.spec.spec), ...(t.spec.approval && t.spec.spec.properties?.length ? { properties: t.spec.spec.properties.map((_, i) => propertyTestFiles(t.ticketId, i + 1)) } : {}) } : undefined,
+        spec: specShown && t.spec ? { version: t.spec.version, approved: !!t.spec.approval, text: formatSpec(t.spec.spec), ...(job.step === 'tests' && t.spec.approval && t.spec.spec.properties?.length ? { properties: t.spec.spec.properties.map((_, i) => propertyTestFiles(t.ticketId, i + 1)) } : {}) } : undefined,
         // What `clarify`'s answers decided (ORC-210), for the steps after the guard: intake reads them as its feedback.
         decisions: job.queue === 'dev' && job.step !== 'intake' && t.decisions?.length ? t.decisions : undefined,
         conventions,

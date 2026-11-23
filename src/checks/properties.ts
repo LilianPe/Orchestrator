@@ -55,26 +55,37 @@ function scriptImports(path: string, source: string): string[] {
 }
 
 const pyModule = (dotted: string): string[] => [`${dotted.replace(/\./g, '/')}.py`, `${dotted.replace(/\./g, '/')}/__init__.py`];
+const under = (dir: string, rel: string): string => (dir === '.' ? rel : `${dir}/${rel}`);
+/** The first word of each name of an import list: `a as b, (c,\n d)` gives a, c, d. */
+const names = (list: string): string[] => list.replace(/[()]/g, '').split(',').map((n) => n.trim().split(/\s+/)[0]!).filter(Boolean);
 
-/** The repository paths a Python file's imports could be: `from .x import y`, `from . import x`, `from a.b import c`, `import a.b`. */
+/** `dir` and each folder above it, up to the repository's root: where pytest's `rootdir`, `prepend` or a subproject can put a module. */
+function ancestors(dir: string): string[] {
+  const out = [dir];
+  while (out.at(-1) !== '.') out.push(posix.dirname(out.at(-1)!));
+  return out;
+}
+
+/**
+ * The repository paths a Python file's imports could be: `from .x import y`, `from . import x`, `from a.b import c` (`c` maybe a
+ * submodule), `import a.b`, a parenthesized list across lines. An absolute module is looked for from the file's folder up to the root.
+ */
 function pythonImports(path: string, source: string): string[] {
   const dir = posix.dirname(path);
   const out: string[] = [];
-  for (const m of source.matchAll(/^\s*from\s+(\.*)([\w.]*)\s+import\s+([^#\n]+)/gm)) {
-    const [dots, module, names] = [m[1]!, m[2]!, m[3]!];
+  const absolute = (dotted: string) => ancestors(dir).flatMap((d) => pyModule(dotted).map((rel) => under(d, rel)));
+  for (const m of source.matchAll(/^\s*from\s+(\.*)([\w.]*)\s+import\s+(\([^)]*\)|[^#\n]+)/gm)) {
+    const [dots, module, list] = [m[1]!, m[2]!, m[3]!];
+    // Each imported name may be a submodule of the package.
+    const dotted = [...(module ? [module] : []), ...names(list).map((n) => (module ? `${module}.${n}` : n))];
     if (!dots) {
-      out.push(...pyModule(module));
+      out.push(...dotted.flatMap(absolute));
       continue;
     }
     const base = posix.normalize(posix.join(dir, ...Array<string>(dots.length - 1).fill('..')));
-    const at = (rel: string) => (base === '.' ? rel : `${base}/${rel}`);
-    if (module) out.push(...pyModule(module).map(at));
-    // `from . import cells`: each name may be a module of the package.
-    else for (const name of names.replace(/[()]/g, '').split(',')) out.push(...pyModule(name.trim().split(/\s+/)[0]!).map(at));
+    out.push(...dotted.flatMap((d) => pyModule(d).map((rel) => under(base, rel))));
   }
-  for (const m of source.matchAll(/^\s*import\s+([^#\n]+)/gm)) {
-    for (const part of m[1]!.split(',')) out.push(...pyModule(part.trim().split(/\s+/)[0]!));
-  }
+  for (const m of source.matchAll(/^\s*import\s+([^#\n]+)/gm)) out.push(...names(m[1]!).flatMap(absolute));
   return out;
 }
 

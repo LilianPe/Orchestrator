@@ -21,14 +21,14 @@ const AT_FREEZE = { 'src/export.test.ts': ACCEPTANCE, 'test/rel-1.property-1.tes
 type Harness = ReturnType<typeof createHarness>;
 
 /** A ticket whose spec, with `properties`, is approved; the tests step committed `changed`, the build held. */
-async function approved(properties: (typeof PROPERTY)[], changed: string[]): Promise<Harness> {
+async function approved(properties: (typeof PROPERTY)[], changed: string[], head: Record<string, string> = AT_FREEZE): Promise<Harness> {
   const h = createHarness({ authz: { maintainers: [LEAD], validators: [MEMBER], githubLogins: { [LEAD]: 'lilian-gh', [MEMBER]: 'armand-gh' } }, repoConfig: withTestCommand(), fullChain: true });
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
   h.tracker.setTeamMembers('REL', [LEAD, MEMBER]);
   h.forge.setRepoPermission('lilian-gh', 'write');
   h.forge.setRepoPermission('armand-gh', 'write');
   h.workspaces.heads.set(WORKTREE, 'sha-freeze');
-  h.workspaces.steps.set(WORKTREE, { changed: changed.map((path) => ({ path, deleted: false })), head: AT_FREEZE });
+  h.workspaces.steps.set(WORKTREE, { changed: changed.map((path) => ({ path, deleted: false })), head });
   h.runner.enqueue(assessment(), drafted({ ...SPEC, properties }));
   await h.send('ticket.delegated', { linearSessionId: 'as-1' }, 'REL-1', { actor: LEAD });
   await toBuild(h, { build: [{ hold: true }], actor: MEMBER, linearSessionId: 'as-1' });
@@ -64,7 +64,8 @@ describe('the property tests of the approved spec (ORC-261)', () => {
   });
 
   it('an approved property left without its test: the red check says so, measured like any red (the run goes on)', async () => {
-    const h = await approved([PROPERTY], ['src/export.test.ts']);
+    const { 'test/rel-1.property-1.test.ts': _, ...without } = AT_FREEZE;
+    const h = await approved([PROPERTY], ['src/export.test.ts'], without);
     const red = (await verdicts(h)).find((v) => v.red !== undefined)!;
     expect(red.red).toBe('missing_property');
     expect(red.failures[0]!.output).toContain('rel-1.property-1.test.ts');

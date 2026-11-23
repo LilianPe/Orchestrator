@@ -218,6 +218,12 @@ describe('checkRed', () => {
     expect(await checkRed('npx vitest run', all)).toMatchObject({ verified: true, cause: 'assertion' });
   });
 
+  it('takes a property test an earlier pass of the step committed: it is at the head, frozen already (ORC-261)', async () => {
+    const properties = { ticketId: 'ORC-12', count: 2, atHead: ['src/orc-12.property-1.test.ts', 'src/export.ts'] };
+    const d = { ...deps(['tests/test_orc_12_property_2.py'], 1, VITEST_ASSERTION), properties };
+    expect(await checkRed('npx vitest run', d)).toMatchObject({ verified: true, cause: 'assertion' });
+  });
+
   it('fails the step when it touched a file that is not a test, committed or not, without running anything', async () => {
     const d = deps(['src/export.test.ts', 'src/export.ts'], 1, VITEST_ASSERTION);
     expect(await checkRed('npm test --', d)).toMatchObject({ verified: false, cause: 'scope', detail: expect.stringContaining('src/export.ts') });

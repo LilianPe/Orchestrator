@@ -52,6 +52,21 @@ describe('the generators of the property tests, frozen with them (ORC-261)', () 
     expect(await propertySupport(['tests/test_orc_12_property_1.py'], view(files))).toEqual(['tests/cells.py', 'tests/deep/__init__.py', 'tests/helpers/money.py', 'tests/strategies.py']);
   });
 
+  it("resolves pytest's layouts: a tests folder without __init__.py, a project in a subfolder, a submodule imported by name, a parenthesized list", async () => {
+    const files = {
+      'backend/tests/test_orc_12_property_1.py': 'from strategies import rows\nfrom tests.arb import money\nfrom . import (\n    cells,\n    dates,\n)\n',
+      'backend/tests/strategies.py': '',
+      'backend/tests/arb/__init__.py': '',
+      'backend/tests/arb/money.py': '',
+      'backend/tests/cells.py': '',
+      'backend/tests/dates.py': '',
+      'backend/app/strategies.py': '',
+    };
+    expect(await propertySupport(['backend/tests/test_orc_12_property_1.py'], view(files))).toEqual([
+      'backend/tests/arb/__init__.py', 'backend/tests/arb/money.py', 'backend/tests/cells.py', 'backend/tests/dates.py', 'backend/tests/strategies.py',
+    ]);
+  });
+
   it('leaves out the property tests themselves and a cycle of imports', async () => {
     const files = { 'test/orc-12.property-1.test.ts': "import './a';", 'test/a.ts': "import './orc-12.property-1.test';\nimport './a';" };
     expect(await propertySupport(['test/orc-12.property-1.test.ts'], view(files))).toEqual(['test/a.ts']);

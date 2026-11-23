@@ -315,8 +315,11 @@ export interface RedDeps {
   showAtBase(path: string): Promise<string | undefined>;
   /** A test file of the step, at its head. */
   showAtHead(path: string): Promise<string | undefined>;
-  /** The approved spec's « for any input » properties (ORC-261): each needs its test, in the file the factory names. */
-  properties?: { ticketId: string; count: number };
+  /**
+   * The approved spec's « for any input » properties (ORC-261): each needs its test, in the file the factory names, committed by
+   * this pass of the step or already at its head (`atHead`, an earlier pass's, frozen).
+   */
+  properties?: { ticketId: string; count: number; atHead?: readonly string[] };
 }
 
 export interface RedResult {
@@ -344,7 +347,7 @@ export async function checkRed(repoCommand: string, deps: RedDeps): Promise<RedR
   if (outside.length > 0) return verdict('scope', `The tests step changed files that are not tests: ${[...new Set(outside)].join(', ')}.`);
   const tests = deps.changed.filter((f) => !f.deleted && isTestSpec(f.path)).map((f) => normalizePath(f.path));
   if (tests.length === 0) return verdict('no_tests', 'The tests step committed no test.');
-  const owed = deps.properties ? missingProperties(deps.properties.ticketId, deps.properties.count, tests) : [];
+  const owed = deps.properties ? missingProperties(deps.properties.ticketId, deps.properties.count, [...tests, ...(deps.properties.atHead ?? [])]) : [];
   if (owed.length) {
     const named = owed.map((n) => `property ${n}: \`${propertyTestFiles(deps.properties!.ticketId, n).ts}\` or \`${propertyTestFiles(deps.properties!.ticketId, n).py}\``);
     return verdict('missing_property', `The tests step committed no test for an approved property, in the file the factory names: ${named.join('; ')}.`);
