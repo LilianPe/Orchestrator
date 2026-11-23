@@ -10,6 +10,7 @@ const REQUEST_TIMEOUT_MS = 10_000;
 /** What a header value holds; fetch quotes any other value in its error, the token with it. */
 const TOKEN = /^[\x21-\x7e]+$/;
 
+const encoded = (path: string): string => path.split('/').map(encodeURIComponent).join('/');
 const validPath = (path: string): boolean => path.split('/').every((p) => SEGMENT.test(p) && p !== '.' && p !== '..');
 
 /** `<path>#<field>`, or undefined when `ref` is not one. */
@@ -35,8 +36,8 @@ function addressFault(v: unknown): string | undefined {
     return 'address: the server alone is expected (`https://<host>:<port>`), no path, query or credentials';
   }
   if (url.protocol === 'https:') return undefined;
-  // URL lowercases the host and keeps IPv6 in brackets.
-  const loopback = url.hostname === 'localhost' || url.hostname === '[::1]' || /^127\.\d+\.\d+\.\d+$/.test(url.hostname);
+  // URL lowercases the host and keeps IPv6 in brackets. An address, never a name: `localhost` is resolved, by DNS when a hosts file lacks it.
+  const loopback = url.hostname === '[::1]' || /^127\.\d+\.\d+\.\d+$/.test(url.hostname);
   return url.protocol === 'http:' && loopback ? undefined : fault;
 }
 
@@ -66,7 +67,8 @@ export const vaultKind: SecretSourceKind = {
     return faults;
   },
   create: (options) => {
-    const address = (options['address'] as string).replace(/\/+$/, '');
+    // The URL checked, not its text: a lone `?` or `#` left at its end would swallow the path.
+    const address = new URL(options['address'] as string).origin;
     const mount = (options['mount'] as string | undefined) ?? 'secret';
     const namespace = options['namespace'] as string | undefined;
     const tokenFile = options['token_file'] as string | undefined;
@@ -88,7 +90,8 @@ export const vaultKind: SecretSourceKind = {
     };
     /** The fields of the secret's current version, and its date: undefined when Vault holds no such secret. */
     const fetchSecret = async (path: string): Promise<{ data: Record<string, unknown>; created?: string } | undefined> => {
-      const url = `${address}/v1/${mount}/data/${path}`;
+      // Each segment encoded: the URL parser would drop a space ending the path, and with it turn `.. ` into a dot segment.
+      const url = `${address}/v1/${encoded(mount)}/data/${encoded(path)}`;
       const headers: Record<string, string> = { 'X-Vault-Token': await token() };
       if (namespace) headers['X-Vault-Namespace'] = namespace;
       let res: Response;

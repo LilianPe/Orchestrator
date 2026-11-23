@@ -110,6 +110,14 @@ describe('vault secret source', () => {
     await expect(vaultKind.create({ address: 'http://127.0.0.1:1', token: TOKEN }, {}).read('app/github#key')).rejects.toThrow('Vault is unreachable at http://127.0.0.1:1');
   });
 
+  it('requests the path it was given, whatever ends the address or the path', async () => {
+    requests.length = 0;
+    for (const end of ['?', '#', '/']) expect(await vault({ address: `${address}${end}` }).read('app/github#key')).toBe('pem-secret-value');
+    await expect(vault().read('app/github #key')).rejects.toThrow('no secret app/github  in Vault (kv)');
+    await expect(vault().read('app/.. #key')).rejects.toThrow('no secret app/..  in Vault (kv)');
+    expect(requests.map((r) => r.url)).toEqual([...Array(3).fill('/v1/kv/data/app/github'), '/v1/kv/data/app/github%20', '/v1/kv/data/app/..%20']);
+  });
+
   it('never follows a redirect: the token would go to another host', async () => {
     await expect(vault().read('moved#key')).rejects.toThrow('Vault answered 307: a redirect is not followed');
   });
@@ -137,7 +145,9 @@ describe('vault secret source', () => {
   it('takes an https address (http on the loopback only), a token or a token_file, an optional mount and namespace', () => {
     expect(vaultKind.checkOptions({ address: 'https://vault.example.com:8200', token: 'hvs.x' })).toEqual([]);
     expect(vaultKind.checkOptions({ address: 'http://127.0.0.1:8200', token_file: '/run/vault/token', mount: 'kv', namespace: 'team/a' })).toEqual([]);
-    expect(vaultKind.checkOptions({ address: 'http://localhost:8200', token: 'hvs.x' })).toEqual([]);
+    expect(vaultKind.checkOptions({ address: 'http://[::1]:8200', token: 'hvs.x' })).toEqual([]);
+    // A name is resolved, and a resolver without it in its hosts file may ask a DNS server: an address of the loopback alone.
+    expect(vaultKind.checkOptions({ address: 'http://localhost:8200', token: 'hvs.x' })).toEqual(['address: an https URL is expected (http on the loopback only)']);
     expect(vaultKind.checkOptions({ address: 'http://vault.example.com', token: 'hvs.x' })).toEqual(['address: an https URL is expected (http on the loopback only)']);
     for (const address of ['https://u:p@vault.example.com', 'https://vault.example.com?x=1', 'https://vault.example.com#a', 'https://vault.example.com/v1']) {
       expect(vaultKind.checkOptions({ address, token: 'hvs.x' })).toEqual(['address: the server alone is expected (`https://<host>:<port>`), no path, query or credentials']);
