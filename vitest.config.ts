@@ -13,12 +13,16 @@ const onPostgres = {
   sequence: { groupOrder: 1 },
 };
 
+/** Each project's tests run git apart from the workstation's config and hooks (ORC-494). */
+const gitIsolation = 'test/helpers/git-isolation.ts';
+
 export default defineConfig({
   test: {
     projects: [
       {
         test: {
           name: 'unit',
+          setupFiles: [gitIsolation],
           include: ['src/**/*.test.ts', 'test/**/*.test.ts', 'web/src/**/*.test.ts'],
           exclude: ['test/integration/**', 'test/isolation/**', 'test/chaos/**'],
           environment: 'node',
@@ -36,6 +40,7 @@ export default defineConfig({
       {
         test: {
           name: 'integration',
+          setupFiles: [gitIsolation],
           include: ['test/integration/**/*.test.ts'],
           environment: 'node',
           testTimeout: 30000,
@@ -48,7 +53,7 @@ export default defineConfig({
         test: {
           name: 'scenarios-pg',
           include: ['test/scenarios/**/*.test.ts'],
-          setupFiles: ['test/helpers/pg-harness.ts'],
+          setupFiles: [gitIsolation, 'test/helpers/pg-harness.ts'],
           environment: 'node',
           // A scenario is up to ~1,700 queries one after the other: 41 s at 24 ms a query on a loaded machine (docs/tests.md).
           testTimeout: 90_000,
@@ -60,6 +65,7 @@ export default defineConfig({
         // (ORC-178). Its own CI job, with CHAOS_EVENTS=500 (docs/tests.md).
         test: {
           name: 'chaos',
+          setupFiles: [gitIsolation],
           include: ['test/chaos/**/*.test.ts'],
           environment: 'node',
           testTimeout: 30 * 60_000,
@@ -68,6 +74,7 @@ export default defineConfig({
       {
         test: {
           name: 'isolation',
+          setupFiles: [gitIsolation],
           include: ['test/isolation/**/*.test.ts'],
           globalSetup: ['test/isolation/global-setup.ts'],
           environment: 'node',
