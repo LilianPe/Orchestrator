@@ -118,6 +118,11 @@ describe('missRate (ORC-229)', () => {
       defect({ id: 'd7', at: 1_000 }),
     ], def);
     expect(rate).toMatchObject({ counted: true, definition: def, defects: 4, missed: 2, rate: 0.5, leftOut: 2 });
+    // The levels count the same defects: none left out, none out of the period (ORC-378).
+    expect(rate.counted && rate.levels.map(({ level, defects, missed }) => ({ level, defects, missed }))).toEqual([
+      { level: 'serious', defects: 4, missed: 2 },
+      { level: 'important', defects: 0, missed: 0 },
+    ]);
   });
 
   it('gives no rate, never a zero, without a defect to count', () => {
