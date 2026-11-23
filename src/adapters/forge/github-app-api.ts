@@ -176,7 +176,6 @@ export class GitHubAppApi extends GitHubAppAuth {
   /** The App's installation on the repository, its id and what it holds, as granted, not as the manifest asks: read with the App's JWT. */
   async installation(github: string): Promise<Installation> {
     const repo = repoRef(github);
-    const { id, permissions } = await this.read('GET', `${repoApi(repo)}/installation`, this.appJwt(), isInstallation, 'an installation with its id and permissions');
-    return { id, permissions };
+    return this.read('GET', `${repoApi(repo)}/installation`, this.appJwt(), isInstallation, 'an installation with its id and permissions');
   }
 }

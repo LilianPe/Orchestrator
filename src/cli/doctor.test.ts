@@ -1719,7 +1719,7 @@ describe('the installation factory.yml pins (github.installation_id), which the 
     expect(result.text).toContain('GitHub App installation: accepted');
     expect(result.text).toContain('Result: refused — the pinned GitHub App installation 42 does not cover the knowledge base acme/notes');
     const json = JSON.parse((await doctor([], [], { json: true, knowledge: 'acme/notes', pinned: '42', fake: { knowledgeInstallationId: 77 } })).text) as { knowledge: object };
-    expect(json.knowledge).toMatchObject({ github: 'acme/notes', verdict: 'refused' });
+    expect(json.knowledge).toMatchObject({ github: 'acme/notes', installation: 77, pinned: '42', verdict: 'refused' });
   });
 
   it('refuses a target repository another installation covers, naming it and how to fix it', async () => {
@@ -1740,7 +1740,7 @@ describe('the installation factory.yml pins (github.installation_id), which the 
     expect(result.text).not.toContain('Administration');
     const json = JSON.parse((await doctor([], [], { json: true, pinned: '42', fake })).text) as { error: string; installation: object };
     expect(json.error).toContain('the pinned GitHub App installation 42 does not cover acme/app');
-    expect(json.installation).toEqual({ id: 77, verdict: 'refused', reasons: [expect.stringContaining('installation 77 of the App covers acme/app')] });
+    expect(json.installation).toEqual({ id: 77, pinned: '42', verdict: 'refused', reasons: [expect.stringContaining('installation 77 of the App covers acme/app')] });
   });
 
   it('takes a pin written with leading zeros for the installation it names', async () => {
