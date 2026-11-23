@@ -16,7 +16,7 @@ export interface SecretDescription {
 export interface SecretSource {
   /** The value at `path`. Rejects when the source does not hold it or is out of service; its error never carries a value. */
   read(path: string): Promise<string>;
-  /** What it knows of `path` without reading its value, for `doctor`; optional, a source without it knows no rotation date. */
+  /** What it knows of `path`, never its value (it may read it to know `path` is held), for `doctor`; optional, a source without it knows no rotation date. */
   describe?(path: string): Promise<SecretDescription>;
 }
 

@@ -95,7 +95,7 @@ export interface SecretReport {
 /**
  * What `doctor` says of the server secrets (ORC-398): for each reference of factory.yml, whether it is in clear (`env`) and its
  * rotation date (`describe`), warned past `ROTATION_MAX_DAYS` or when unknown; a missing `secrets_key` off the loopback, which
- * refuses the start; a GitHub key in `GH_APP_KEY`; and whether `secrets.json` is encrypted. No value is read.
+ * refuses the start; a GitHub key in `GH_APP_KEY`; and whether `secrets.json` is encrypted; a source's own key file (`credentialFiles`). No value is returned (`sops` and `vault` read one to know a path is held).
  */
 export async function serverSecretReport(
   home: string,
