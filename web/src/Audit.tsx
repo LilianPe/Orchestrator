@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import { oneAtATime } from './one-at-a-time.js';
 import { DEFECT_CATEGORIES, DEFECT_LEVELS, NO_DEFINITION, type DefectCategory, type DefectLevel } from '../../src/core/serious-defect.js';
 import { PrLink } from './Flow.js';
 import { runHash } from './Measures.js';
@@ -122,33 +123,10 @@ export function draftAfterKept(d: Pick<DefectDraft, 'prNumber'>): DefectDraft {
   return { prNumber: d.prNumber, description: '', level: '', category: '', findingId: '', file: '', line: '' };
 }
 
-/**
- * Runs one send at a time (ORC-494): a second call while one is in flight does nothing, so a double click on a slow connection
- * enters a defect once. The flag is set before React renders the button disabled, which a second click can come before.
- */
-export function oneAtATime<A>(run: (a: A) => Promise<unknown>, busy: (on: boolean) => void): (a: A) => void {
-  let inFlight = false;
-  return (a) => {
-    if (inFlight) return;
-    inFlight = true;
-    busy(true);
-    const done = () => {
-      inFlight = false;
-      busy(false);
-    };
-    try {
-      // A failed send frees the button too: what was typed stays, to send again.
-      run(a).then(done, done);
-    } catch {
-      done();
-    }
-  };
-}
-
 function DefectForm({ sheet, onDefect }: { sheet: AuditSheetView; onDefect: OnDefect }) {
   const [draft, setDraft] = useState(() => draftAfterKept({ prNumber: sheet.result.prs.at(-1)?.number ?? 0 }));
   const [sending, setSending] = useState(false);
-  const [enter] = useState(() => oneAtATime((send: () => Promise<unknown>) => send(), setSending));
+  const [enter] = useState(() => oneAtATime(setSending));
   const { prNumber, description, level, category, findingId, file, line } = draft;
   const set = (patch: Partial<DefectDraft>) => setDraft((d) => ({ ...d, ...patch }));
   const submit = (e: FormEvent) => {

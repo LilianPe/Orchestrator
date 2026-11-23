@@ -6,4 +6,5 @@ import { devNull } from 'node:os';
 process.env['GIT_CONFIG_GLOBAL'] = devNull;
 process.env['GIT_CONFIG_NOSYSTEM'] = '1';
 // Run from a git hook (the repository's pre-push runs the tests), these would point every temporary repository's git at this one.
-for (const name of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY']) delete process.env[name];
+export const GIT_REPO_VARS = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY'] as const;
+for (const name of GIT_REPO_VARS) delete process.env[name];

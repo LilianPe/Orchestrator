@@ -79,16 +79,17 @@ const isBox = (v: unknown): v is Box => typeof v === 'object' && v !== null && [
  * A sealed file cut short (ORC-494): its format's mark but no salt, data key or ciphertext. Said by name rather than by Node's
  * TypeError on `Buffer.from(undefined)`, which names no file, or as another key, which it is not.
  */
-function incompleteSealed(sealed: Partial<Sealed>): string | undefined {
-  const missing = typeof sealed.salt !== 'string' ? 'its salt' : !isBox(sealed.key) ? 'its key' : !isBox(sealed) ? 'its data' : undefined;
-  return missing && `secrets.json is encrypted at rest but incomplete: ${missing} is missing`;
+function assertComplete(sealed: Partial<Sealed>): void {
+  const incomplete = (what: string) => new Error(`secrets.json is encrypted at rest but incomplete: ${what} is missing`);
+  if (typeof sealed.salt !== 'string') throw incomplete('its salt');
+  if (!isBox(sealed.key)) throw incomplete('its key');
+  if (!isBox(sealed)) throw incomplete('its data');
 }
 
 /** The plaintext of a sealed secrets.json. Another key or an altered file throws, saying nothing of the content. */
 export function openSecretsFile(text: string, secret: string): string {
   const sealed = JSON.parse(text) as Sealed;
-  const incomplete = incompleteSealed(sealed);
-  if (incomplete) throw new Error(incomplete);
+  assertComplete(sealed);
   const key = keyFrom(secret, Buffer.from(sealed.salt, 'base64'));
   try {
     return decrypt(decrypt(key, sealed.key), sealed).toString('utf8');

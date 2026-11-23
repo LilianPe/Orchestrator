@@ -14,7 +14,7 @@ const onPostgres = {
 };
 
 /** Each project's tests run git apart from the workstation's config and hooks (ORC-494). */
-const gitIsolation = 'test/helpers/git-isolation.ts';
+export const gitIsolation = 'test/helpers/git-isolation.ts';
 
 export default defineConfig({
   test: {

@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { AuditList, AuditSheet, auditHash, auditTicketOf, draftAfterKept, oneAtATime } from './Audit.js';
+import { AuditList, AuditSheet, auditHash, auditTicketOf, draftAfterKept } from './Audit.js';
 import type { AuditSheetView, ReviewDefectView } from './types.js';
 
 const tokens = { input: 1_000, output: 2_000, cacheRead: 30_000, cacheCreation: 4_000 };
@@ -95,37 +95,6 @@ describe('the audit sheet page (ORC-229)', () => {
   it('clears the whole form but the PR once a defect is kept: the next one is not counted as seen by the last finding (ORC-378)', () => {
     const typed = { prNumber: 3, description: 'Off by one.', level: 'serious', category: 'data', findingId: 'rv1:correctness:0', file: 'src/export.ts', line: '12' } as const;
     expect(draftAfterKept(typed)).toEqual({ prNumber: 3, description: '', level: '', category: '', findingId: '', file: '', line: '' });
-  });
-
-  it('sends a defect once on a double click: the button stays disabled until the server answers (ORC-494)', async () => {
-    let answer!: (kept: boolean) => void;
-    const sent: string[] = [];
-    const busy: boolean[] = [];
-    const enter = oneAtATime((send: () => Promise<unknown>) => send(), (on) => busy.push(on));
-    const click = () => enter(() => { sent.push('defect'); return new Promise<boolean>((r) => { answer = r; }); });
-    click();
-    click();
-    expect(sent).toEqual(['defect']);
-    expect(busy).toEqual([true]);
-    answer(true);
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(busy).toEqual([true, false]);
-    click();
-    expect(sent).toEqual(['defect', 'defect']);
-  });
-
-  it('frees the button when the server refuses or fails, so the typed defect can be sent again (ORC-494)', async () => {
-    const busy: boolean[] = [];
-    let sent = 0;
-    const enter = oneAtATime((send: () => Promise<unknown>) => send(), (on) => busy.push(on));
-    const settle = () => new Promise((r) => setTimeout(r, 0));
-    for (const answer of [() => Promise.resolve(false), () => Promise.reject(new Error('offline')), () => { throw new Error('thrown'); }]) {
-      enter(() => { sent++; return answer(); });
-      await settle();
-    }
-    expect(sent).toBe(3);
-    expect(busy).toEqual([true, false, true, false, true, false]);
   });
 
   it('lists the PRs a human reviewed, each to its sheet', () => {
