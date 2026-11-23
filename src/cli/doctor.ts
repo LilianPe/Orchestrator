@@ -870,10 +870,10 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Said whatever the verdict (ORC-461): a ticket's verify refuses a setup that declares `setup_secrets`, and the dry run is red on it. */
+/** Said whatever the verdict (ORC-461): a ticket's verify refuses a setup that declares `setup_secrets`, and with sandboxes the dry run is red on it. */
 function setupSecretsWarnings(o: DoctorOptions['setupSecrets']): string[] {
   const withheld = o && setupSecretsRefusal(o.setup, o.secrets);
-  return withheld ? [`Warning: ${withheld}. The dry run is red on it, and no ticket of the repository starts.`] : [];
+  return withheld ? [`Warning: ${withheld}. With sandboxes, the dry run is red on it, and no ticket of the repository starts.`] : [];
 }
 
 export async function runDoctor(options: DoctorOptions): Promise<number> {

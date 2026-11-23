@@ -81,7 +81,7 @@ After the `setup`, before the agent, `sealSecrets` deletes any worktree file tha
 
 The `setup` receives **no secrets** when its branch has commits beyond the default branch (a ticket resumed after its worktree was deleted): it would execute code no human has reviewed. A `setup` that needs a secret then fails, and the ticket is blocked.
 
-`verify`'s `setup` always runs on such a commit (the agent's, or a human's push on its branch), so it never gets the secrets: a `setup` that declares `setup_secrets` is refused there before it runs, the ticket blocked with a message that names them (ORC-461). The dry run is red on it and `factory doctor` warns, so that a repository is told at onboarding rather than at its first ticket's `verify` ([dry run](dry-run.md#a-setup-that-declares-setup_secrets-orc-461)).
+`verify`'s `setup` always runs on such a commit (the agent's, or a human's push on its branch), so it never gets the secrets: a `setup` that declares `setup_secrets` is refused there before it runs, the ticket blocked as an infrastructure failure, the secrets named in the block's detail (ORC-461). With sandboxes the dry run is red on it, and `factory doctor` warns, so that a repository is told at onboarding rather than at its first ticket's `verify` ([dry run](dry-run.md#a-setup-that-declares-setup_secrets-orc-461)).
 
 ## Services
 

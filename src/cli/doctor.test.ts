@@ -899,7 +899,7 @@ jobs:
       const result = await doctor([], [], { commands: { test: 'npm test' }, setupSecrets: { setup: ['npm ci'], secrets: ['NPM_TOKEN'] } });
       expect(result.code).toBe(0);
       const [warning] = result.lines.filter((l) => l.includes('setup_secrets'));
-      expect(warning).toMatch(/^Warning: .*setup_secrets \(NPM_TOKEN\).*nobody reviewed.*dry run is red/);
+      expect(warning).toMatch(/^Warning: .*setup_secrets \(NPM_TOKEN\).*nobody reviewed.*With sandboxes, the dry run is red/);
     });
 
     it('lists it in the JSON report', async () => {

@@ -75,12 +75,13 @@ A ticket's `verify` runs its `setup` on the agent's commit, which is ahead of th
 fail every `verify`, after the build. So `verify` refuses such a setup before it runs, and the dry run says it at onboarding:
 
 - the dry run does not run the setup: it is red, with one break of kind `secret` at step `config`, naming the secrets withheld
-  and why. The gate refuses the repository's tickets, with that break in the block's comment;
+  and why. Nothing else runs, so the repository's other breaks show only once `setup_secrets` is changed. The gate refuses the repository's tickets, with that break in the block's comment;
 - the `main` maturity card says it red, its break `` secret in `.factory/config.yml` ``. A card set by a dry run recorded before
   ORC-461 still says `unverifiable: …` until the next dry run on the default branch;
 - `factory dry-run` prints it red and exits 1; `factory doctor` warns about it ([CLI](cli.md#factory-doctor-repo));
 - on a ticket, `verify` gives no verdict: the check cannot run (`verify.errored`, [preset](preset.md)), and the ticket is
-  blocked with the same message, never sent to the agent.
+  blocked as an infrastructure failure, the refusal (the secrets named, and what to change) in the block's detail, never sent to
+  the agent.
 
 A `.factory/config.yml` that declares `setup_secrets` with no setup to run (none of its own, none in the workflow) withholds
 nothing and is not refused. To unblock a repository whose setup passes without its secrets, take them out of `setup_secrets`:
