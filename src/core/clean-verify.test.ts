@@ -1591,7 +1591,7 @@ describe('factory/qualité-diff (ORC-280)', () => {
     sandboxes.answer = (command) => {
       if (!command.includes('vitest run')) return undefined;
       reportTests(command, { 'cart total': 'passed' });
-      // vitest writes its LCOV, then exits 1 on a glob's threshold (`thresholds: { 'src/**': { lines: 95 } }`).
+      // vitest writes its LCOV, then exits 1 on a glob's threshold: a percentage (`{ 'src/**': { lines: 95 } }`) or a count of uncovered lines (`lines: -10`).
       const dir = /--coverage\.reportsDirectory=(\S+)/.exec(command)?.[1];
       if (dir) write(dir, 'lcov.info', 'SF:src/a.ts\nend_of_record\n');
       return { stdout: '', stderr: dir ? missed : '', code: dir ? 1 : 0 };

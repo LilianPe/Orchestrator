@@ -371,7 +371,7 @@ const THRESHOLD_MISSED = /^ERROR: (?:Coverage for .+ does not meet|Uncovered .+ 
  * (`wrote`: a package declared and not installed, an instrumentation too slow), or every test its runner's report names passed
  * and vitest says a threshold the flags could not empty (keyed by a glob) is missed. Then it is run again without, whose exit
  * is the verdict. A threshold or a package the coverage needs never fails the tests; a failure with no test to name (a hook,
- * an unhandled error, one the instrumentation slowed) stays the run's.
+ * an unhandled error) stays the run's once it wrote its LCOV.
  */
 function firstWith(run: Run, flags: string, wrote: () => Promise<boolean>): Run {
   let first = true;
