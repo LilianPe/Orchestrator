@@ -121,8 +121,8 @@ export interface GitHubAppForgeOptions {
   appId: string | number;
   /** PEM content. */
   privateKey: string;
-  /** Known installation; otherwise discovered with GET /repos/{owner}/{repo}/installation. */
-  installationId?: string | number;
+  /** Known installation, as `resolveGithubApp` checks it (ORC-490); otherwise discovered with GET /repos/{owner}/{repo}/installation. */
+  installationId?: number;
   apiBase?: string;
   /**
    * Where the repositories are served over HTTPS, the scope of the git token (`gitAccess`); `https://github.com` by default. Another
@@ -403,7 +403,7 @@ export class UnreadableAnswerError extends Error {
 export class GitHubAppAuth {
   protected readonly appId: string;
   readonly #privateKey: string;
-  protected readonly installationId: string | undefined;
+  protected readonly installationId: number | undefined;
   protected readonly apiBase: string;
   protected readonly webBase: string;
   protected readonly http: HttpClient;
@@ -415,7 +415,7 @@ export class GitHubAppAuth {
   constructor(options: GitHubAppForgeOptions) {
     this.appId = String(options.appId);
     this.#privateKey = options.privateKey;
-    this.installationId = options.installationId === undefined ? undefined : String(options.installationId);
+    this.installationId = options.installationId;
     this.apiBase = (options.apiBase ?? 'https://api.github.com').replace(/\/+$/, '');
     this.webBase = (options.webBase ?? 'https://github.com').replace(/\/+$/, '');
     this.http = options.http ?? fetchHttp;
@@ -450,7 +450,7 @@ export class GitHubAppAuth {
     const installationId = this.installationId ?? (await this.findInstallationId(repo, jwt));
     const data = await this.read(
       'POST',
-      `/app/installations/${encodeURIComponent(installationId)}/access_tokens`,
+      `/app/installations/${installationId}/access_tokens`,
       jwt,
       isAccessToken,
       'an installation token',
@@ -465,9 +465,9 @@ export class GitHubAppAuth {
     return data.token;
   }
 
-  private async findInstallationId(repo: GitHubRepoRef, jwt: string): Promise<string> {
+  private async findInstallationId(repo: GitHubRepoRef, jwt: string): Promise<number> {
     const data = await this.read('GET', `${repoApi(repo)}/installation`, jwt, isCreated, 'an installation');
-    return String(data.id);
+    return data.id;
   }
 
   /**

@@ -104,7 +104,7 @@ The `github` section of `factory.yml` configures the **daemon**'s identity on Gi
 |---|---|---|---|
 | `github.app_id` | text or integer | — | App ID of the GitHub App. |
 | `github.private_key` | reference | — | PEM private key, or path to a `.pem` file (mode `0600`), read from its reference. |
-| `github.installation_id` | text or integer | discovered per repository | Installation to use. Absent: the daemon calls `GET /repos/{owner}/{repo}/installation`. |
+| `github.installation_id` | positive integer, quoted or not | discovered per repository | Installation to use. Absent: the daemon calls `GET /repos/{owner}/{repo}/installation`. Any other value (`abc`, `0`, `4.2`) prevents startup, its message saying what to write: the number ending the installation's URL, `…/settings/installations/<id>`. A leading zero is read in decimal (`"042"` is 42), as YAML reads an unquoted `042` (ORC-490). |
 | `github.webhook_secret` | reference | `GH_WEBHOOK_SECRET` | GitHub webhook secret (`POST /webhooks/github`, signature `X-Hub-Signature-256`). Absent: the `GH_WEBHOOK_SECRET` variable; without either, every GitHub webhook is refused (401). See [`github.md`](github.md#github-webhooks). |
 | `github.client_id`, `github.client_secret` | text, reference | `GH_APP_CLIENT_ID`, `GH_APP_CLIENT_SECRET` | The App's OAuth client, for the dashboard's GitHub sign-in off the loopback (ORC-399). One without the other prevents startup. |
 

@@ -7,7 +7,8 @@ export interface GithubAppSettings {
   appId: string;
   /** PEM content, never a path. */
   privateKey: string;
-  installationId?: string;
+  /** The pinned installation (`github.installation_id`), a positive integer (ORC-490). */
+  installationId?: number;
 }
 
 const PEM_HEADER = '-----BEGIN';
@@ -58,12 +59,28 @@ export function resolveGithubApp(config: InstanceConfig, env: NodeJS.ProcessEnv 
         'or remove the github section to start without the App (nothing is then read or published on GitHub).',
     );
   }
-  const installationId = (fromConfig?.installationId ?? env['GH_APP_INSTALLATION_ID'] ?? '').trim() || undefined;
+  const pinned = (fromConfig?.installationId ?? env['GH_APP_INSTALLATION_ID'] ?? '').trim();
+  const installationId = pinned ? installationNumber(pinned) : undefined;
   return {
     appId,
     privateKey: readPrivateKey(key),
     ...(installationId ? { installationId } : {}),
   };
+}
+
+/**
+ * The pinned installation as the number GitHub gives it (ORC-490), refused unless it is a positive integer: the daemon
+ * would otherwise start and ask its tokens of an installation that cannot exist. A leading zero is read in decimal, as YAML
+ * reads an unquoted `042`.
+ */
+function installationNumber(written: string): number {
+  const id = /^\d+$/.test(written) ? Number(written) : Number.NaN;
+  if (id > 0 && Number.isSafeInteger(id)) return id;
+  throw new Error(
+    `github.installation_id (or GH_APP_INSTALLATION_ID): "${written}" is not an installation id. ` +
+      "Write the positive integer GitHub shows at the end of the installation's URL (…/settings/installations/<id>), as in `installation_id: 987654`, " +
+      "or remove it to let the daemon find each repository's installation.",
+  );
 }
 
 /**
