@@ -75,8 +75,8 @@ export const vaultKind: SecretSourceKind = {
     const token = async (): Promise<string> => {
       let value = options['token'] as string;
       if (tokenFile) {
-        // A Vault Agent's sink is 0640 by default: its group may read it, as the daemon does when it is of that group.
-        await checkCredentialFile(tokenFile, 'token_file', 0o007, 'any user: chmod 600 it (640 for a Vault Agent of its group)');
+        // A Vault Agent's sink is 0640 by default: its group may read it, as the daemon does when it is of that group, never write it.
+        await checkCredentialFile(tokenFile, 'token_file', 0o027, 'others than its owner and its group, or writable by its group: chmod 600 it (640 for a Vault Agent of its group)');
         try {
           value = (await readFile(tokenFile, 'utf8')).trim();
         } catch (err) {

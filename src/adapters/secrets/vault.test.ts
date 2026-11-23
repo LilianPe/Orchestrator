@@ -91,12 +91,16 @@ describe('vault secret source', () => {
     expect(await source.read('app/github#key')).toBe('pem-secret-value');
   });
 
-  it.skipIf(process.platform === 'win32')('refuses a token_file any user can read; a Vault Agent sink of its group (0640) is read', async () => {
+  it.skipIf(process.platform === 'win32')('refuses a token_file its group can write or any user can read; a Vault Agent sink of its group (0640) is read', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'vault-'));
     const file = join(dir, 'token');
-    writeFileSync(file, `${TOKEN}\n`, { mode: 0o644 });
+    writeFileSync(file, `${TOKEN}\n`, { mode: 0o600 });
     const source = vaultKind.create({ address, token_file: file, mount: 'kv' }, {});
-    await expect(source.read('app/github#key')).rejects.toThrow(`the token_file ${file} is readable or writable by any user: chmod 600 it (640 for a Vault Agent of its group)`);
+    const refusal = `the token_file ${file} is readable or writable by others than its owner and its group, or writable by its group: chmod 600 it (640 for a Vault Agent of its group)`;
+    for (const mode of [0o644, 0o660, 0o604]) {
+      chmodSync(file, mode);
+      await expect(source.read('app/github#key')).rejects.toThrow(refusal);
+    }
     chmodSync(file, 0o640);
     expect(await source.read('app/github#key')).toBe('pem-secret-value');
   });
@@ -186,7 +190,7 @@ describe('doctor on a vault source', () => {
     const reports = await serverSecretReport(home, env);
     expect(reports.filter((r) => r.key.startsWith('secret_sources.')).map((r) => [r.key, r.reference, r.warnings[0]])).toEqual([
       ['secret_sources.coffre.address', 'env:VAULT_ADDR', "in clear in the daemon's environment: a sealed source (systemd-creds) keeps it off the disk"],
-      ['secret_sources.coffre.token_file', '/run/vault/token', 'in clear in a file, the key to every secret of its source: no other user may read or write it (its group may, for a Vault Agent\'s token_file)'],
+      ['secret_sources.coffre.token_file', '/run/vault/token', 'in clear in a file, the key to every secret of its source: no other user may read or write it (its group may read a Vault Agent\'s token_file)'],
     ]);
   });
 });

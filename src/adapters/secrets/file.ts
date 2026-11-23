@@ -9,8 +9,8 @@ const FILE_NAME = /^[A-Za-z0-9_-][A-Za-z0-9_.-]*$/;
 const errnoCode = (err: unknown): string | undefined => (err as NodeJS.ErrnoException | undefined)?.code;
 
 /**
- * A source's own credential file (sops's `age_key_file`, vault's `token_file`, ORC-418): refused when its mode lets `mask`'s readers
- * read it, `fault` saying why. Windows has no mode bits: the folder's ACL keeps it. Its errors carry a path, never a content.
+ * A source's own credential file (sops's `age_key_file`, vault's `token_file`, ORC-418): refused when its mode has a bit of `mask`
+ * (a read or write right), `fault` saying whose. Windows has no mode bits: the folder's ACL keeps it. Its errors carry a path, never a content.
  */
 export async function checkCredentialFile(path: string, what: string, mask: number, fault: string): Promise<void> {
   let mode: number;

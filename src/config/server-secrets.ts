@@ -13,7 +13,7 @@ export const ROTATION_MAX_DAYS = 180;
 
 const IN_CLEAR_ENV = "in clear in the daemon's environment: a sealed source (systemd-creds) keeps it off the disk";
 const IN_CLEAR_ENV_OPTION = "in clear in the daemon's environment, where a source's options are read from: a file option (vault's token_file) keeps it out of it";
-const IN_CLEAR_KEY_FILE = "in clear in a file, the key to every secret of its source: no other user may read or write it (its group may, for a Vault Agent's token_file)";
+const IN_CLEAR_KEY_FILE = "in clear in a file, the key to every secret of its source: no other user may read or write it (its group may read a Vault Agent's token_file)";
 const IN_CLEAR_FILE = "in clear in a file, its owner's alone: for a workstation; on a server, a sealed source (systemd-creds) keeps it off the disk";
 
 export interface SealedFactoryYml {
