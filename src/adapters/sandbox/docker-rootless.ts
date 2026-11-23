@@ -336,7 +336,8 @@ export class ContainerSandboxProvider implements SandboxProvider {
    * `-v`: an anonymous volume of the image goes with its container. `--depend`: Podman refuses to remove a service a
    * container still joins (a `setup` left by a crash, which `recover()` destroys at the same time); Docker removes it.
    * Under Podman one at a time (ORC-491): a service and a container joining it removed at once, Podman 5.7's two
-   * `rm --depend` never returned, and every later command of the engine waited behind them.
+   * `rm --depend` never returned, and every later command of the engine waited behind them. `--time 0`: killed at
+   * once, as Docker's `rm -f` does, not after the 10 s a PID 1 deaf to SIGTERM (`sleep`, the relay) would make each wait in turn.
    */
   private async remove(id: string): Promise<void> {
     // Its flags depend on the engine: asked first, perhaps the provider's first command.
@@ -349,7 +350,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
   }
 
   private async rm(id: string): Promise<void> {
-    const r = await this.engine(['rm', '-f', '-v', ...(this.podman ? ['--depend'] : []), id]);
+    const r = await this.engine(['rm', '-f', '-v', ...(this.podman ? ['--depend', '--time', '0'] : []), id]);
     if (r.code !== 0 && !/no such container|already in progress/i.test(r.stderr)) throw new Error(`container sandbox: rm ${id}: ${r.stderr.trim()}`);
   }
 
