@@ -56,6 +56,64 @@ describe('RepoMirrors (ORC-479)', () => {
     expect(git(mirror, 'rev-parse', 'refs/remotes/origin/feat/rel-1')).toBe(git(f.work, 'rev-parse', 'HEAD'));
   });
 
+  it('forgets a branch deleted on the forge at the next fetch, and a workspace on it keeps its objects (ORC-486)', async () => {
+    const f = forge();
+    const mirrors = new RepoMirrors({ root: f.root, url: f.url });
+    const mirror = await mirrors.ready('acme/app');
+    git(f.work, 'checkout', '--quiet', '-b', 'feat/rel-1');
+    git(f.work, 'commit', '--quiet', '--allow-empty', '-m', 'the agent');
+    git(f.work, 'push', '--quiet', 'origin', 'feat/rel-1');
+    const sha = git(f.work, 'rev-parse', 'HEAD');
+    const ws = new GitWorkspaces({ root: join(f.base, 'ws'), fetch: mirrors.fetch, auth: mirrors.auth });
+    const w = await ws.prepare({ projectId: 'p', mirror, ticketId: 'REL-1', title: 'Export CSV', kind: 'worktree', runId: 'r1', branch: 'feat/rel-1' });
+    git(f.work, 'push', '--quiet', 'origin', '--delete', 'feat/rel-1');
+    await mirrors.fetch(mirror);
+    expect(git(mirror, 'for-each-ref', '--format=%(refname)', 'refs/remotes/origin')).not.toContain('feat/rel-1');
+    expect(git(mirror, 'rev-parse', 'refs/remotes/origin/main')).toBe(git(f.work, 'rev-parse', 'main'));
+    // Even once the mirror drops what no ref reaches any more: the workspace's objects are its own.
+    git(mirror, 'gc', '--quiet', '--prune=now');
+    expect(() => git(mirror, 'cat-file', '-e', sha)).toThrow();
+    expect(git(w.path, 'log', '-1', '--format=%H %s')).toBe(`${sha} the agent`);
+    expect(await ws.head(w.path)).toBe(sha);
+    expect(await ws.ticketDiff(mirror, w.path)).toBe('(no change against the trunk)');
+  });
+
+  it('sets origin/HEAD again when the forge renamed its default branch and the fetch pruned the old one (ORC-486)', async () => {
+    const f = forge();
+    const mirrors = new RepoMirrors({ root: f.root, url: f.url });
+    const mirror = await mirrors.ready('acme/app');
+    git(f.work, 'push', '--quiet', 'origin', 'main:trunk');
+    git(f.base, '--git-dir', f.url('acme/app'), 'symbolic-ref', 'HEAD', 'refs/heads/trunk');
+    git(f.work, 'push', '--quiet', 'origin', '--delete', 'main');
+    await mirrors.fetch(mirror);
+    expect(git(mirror, 'symbolic-ref', 'refs/remotes/origin/HEAD')).toBe('refs/remotes/origin/trunk');
+    expect(git(mirror, 'rev-parse', 'refs/remotes/origin/HEAD')).toBe(git(f.work, 'rev-parse', 'HEAD'));
+  });
+
+  it('says origin/HEAD names a branch the forge no longer has when setting it again fails, at each failure, and sets it at a next fetch (ORC-486)', async () => {
+    const f = forge();
+    const logs: string[] = [];
+    let refuse = true;
+    const exec: Exec = async (cmd, args, opts) =>
+      refuse && args.includes('set-head') ? { code: 128, stdout: '', stderr: 'fatal: unable to access the forge\n' } : execCmd(cmd, args, opts);
+    const mirrors = new RepoMirrors({ root: f.root, url: f.url, exec, log: (m) => logs.push(m) });
+    refuse = false;
+    const mirror = await mirrors.ready('acme/app');
+    refuse = true;
+    git(f.work, 'push', '--quiet', 'origin', 'main:trunk');
+    git(f.base, '--git-dir', f.url('acme/app'), 'symbolic-ref', 'HEAD', 'refs/heads/trunk');
+    git(f.work, 'push', '--quiet', 'origin', '--delete', 'main');
+    await mirrors.fetch(mirror);
+    await mirrors.fetch(mirror);
+    const said = logs.filter((m) => m.includes('origin/HEAD names refs/remotes/origin/main, which the forge no longer has'));
+    expect(said).toHaveLength(2);
+    expect(said[0]).toMatch(/unable to access the forge$/);
+    expect(logs.join('\n')).not.toMatch(/origin\/HEAD not set/);
+    refuse = false;
+    await mirrors.fetch(mirror);
+    expect(git(mirror, 'symbolic-ref', 'refs/remotes/origin/HEAD')).toBe('refs/remotes/origin/trunk');
+  });
+
   it('makes a missing mirror at its first fetch, whoever asks: a workspace from a mirror the start could not make', async () => {
     const f = forge();
     const mirrors = new RepoMirrors({ root: f.root, url: f.url });
