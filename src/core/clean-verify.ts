@@ -14,7 +14,7 @@ import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '..
 import { checkForbiddenPaths, FORBIDDEN_CHECK, type ForbiddenView } from '../checks/forbidden-paths.js';
 import { coverageOf, QUALITY_MAX_FILES, qualityArgv, readQuality, unmeasured, type CoverageAsk, type DiffQuality } from '../checks/diff-quality.js';
 import { mdCode } from '../checks/markdown.js';
-import { REPORT_FLAGS, testCommand, type Runner } from '../checks/red.js';
+import { REPORT_FLAGS, stripAnsi, testCommand, type Runner } from '../checks/red.js';
 import type { PackageRegistry, RegistryOpener } from '../checks/registry.js';
 import { addedLines, isRepoRuleFile, REPO_RULES_DIR, REPO_RULES_TARGET, semgrepArgv, semgrepCheck, semgrepFindings, type SemgrepRead } from '../checks/semgrep.js';
 import { isTestSpec } from '../checks/test-files.js';
@@ -286,7 +286,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
       for (const [i, command] of commands.entries()) {
         const { line, runner, coverage } = tests.get(command)!;
         const run = reportRun(sandboxes, id, env);
-        const failed = await runAndRerun(command, runner, coverage ? firstWith(run, coverage.flags(`${coverageDir}/${i}`)) : run, standing, line);
+        const failed = await runAndRerun(command, runner, coverage ? firstWith(run, coverage.flags(`${coverageDir}/${i}`), lcovIn(sandboxes, id, `${coverageDir}/${i}`)) : run, standing, line);
         if (failed) ran.push(failed);
       }
       const covered = [...new Set([...tests.values()].flatMap((t) => (t.coverage ? [t.coverage.language] : [])))];
@@ -354,19 +354,31 @@ export function reportRun(sandboxes: Boxes, id: string, env: Record<string, stri
   };
 }
 
+/** Whether a run wrote its LCOV in `dir`, in sandbox `id`: one that failed without writing it failed for the coverage asked of it. */
+const lcovIn = (sandboxes: Boxes, id: string, dir: string) => async (): Promise<boolean> =>
+  (await sandboxes.exec(id, ['bash', '--norc', '-c', `find ${dir} -name lcov.info -o -name '*.lcov' 2>/dev/null | grep -q .`])).code === 0;
+
+/** vitest's words for a threshold its coverage misses (`ERROR: Coverage for lines (80%) does not meet global threshold (95%)`). */
+const THRESHOLD_MISSED = /^ERROR: Coverage for .+ does not meet .*threshold/m;
+
 /**
  * `run`, its first line with `flags`, the coverage the measure asks for: the reruns of failing tests do not overwrite the whole
- * run's. A first run that fails with no failing test in its runner's report failed for the coverage (a threshold the flags could
- * not empty, a package declared and not installed, an instrumentation too slow): it is run again without, whose exit is the
- * verdict. A measure never fails the tests, and a run whose tests failed is not run twice.
+ * run's. A red first run is the verdict, and is not run twice, unless the coverage is shown to have failed it: it wrote no LCOV
+ * (`wrote`: a package declared and not installed, an instrumentation too slow), or every test its runner's report names passed
+ * and vitest says a threshold the flags could not empty (keyed by a glob) is missed. Then it is run again without, whose exit
+ * is the verdict. A measure never fails the tests; a failure with no test to name (a hook, an unhandled error) stays the run's.
  */
-function firstWith(run: Run, flags: string): Run {
+function firstWith(run: Run, flags: string, wrote: () => Promise<boolean>): Run {
   let first = true;
   return async (line, runner) => {
     if (!first) return run(line, runner);
     first = false;
     const measured = await run(`${line} ${flags}`, runner);
-    return measured.exitCode === 0 || readTests(measured.report)?.some((t) => t.status === 'failed') ? measured : run(line, runner);
+    if (measured.exitCode === 0) return measured;
+    const tests = readTests(measured.report);
+    if (tests?.some((t) => t.status === 'failed')) return measured;
+    const coverageFailed = !(await wrote()) || (tests !== undefined && THRESHOLD_MISSED.test(stripAnsi(measured.output)));
+    return coverageFailed ? run(line, runner) : measured;
   };
 }
 

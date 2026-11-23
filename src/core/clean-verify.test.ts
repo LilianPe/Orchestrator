@@ -1599,6 +1599,25 @@ describe('factory/qualité-diff (ORC-280)', () => {
     expect(suiteRuns(sandboxes)).toEqual([true, false]);
   });
 
+  it('a red first run with no test to name (a hook, an unhandled error) is the verdict once it wrote its LCOV: an intermittent failure does not vanish into a second run', async () => {
+    const pkg = JSON.stringify({ devDependencies: { '@vitest/coverage-v8': '^5' } });
+    for (const report of [undefined, { 'cart total': 'passed' as const }]) {
+      const { sandboxes, req } = setup({ quality: true, commands: ['npx vitest run'] }, undefined, { 'package.json': pkg });
+      sandboxes.answer = (command) => {
+        if (!command.includes('vitest run')) return undefined;
+        // A beforeAll that times out: no test failed, the report names none (or none at all), and the next run passes.
+        if (report) reportTests(command, report);
+        const dir = /--coverage\.reportsDirectory=(\S+)/.exec(command)?.[1];
+        if (dir) write(dir, 'lcov.info', 'SF:src/a.ts\nend_of_record\n');
+        return { stdout: '', stderr: dir ? 'Error: Hook timed out in 10000ms' : '', code: dir ? 1 : 0 };
+      };
+      const res = await runCleanVerify(req);
+      rmSync(/factory-coverage-[^/]+/.exec(sandboxes.ran.find((r) => r.command.includes('reportsDirectory'))!.command)![0].replace(/^/, '/tmp/'), { recursive: true, force: true });
+      expect(res.ok).toBe(false);
+      expect(suiteRuns(sandboxes)).toEqual([true]);
+    }
+  });
+
   it('asks for the coverage once: a failing command and its reruns go without it', async () => {
     const pkg = JSON.stringify({ devDependencies: { '@vitest/coverage-v8': '^5' } });
     const { sandboxes, req } = setup({ quality: true, commands: ['npx vitest run'] }, undefined, { 'package.json': pkg });
