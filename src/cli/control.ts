@@ -181,8 +181,8 @@ export async function runStopCommand(d: ControlDeps, ticketId: string): Promise<
 
 /**
  * `factory dry-run <project>` (ORC-409): the daemon runs the dry run of the project's default branch and records it, as a delegated
- * ticket's launch does, and the CLI prints it once recorded: green, unverifiable without its secrets (ORC-453), or red, with each
- * break, its step, command, cause and an excerpt of what the command printed. 0 unless red: the tickets go on.
+ * ticket's launch does, and the CLI prints it once recorded: green, or red, with each break, its step, command, cause and an
+ * excerpt of what the command printed: a setup that declares `setup_secrets` among them (ORC-461). 0 unless red: the tickets go on.
  */
 export async function runDryRunCommand(d: ControlDeps, projectId: string): Promise<number> {
   d.out(`Dry run of ${projectId} under way: its setup and commands in the sandbox, as verify runs them (minutes)…`);
@@ -195,12 +195,11 @@ export async function runDryRunCommand(d: ControlDeps, projectId: string): Promi
   }
   const run = (await res.json()) as DryRun;
   const verdict = dryRunVerdict(run);
-  d.out(`Dry run of ${projectId} on ${run.sha.slice(0, 12)}: ${verdict === 'unverifiable' ? 'unverifiable without its secrets' : verdict}${run.commands.length ? ` (${run.commands.join(' · ')})` : ''}.`);
-  for (const b of [...run.breaks, ...(run.unverified ? [run.unverified] : [])]) {
+  d.out(`Dry run of ${projectId} on ${run.sha.slice(0, 12)}: ${verdict}${run.commands.length ? ` (${run.commands.join(' · ')})` : ''}.`);
+  for (const b of run.breaks) {
     d.out(`  ${b.kind}, ${b.step} \`${b.command}\`: ${b.detail}`);
     for (const line of b.output.split('\n').filter((l) => l.trim())) d.out(`    | ${line}`);
   }
   if (verdict === 'red') d.out(`The tickets of ${projectId} are refused while its dry run is red: fix what breaks, then run this again. A ticket it refused starts on a reply once it is green.`);
-  if (verdict === 'unverifiable') d.out(`The tickets of ${projectId} are not refused; its build and tests did not run.`);
   return verdict === 'red' ? 1 : 0;
 }

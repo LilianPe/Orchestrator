@@ -7,7 +7,7 @@ import { SHA } from '../adapters/workspace/git-workspaces.js';
 import { runAndRerun, settle, type CommandRun, type KnownFlaky, type Standing } from '../checks/flaky.js';
 import { isLockfile } from '../checks/diff-size.js';
 import { ANSI, logExcerpt } from '../checks/log-excerpt.js';
-import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, setupOf, type RepoConfig } from '../config/repo-config.js';
+import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, setupOf, setupSecretsRefusal, type RepoConfig } from '../config/repo-config.js';
 import { IN_SANDBOX } from '../publish/extract.js';
 import { BASE, boxOpener, cloneGit, fetchFromForge, initHardenedClone, reportRun, show, testCommands, verifyCommand, withDeadline, within, zFields, type CloneGit } from './clean-verify.js';
 import { MAIN_UNCHECKED } from './maturity.js';
@@ -16,8 +16,8 @@ import { RELEASE_AGE_DAYS, runSealedSetup, SetupFailure } from './sealed-setup.j
 import { VERIFY_TIMEOUT_MS } from './verify.js';
 
 /**
- * What breaks a dry run, as its report classifies it (ORC-408). `secret`: what a setup that declares `setup_secrets` failed on
- * without them (ORC-453), never among the breaks: the dry run's `unverified`.
+ * What breaks a dry run, as its report classifies it (ORC-408). `secret`: a setup that declares `setup_secrets`, which a ticket's
+ * `verify` refuses (ORC-461), or, on a dry run recorded before it, what such a setup failed on without them (its `unverified`, ORC-453).
  */
 export type DryRunBreakKind = 'dependency' | 'service' | 'variable' | 'flaky' | 'failure' | 'secret';
 
@@ -63,8 +63,8 @@ export interface DryRun {
   fingerprint: DryRunFingerprint;
   breaks: DryRunBreak[];
   /**
-   * A setup that declares `setup_secrets` and failed without them, on no variable or service of its own (ORC-453): the dry run
-   * is unverifiable, neither green nor red. `ok`, its tickets go on; its commands did not run.
+   * On a dry run recorded before ORC-461 only: a setup that declares `setup_secrets` and failed without them (ORC-453), the dry
+   * run unverifiable, neither green nor red. Such a dry run no longer holds (`dryRunHolds`): it runs again, red now.
    */
   unverified?: DryRunBreak;
   /** What ran after the setup. */
@@ -162,11 +162,6 @@ const INSTALL_LINES = [
  */
 const PROXY_REFUSED = /egress proxy:|(?=.*\bCONNECT\b).*\b403\b/;
 const REFUSED_LINES = [PROXY_REFUSED, /\b403\b.*Forbidden/];
-/**
- * What a setup breaks on whatever its secrets (ORC-453): a version too recent, a lockfile out of sync, a host the egress proxy
- * refuses. A registry's own 403 is not one of them: a private registry says it to a client without its token.
- */
-const SECRET_FREE_LINES = [TOO_RECENT, LOCKFILE_OUT_OF_SYNC, PROXY_REFUSED];
 /**
  * Each with the variable's names as its first group, upper case: a lower-case word is not one; the first, a list of them
  * (`Missing environment variables: API_URL, STRIPE_KEY`). Where nothing says it is a variable, its name must hold a `_`:
@@ -313,15 +308,6 @@ const breakOf = (step: DryRunBreak['step'], command: string, output: string, var
 });
 
 /**
- * A setup's break that its secrets, withheld from a dry run, may cause (ORC-453): its first error line said after them, not what
- * the break was read as (a private registry's 404 is no missing dependency); over its cap, what the cap says.
- */
-const unverifiable = (broke: DryRunBreak, secrets: readonly string[]): DryRunBreak => {
-  const cause = broke.kind === 'failure' ? broke.detail : errorLine(linesOf(broke.output));
-  return { ...broke, kind: 'secret', detail: `failed without its secrets (${secrets.join(', ')}), which a dry run's setup does not get: ${cause}` };
-};
-
-/**
  * The breaks of the failed commands: a failing test that passed on its rerun is flaky; a command that failed on its flaky tests
  * alone has no other break, one that failed on more is classified by its output. A known flaky test of the repository does not count.
  */
@@ -384,8 +370,8 @@ export async function runDryRun(req: DryRunRequest): Promise<DryRun> {
   await initHardenedClone(git);
   const sha = await fetchCommit(req, git, cloneDir);
   const files = await fingerprintFiles((...args) => git.raw('ls-tree', ...args), sha);
-  const dryRun = (breaks: DryRunBreak[], ranSetup: readonly string[], ran: readonly string[], unverified?: DryRunBreak): DryRun => ({
-    id: req.runId, projectId: req.projectId, sha, target: req.sha ? 'commit' : 'main', ok: !breaks.length, ...(unverified ? { unverified } : {}),
+  const dryRun = (breaks: DryRunBreak[], ranSetup: readonly string[], ran: readonly string[]): DryRun => ({
+    id: req.runId, projectId: req.projectId, sha, target: req.sha ? 'commit' : 'main', ok: !breaks.length,
     fingerprint: dryRunFingerprint({ setup: ranSetup, image: req.image, ...files }), breaks, commands: [...ran], startedAt, endedAt: req.now(),
   });
   let config: RepoConfig;
@@ -404,6 +390,9 @@ export async function runDryRun(req: DryRunRequest): Promise<DryRun> {
     const detail = `${unprovided.join(', ')}: declared under \`services\` in ${REPO_CONFIG_PATH}, and no sandbox backend of this factory provides ${unprovided.length === 1 ? 'it' : 'them'}`;
     return dryRun([{ kind: 'service', step: 'config', command: REPO_CONFIG_PATH, detail, output: '' }], setup, []);
   }
+  // A ticket's verify refuses this setup (ORC-461): said here, before the first ticket's build, never run without its secrets.
+  const withheld = setupSecretsRefusal(setup, config.setupSecrets);
+  if (withheld) return dryRun([{ kind: 'secret', step: 'config', command: REPO_CONFIG_PATH, detail: withheld, output: '' }], setup, []);
   await inBox('prepare', cloneDir, [], async (id) => {
     // `-c`: the clone's config is ours.
     const out = await sandboxes.exec(id, ['git', ...IN_SANDBOX, 'checkout', '--quiet', '--detach', sha]);
@@ -426,10 +415,6 @@ export async function runDryRun(req: DryRunRequest): Promise<DryRun> {
       // service of the repository's own is its own, past an installer's retry warning (pip's `Retrying … ProxyError`).
       const down = broke.kind === 'failure' || broke.kind === 'dependency' ? unreachable(err.output) : undefined;
       if (down) throw new Error(`${err.command}: a registry or the egress proxy did not answer, no dry run recorded: ${down}`, { cause: err });
-      // Its secrets withheld (ORC-453): what the setup broke on may be their absence, but a variable or a service of its own, or
-      // a dependency no token changes.
-      const own = broke.kind === 'variable' || broke.kind === 'service' || (broke.kind === 'dependency' && firstLine(linesOf(err.output), SECRET_FREE_LINES) !== undefined);
-      if (config.setupSecrets.length && !own) return dryRun([], setup, [], unverifiable(broke, config.setupSecrets));
       return dryRun([broke], setup, []);
     }
   }
@@ -451,19 +436,17 @@ export async function runDryRun(req: DryRunRequest): Promise<DryRun> {
  * green one holds over a branch that moved with the same inputs.
  */
 export const dryRunHolds = (last: DryRun, now: { sha: string; fingerprint: DryRunFingerprint }): boolean =>
-  last.fingerprint.hash === now.fingerprint.hash && (last.ok || last.sha === now.sha);
+  !last.unverified && last.fingerprint.hash === now.fingerprint.hash && (last.ok || last.sha === now.sha);
 
 /** What breaks a dry run, each kind in its command once (ORC-409, and the `main` maturity card of ORC-410). */
 export const dryRunBroke = (run: DryRun): string => [...new Set(run.breaks.map((b) => `${b.kind} in \`${b.command}\``))].join(', ');
 
-/** Green, red, or unverifiable: green but for a setup that failed without its secrets (ORC-453), whose commands did not run. */
-export const dryRunVerdict = (run: DryRun): 'green' | 'red' | 'unverifiable' =>
-  !run.ok ? 'red' : run.unverified ? 'unverifiable' : 'green';
+export const dryRunVerdict = (run: DryRun): 'green' | 'red' => (run.ok ? 'green' : 'red');
 
 /**
  * The `main` maturity card's value (ORC-410): the project's last dry run on its default branch, green, unverifiable without its
- * secrets or red with what breaks, its commit and when it ended; without one, not checked yet. `init` stores it, and each dry run
- * on main sets it (ORC-437).
+ * secrets (recorded before ORC-461) or red with what breaks, its commit and when it ended; without one, not checked yet. `init`
+ * stores it, and each dry run on main sets it (ORC-437).
  */
 export function mainCardValue(run: DryRun | undefined): string {
   if (!run) return MAIN_UNCHECKED;

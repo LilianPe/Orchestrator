@@ -22,7 +22,7 @@ import { cliLinearTracker } from './linear.js';
 import { originGithub, sameGithub } from '../app/project-github.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
 import { browserImage, sandboxConfig, sandboxLimits, visualProofLine } from '../app/sandbox-wiring.js';
-import { ignoredWorkflowFiles, ignoredWorkflowWarning, testCommandWarnings, type RepoConfig } from '../config/repo-config.js';
+import { ignoredWorkflowFiles, ignoredWorkflowWarning, setupOf, setupSecretsRefusal, testCommandWarnings, type RepoConfig } from '../config/repo-config.js';
 import { branchNameOfType, branchSpaces, branchTypes, DEFAULT_BRANCH_NAMING, LEGACY_BRANCHES, legacyBranchName, type BranchNaming } from '../core/naming.js';
 
 /**
@@ -238,6 +238,8 @@ export interface DoctorOptions {
   naming?: BranchNaming;
   /** The repository's commands (`.factory/config.yml`): a warning without `test`, the red check's command (ORC-412). */
   commands?: Readonly<Record<string, string>>;
+  /** The repository's `setup` (`setupOf`) and `setup_secrets`: a warning when verify refuses the one for the other (ORC-461). */
+  setupSecrets?: { setup: readonly string[]; secrets: readonly string[] };
   /**
    * Whether this instance can take the visual proof (ORC-404), `browserImage`'s answer, for the JSON report, failures included:
    * never part of the verdict. In text, `runDoctorCommand` says it first.
@@ -868,12 +870,18 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Said whatever the verdict (ORC-461): a ticket's verify refuses a setup that declares `setup_secrets`, and with sandboxes the dry run is red on it. */
+function setupSecretsWarnings(o: DoctorOptions['setupSecrets']): string[] {
+  const withheld = o && setupSecretsRefusal(o.setup, o.secrets);
+  return withheld ? [`Warning: ${withheld}. With sandboxes, the dry run is red on it, and no ticket of the repository starts.`] : [];
+}
+
 export async function runDoctor(options: DoctorOptions): Promise<number> {
   const { checkout, github, api, out } = options;
   // A workflow file an older factory read (ORC-388): named whatever the verdict, never read.
   const ignored = ignoredWorkflowFiles(checkout);
   // Neither is part of the verdict: said whatever it is.
-  const warnings = testCommandWarnings(options.commands);
+  const warnings = [...testCommandWarnings(options.commands), ...setupSecretsWarnings(options.setupSecrets)];
   if (!options.json) for (const line of [...ignored.map(ignoredWorkflowWarning), ...warnings]) out(line);
   // Read beside the workflows; an unreadable protection is a refusal with its reason, the other verdicts still told.
   const protectionRead = api.branchProtection(github).then(judgeProtection, (error: unknown): BranchProtectionReport => ({
@@ -1151,6 +1159,7 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   let states;
   let knowledge;
   let sealedYml: FactoryYml | undefined;
+  let workflowSetup: readonly string[];
   try {
     // The App's alone by default (ORC-448); `--secrets`, all of them, by the start's call (ORC-456).
     const { yml, sealed } = await loadSealedFactoryYml(options.home, env, options.secrets ? {} : { only: GITHUB_APP_SECRETS });
@@ -1170,7 +1179,7 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     githubApp = resolveGithubApp(instance, env);
     knowledge = instance.knowledge?.github;
     // factory.yml's step settings and statuses (ORC-382) the daemon refuses at load.
-    states = defaultWorkflow(stepSettings(yml)).states;
+    ({ states, workspace: { setup: workflowSetup } } = defaultWorkflow(stepSettings(yml)));
     // The Claude token (ORC-337). The active account's of a source other than env is unread here without `--secrets`: the start,
     // which reads it, never falls back to CLAUDE_CODE_OAUTH_TOKEN then, so neither is checked.
     const unread = yml?.claude && !activeClaudeAccount(yml)?.token;
@@ -1205,5 +1214,5 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   } catch (error) {
     return doctorFailure(report, `Cannot read the repository's branch naming: ${errorMessage(error)}`);
   }
-  return runDoctor({ ...report, github, ...(knowledge ? { knowledge } : {}), ...(githubApp.installationId ? { installationId: githubApp.installationId } : {}), api, host: await checkHost(env, options.exec), naming: config.branches, commands: config.commands });
+  return runDoctor({ ...report, github, ...(knowledge ? { knowledge } : {}), ...(githubApp.installationId ? { installationId: githubApp.installationId } : {}), api, host: await checkHost(env, options.exec), naming: config.branches, commands: config.commands, setupSecrets: { setup: setupOf(config, workflowSetup), secrets: config.setupSecrets } });
 }

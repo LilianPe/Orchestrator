@@ -340,6 +340,46 @@ describe('runCleanVerify', () => {
       expect(sandboxes.ran.map((r) => r.command)).not.toContain('echo pwned-by-the-ref');
     });
 
+    describe('a setup that declares setup_secrets (ORC-461)', () => {
+      const SECRET = `${CONFIG}setup_secrets: [NPM_TOKEN, REGISTRY_TOKEN]\n`;
+
+      it('is refused before it runs, naming the secrets withheld and why: the commit verify checks, nobody reviewed', async () => {
+        const { sandboxes, req } = setup({ commands: ['true'] }, SECRET);
+        const refused = runCleanVerify(req);
+        await expect(refused).rejects.toThrow(/setup_secrets \(NPM_TOKEN, REGISTRY_TOKEN\)/);
+        await expect(refused).rejects.toThrow(/nobody reviewed/);
+        expect(sandboxes.created.map((c) => c.runId)).not.toContain('r1-verify-setup');
+        expect(sandboxes.ran.map((r) => r.command)).not.toContain('echo base-setup');
+      });
+
+      it("on a human's push too: its commit is beyond the default branch, as the launch's rule reads it", async () => {
+        const { sandboxes, req, repo } = setup({ commands: ['true'] }, SECRET);
+        git(repo, 'push', '-q', 'origin', BRANCH);
+        req.head = git(repo, 'rev-parse', 'HEAD');
+        await expect(runCleanVerify(req)).rejects.toThrow(/setup_secrets \(NPM_TOKEN, REGISTRY_TOKEN\)/);
+        expect(sandboxes.created.map((c) => c.runId)).not.toContain('r1-verify-setup');
+      });
+
+      it("with the workflow's setup, none of the config's own, it is refused all the same", async () => {
+        const { sandboxes, req } = setup({ commands: ['true'], setup: ['echo workflow-setup'] }, 'setup_secrets: [NPM_TOKEN]\n');
+        await expect(runCleanVerify(req)).rejects.toThrow(/setup_secrets \(NPM_TOKEN\).*if it needs it, the repository cannot be verified/);
+        expect(sandboxes.ran.map((r) => r.command)).not.toContain('echo workflow-setup');
+      });
+
+      it('with no setup to run, nothing is withheld: the commands run', async () => {
+        const { req } = setup({ commands: ['true'], setup: [] }, 'setup_secrets: [NPM_TOKEN]\n');
+        expect((await runCleanVerify(req)).ok).toBe(true);
+      });
+
+      it('a commit the checks refuse keeps their verdict: it goes out before the refusal', async () => {
+        const { repo, req } = setup({ commands: ['true'] }, SECRET);
+        write(repo, '.factory/config.yml', CONFIG);
+        commit(repo, 'the agent drops setup_secrets');
+        const res = await runCleanVerify(req);
+        expect(res).toMatchObject({ ok: false, failures: [{ command: 'factory/chemins-interdits' }] });
+      });
+    });
+
     it("gives verify's setup and commands services of their own, new, gone with the commands' sandbox (ORC-309)", async () => {
       const { sandboxes, req } = setup({}, `${CONFIG}services: [postgres]\n`);
       await runCleanVerify(req);

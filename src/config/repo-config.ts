@@ -135,6 +135,17 @@ const at = (path: PropertyKey[]): string => path.map((p) => (typeof p === 'numbe
 export const setupOf = (config: Pick<RepoConfig, 'setup'>, workflow: readonly string[]): string[] => (config.setup ? [config.setup] : [...workflow]);
 
 /**
+ * Why a ticket's `verify` refuses the `setup` (`setupOf`) of a repository that declares `setup_secrets` (ORC-461), undefined when it
+ * does not: the commit `verify` checks is ahead of the default branch, which the launch's rule (`unreviewed`) takes as code nobody
+ * reviewed, and a setup on it gets no secret. The dry run is red on it, and `doctor` warns.
+ */
+export function setupSecretsRefusal(setup: readonly string[], secrets: readonly string[]): string | undefined {
+  if (!setup.length || !secrets.length) return undefined;
+  const them = secrets.length === 1 ? 'it' : 'them';
+  return `${REPO_CONFIG_PATH} declares setup_secrets (${secrets.join(', ')}) for its setup, and verify does not run such a setup: the commit it checks is ahead of the default branch, which nobody reviewed, and as at the launch a setup on such a commit gets no secret. If the setup passes without ${them}, take ${them} out of setup_secrets; if it needs ${them}, the repository cannot be verified by this factory yet`;
+}
+
+/**
  * Validates a `.factory/config.yml` (undefined: no file) and merges it over the socle; throws a RepoConfigError listing every
  * violation. `defaultBranch`: the repository's, which the factory's branch names must not collide with (ORC-283), when known.
  */

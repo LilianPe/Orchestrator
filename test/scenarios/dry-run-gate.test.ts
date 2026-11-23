@@ -73,15 +73,17 @@ describe('the dry run gate of a delegated ticket', () => {
     expect((await h.ticket()).blocked).toBe(false);
   });
 
-  it('a dry run unverifiable without its setup_secrets (ORC-453) does not refuse the ticket: it starts, and the main card says it unverifiable', async () => {
+  it("an unverifiable dry run recorded before ORC-461 no longer holds: it runs again, and its setup_secrets refuse the ticket before any run", async () => {
     const unverified: DryRunBreak = { ...BREAK, kind: 'secret', detail: 'failed without its secrets (NPM_TOKEN), which a dry run\'s setup does not get: npm error code E404' };
-    const { h, asked, delegate } = gated({ next: (_r, m) => ({ ...dryRunOf(m, true), unverified, commands: [] }) });
-    await h.store.putMaturityCards('p', [{ key: 'main', title: 'main green or red', value: 'not checked yet' }], 0);
+    const refused: DryRunBreak = { kind: 'secret', step: 'config', command: '.factory/config.yml', detail: '.factory/config.yml declares setup_secrets (NPM_TOKEN) for its setup, and verify does not run such a setup', output: '' };
+    const { h, main, asked, delegate } = gated({ next: (_r, m) => ({ ...dryRunOf(m, false), breaks: [refused], commands: [] }) });
+    await h.store.putDryRun({ ...dryRunOf(main, true), unverified, commands: [] });
     await delegate();
     expect(asked).toHaveLength(1);
-    expect(h.runner.requests).toHaveLength(1);
-    expect((await h.ticket()).blocked).toBe(false);
-    expect((await h.store.maturityCards('p')).find((c) => c.key === 'main')?.value).toMatch(/^unverifiable: /);
+    expect(h.runner.requests).toEqual([]);
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockKind: 'repo_config' });
+    const [comment] = h.tracker.comments('REL-1').filter((c) => c.startsWith('🔴'));
+    expect(comment).toContain('setup_secrets (NPM_TOKEN)');
   });
 
   it('a project with no dry run yet runs it at its first delegation: green, the ticket starts', async () => {

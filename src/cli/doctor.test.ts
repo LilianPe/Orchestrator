@@ -115,7 +115,7 @@ function workflow(content: string, path = '.github/workflows/ci.yml'): WorkflowS
 async function doctor(
   workflows: WorkflowSource[],
   environments: EnvironmentProtection[] = [],
-  options: { json?: boolean; fake?: FakeOptions; naming?: BranchNaming; checkout?: string; commands?: Record<string, string>; host?: HostReport; knowledge?: string; pinned?: number } = {},
+  options: { json?: boolean; fake?: FakeOptions; naming?: BranchNaming; checkout?: string; commands?: Record<string, string>; setupSecrets?: { setup: string[]; secrets: string[] }; host?: HostReport; knowledge?: string; pinned?: number } = {},
 ): Promise<{ code: number; lines: string[]; text: string; api: FakeApi }> {
   const api = new FakeApi(workflows, environments, options.fake);
   const lines: string[] = [];
@@ -130,6 +130,7 @@ async function doctor(
     ...(options.commands ? { commands: options.commands } : {}),
     ...(options.knowledge ? { knowledge: options.knowledge } : {}),
     ...(options.pinned ? { installationId: options.pinned } : {}),
+    ...(options.setupSecrets ? { setupSecrets: options.setupSecrets } : {}),
   });
   return { code, lines, text: lines.join('\n'), api };
 }
@@ -890,6 +891,25 @@ jobs:
     it('says nothing of a repository without one', async () => {
       const result = await doctor([], [], { checkout: repoWith([]) });
       expect(result.text).not.toContain('workflow.yml');
+    });
+  });
+
+  describe('a repository whose setup declares setup_secrets, which verify refuses (ORC-461)', () => {
+    it('warns, naming the secrets and why, without changing the verdict', async () => {
+      const result = await doctor([], [], { commands: { test: 'npm test' }, setupSecrets: { setup: ['npm ci'], secrets: ['NPM_TOKEN'] } });
+      expect(result.code).toBe(0);
+      const [warning] = result.lines.filter((l) => l.includes('setup_secrets'));
+      expect(warning).toMatch(/^Warning: .*setup_secrets \(NPM_TOKEN\).*nobody reviewed.*With sandboxes, the dry run is red/);
+    });
+
+    it('lists it in the JSON report', async () => {
+      const result = await doctor([], [], { commands: { test: 'npm test' }, setupSecrets: { setup: ['npm ci'], secrets: ['NPM_TOKEN'] }, json: true });
+      expect(JSON.parse(result.text)).toMatchObject({ accepted: true, warnings: [expect.stringContaining('setup_secrets (NPM_TOKEN)')] });
+    });
+
+    it('says nothing without them, nor without a setup to withhold them from', async () => {
+      expect((await doctor([], [], { commands: { test: 'npm test' }, setupSecrets: { setup: ['npm ci'], secrets: [] } })).text).not.toContain('setup_secrets');
+      expect((await doctor([], [], { commands: { test: 'npm test' }, setupSecrets: { setup: [], secrets: ['NPM_TOKEN'] } })).text).not.toContain('setup_secrets');
     });
   });
 
