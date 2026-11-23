@@ -228,9 +228,9 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     failures.push(...checkSize(diff, config, req.maxDiff === 'off'));
     const manifests = failures.length ? [] : await changedManifests(git, from, sha);
     // The regular files the diff adds lines to, with those lines: what Semgrep scans, and what the measure reads (ORC-280).
-    const addedFiles = diff && (req.semgrep || req.quality) ? await scanned(git, from, sha, diff) : new Map<string, Set<number>>();
     // Refused already: not scanned, as nothing of it is installed or run. A breakdown of the scan would hide the verdict.
-    const added = req.semgrep && !failures.length ? addedFiles : new Map<string, Set<number>>();
+    const addedFiles = diff && !failures.length && (req.semgrep || req.quality) ? await scanned(git, from, sha, diff) : new Map<string, Set<number>>();
+    const added = req.semgrep ? addedFiles : new Map<string, Set<number>>();
     const rules = added.size ? await repoRules(git, rulesDir) : [];
     const { proof, shooting, probe } = await planVisual(req.visual, { git, from, sha, config, refused: failures.length > 0 });
     // Read before any code of the agent has run: the runner of each command, and the base checked out for the reruns there.
