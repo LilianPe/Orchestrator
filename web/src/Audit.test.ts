@@ -1,12 +1,12 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { AuditList, AuditSheet, auditHash, auditTicketOf } from './Audit.js';
+import { AuditList, AuditSheet, auditHash, auditTicketOf, draftAfterKept } from './Audit.js';
 import type { AuditSheetView, ReviewDefectView } from './types.js';
 
 const tokens = { input: 1_000, output: 2_000, cacheRead: 30_000, cacheCreation: 4_000 };
 const defect = (patch: Partial<ReviewDefectView> = {}): ReviewDefectView => ({
-  id: 'd1', projectId: 'p', ticketId: 'REL-1', prNumber: 3, description: 'The header row is missing.', findingId: null, definition: null, enteredBy: 'dashboard:armand', at: 90_000, ...patch,
+  id: 'd1', projectId: 'p', ticketId: 'REL-1', prNumber: 3, description: 'The header row is missing.', findingId: null, level: 'serious', category: 'data', definition: null, enteredBy: 'dashboard:armand', at: 90_000, ...patch,
 });
 const sheet = (patch: Partial<AuditSheetView> = {}): AuditSheetView => ({
   projectId: 'p',
@@ -55,6 +55,18 @@ describe('the audit sheet page (ORC-229)', () => {
     expect(html).not.toMatch(/\d+ missed/);
   });
 
+  it('shows the level and category of each defect, and says when a defect entered before them has no category (ORC-378)', () => {
+    const html = render(sheet({ defects: [defect(), defect({ id: 'd2', level: 'important', category: 'bypassed_control' }), defect({ id: 'd3', category: null })] }));
+    expect(html).toContain('Serious · Data');
+    expect(html).toContain('Important · Bypassed control');
+    expect(html).toContain('Serious · No category');
+  });
+
+  it('reads a defect from an older server, with no level nor category, as serious with no category (ORC-378)', () => {
+    const { level: _l, category: _c, ...older } = defect();
+    expect(render(sheet({ defects: [older] }))).toContain('Serious · No category');
+  });
+
   it('says when the finding a defect is linked to is no longer kept: its lens read the commit again', () => {
     expect(render(sheet({ defects: [defect({ findingId: 'rv0:correctness:0' })] }))).toContain('seen by finding rv0:correctness:0 (no longer kept)');
   });
@@ -71,6 +83,18 @@ describe('the audit sheet page (ORC-229)', () => {
     expect(html).toContain('value="rv1:correctness:0"');
     expect(html).toContain('None: the AI reviewers missed it');
     expect(html).toContain('value="3"');
+  });
+
+  it('asks for the level and the category of a defect, each from its closed list (ORC-378)', () => {
+    const html = render(sheet());
+    for (const v of ['serious', 'important', 'security', 'data', 'wrong_behavior', 'bypassed_control']) expect(html).toContain(`value="${v}"`);
+    expect(html).toContain('Wrong behavior');
+    expect(html.match(/<select[^>]*required/g)).toHaveLength(2);
+  });
+
+  it('clears the whole form but the PR once a defect is kept: the next one is not counted as seen by the last finding (ORC-378)', () => {
+    const typed = { prNumber: 3, description: 'Off by one.', level: 'serious', category: 'data', findingId: 'rv1:correctness:0', file: 'src/export.ts', line: '12' } as const;
+    expect(draftAfterKept(typed)).toEqual({ prNumber: 3, description: '', level: '', category: '', findingId: '', file: '', line: '' });
   });
 
   it('lists the PRs a human reviewed, each to its sheet', () => {

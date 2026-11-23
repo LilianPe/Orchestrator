@@ -347,6 +347,16 @@ describe.skipIf(!url)('PgStore integration', () => {
     expect(await store.dueTimers(10_000)).toEqual([]);
   });
 
+  it('reads a defect entered before ORC-378, with no level nor category, as serious with no category', async () => {
+    await pool.query(
+      `insert into review_defects (id, project_id, ticket_id, pr_number, description, finding_id, serious_defect, entered_by, entered_at)
+       values ('d0', 'p', 'REL-1', 3, 'old one', null, 'loses data', 'dashboard:local', to_timestamp(1))`,
+    );
+    expect(await store.ticketDefects('p', 'REL-1')).toEqual([
+      { id: 'd0', projectId: 'p', ticketId: 'REL-1', prNumber: 3, description: 'old one', findingId: null, level: 'serious', category: null, definition: 'loses data', enteredBy: 'dashboard:local', at: 1_000 },
+    ]);
+  });
+
   it('dedupes queue-shaped outbox rows by ticket and job', async () => {
     const first = await store.enqueue(queueItem({ ticketId: 'DUP', job: 'dev', enqueuedAt: 1_000 }));
     const second = await store.enqueue(queueItem({ ticketId: 'DUP', job: 'dev', enqueuedAt: 2_000 }));

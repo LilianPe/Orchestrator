@@ -1,8 +1,8 @@
 import { useState, type FormEvent } from 'react';
-import { NO_DEFINITION } from '../../src/core/serious-defect.js';
+import { DEFECT_CATEGORIES, DEFECT_LEVELS, NO_DEFINITION, type DefectCategory, type DefectLevel } from '../../src/core/serious-defect.js';
 import { PrLink } from './Flow.js';
 import { runHash } from './Measures.js';
-import { REWORK_LABELS } from './Overview.js';
+import { CATEGORY_LABELS, categoryLabel, LEVEL_LABELS, REWORK_LABELS } from './Overview.js';
 import { Checks, Steps } from './RunDetail.js';
 import type { AuditListView, AuditSheetView, DefectEntry, ReviewDefectView } from './types.js';
 
@@ -111,33 +111,57 @@ function standing(d: ReviewDefectView, definition: string | null): string {
 /** Enters a defect: true once the server kept it. */
 export type OnDefect = (e: DefectEntry) => Promise<boolean>;
 
+/** What the defect form holds, as typed. */
+export type DefectDraft = { prNumber: number; description: string; level: DefectLevel | ''; category: DefectCategory | ''; findingId: string; file: string; line: string };
+
+/**
+ * The form once the server kept a defect: only the PR stays. The AI finding, the file and the line go with the rest, or the
+ * next defect entered would be counted as seen by that finding.
+ */
+export function draftAfterKept(d: Pick<DefectDraft, 'prNumber'>): DefectDraft {
+  return { prNumber: d.prNumber, description: '', level: '', category: '', findingId: '', file: '', line: '' };
+}
+
 function DefectForm({ sheet, onDefect }: { sheet: AuditSheetView; onDefect: OnDefect }) {
-  const [prNumber, setPr] = useState(sheet.result.prs.at(-1)?.number ?? 0);
-  const [description, setDescription] = useState('');
-  const [findingId, setFinding] = useState('');
-  const [file, setFile] = useState('');
-  const [line, setLine] = useState('');
+  const [draft, setDraft] = useState(() => draftAfterKept({ prNumber: sheet.result.prs.at(-1)?.number ?? 0 }));
+  const { prNumber, description, level, category, findingId, file, line } = draft;
+  const set = (patch: Partial<DefectDraft>) => setDraft((d) => ({ ...d, ...patch }));
   const submit = (e: FormEvent) => {
     e.preventDefault();
+    if (!level || !category) return;
     const at = Number(line);
     // What was typed stays until the server keeps it: a refusal leaves it to correct.
-    void onDefect({ prNumber, description, ...(findingId ? { findingId } : {}), ...(file.trim() ? { file: file.trim() } : {}), ...(Number.isInteger(at) && at > 0 ? { line: at } : {}) }).then((kept) => {
-      if (kept) setDescription('');
+    void onDefect({ prNumber, description, level, category, ...(findingId ? { findingId } : {}), ...(file.trim() ? { file: file.trim() } : {}), ...(Number.isInteger(at) && at > 0 ? { line: at } : {}) }).then((kept) => {
+      if (kept) setDraft(draftAfterKept);
     });
   };
   return (
     <form className="defect" onSubmit={submit}>
-      <label>PR <select value={prNumber} onChange={(e) => setPr(Number(e.target.value))}>{sheet.result.prs.map((p) => <option key={p.number} value={p.number}>#{p.number}</option>)}</select></label>
-      <label>Defect <textarea required value={description} onChange={(e) => setDescription(e.target.value)} /></label>
+      <label>PR <select value={prNumber} onChange={(e) => set({ prNumber: Number(e.target.value) })}>{sheet.result.prs.map((p) => <option key={p.number} value={p.number}>#{p.number}</option>)}</select></label>
+      <label>Defect <textarea required value={description} onChange={(e) => set({ description: e.target.value })} /></label>
+      <label>
+        Level{' '}
+        <select required value={level} onChange={(e) => set({ level: e.target.value as DefectLevel })}>
+          <option value="" disabled>Choose</option>
+          {DEFECT_LEVELS.map((l) => <option key={l} value={l}>{LEVEL_LABELS[l]}</option>)}
+        </select>
+      </label>
+      <label>
+        Category{' '}
+        <select required value={category} onChange={(e) => set({ category: e.target.value as DefectCategory })}>
+          <option value="" disabled>Choose</option>
+          {DEFECT_CATEGORIES.map((c) => <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>)}
+        </select>
+      </label>
       <label>
         AI finding that saw it{' '}
-        <select value={findingId} onChange={(e) => setFinding(e.target.value)}>
+        <select value={findingId} onChange={(e) => set({ findingId: e.target.value })}>
           <option value="">None: the AI reviewers missed it</option>
           {sheet.path.findings.map((f) => <option key={f.id} value={f.id}>{`${f.file}:${f.line} · ${f.lens} · ${f.severity}`}</option>)}
         </select>
       </label>
-      <label>File <input value={file} onChange={(e) => setFile(e.target.value)} /></label>
-      <label>Line <input type="number" min={1} step={1} value={line} onChange={(e) => setLine(e.target.value)} /></label>
+      <label>File <input value={file} onChange={(e) => set({ file: e.target.value })} /></label>
+      <label>Line <input type="number" min={1} step={1} value={line} onChange={(e) => set({ line: e.target.value })} /></label>
       <button type="submit" disabled={!sheet.result.prs.length}>Enter the defect</button>
     </form>
   );
@@ -157,7 +181,7 @@ function Defects({ sheet, onDefect, notice }: { sheet: AuditSheetView; onDefect:
         <ul>
           {sheet.defects.map((d) => (
             <li key={d.id}>
-              {time(d.at)} · PR #{d.prNumber}{d.file ? ` · ${d.file}${d.line ? `:${d.line}` : ''}` : ''}: {d.description}{' '}
+              {time(d.at)} · <strong>{LEVEL_LABELS[d.level ?? 'serious']} · {categoryLabel(d.category ?? null)}</strong> · PR #{d.prNumber}{d.file ? ` · ${d.file}${d.line ? `:${d.line}` : ''}` : ''}: {d.description}{' '}
               <em>{d.findingId === null ? 'missed by the AI reviewers' : `seen by finding ${d.findingId}${kept.has(d.findingId) ? '' : ' (no longer kept)'}`}</em>
               <span className="note"> · {d.enteredBy}{standing(d, sheet.definition)}</span>
             </li>
