@@ -65,7 +65,8 @@ export class RepoMirrors {
    * `git fetch origin` in `repo` as `fetchOrigin` does it, after the fetch under way there: a mirror missing yet is made first,
    * whole, within `MIRROR_CLONE_DEADLINE_MS` rather than the caller's deadline, then fetched as asked when `refspecs` name more
    * than its branches. Its branches are fetched with `--prune` (ORC-486): a branch deleted on the forge is no longer seen; a
-   * workspace on it loses nothing, its objects being its own (`agentRepository`). A path that is not a mirror (a replayed
+   * workspace on it loses nothing, its objects being its own (`agentRepository`). A launch that reads the mirror outside this turn
+   * (`prepare`) while another's fetch prunes the branch it is on fails, its workspace not made. A path that is not a mirror (a replayed
    * ticket's clone) is fetched as it is, without a token.
    */
   readonly fetch: FetchOrigin = (repo, o = {}) =>

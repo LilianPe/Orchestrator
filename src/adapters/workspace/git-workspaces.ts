@@ -369,7 +369,7 @@ export class GitWorkspaces implements WorkspaceManager {
   /**
    * The same reading as the clone's (`gitReader`), on the factory's repository. With `fetch`, against the forge's default
    * branch, its `HEAD` fetched as the clone fetches it, so that the fork point and the config are the forge's even when
-   * `origin/HEAD`, which no fetch refreshes, still names an old one (ORC-358); a forge that does not answer rejects.
+   * `origin/HEAD`, which a fetch sets again only once the old one is deleted on the forge (ORC-486), still names an old one (ORC-358); a forge that does not answer rejects.
    * Without, against the repository's default branch as it is, no forge read.
    */
   async branchReader(mirror: string, path: string, o: { fetch: boolean }): Promise<BranchReader | undefined> {
