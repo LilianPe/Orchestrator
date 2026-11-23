@@ -55,10 +55,11 @@ const under = (dir: string, rel: string): string => (dir === '.' ? rel : `${dir}
 const names = (list: string): string[] => list.replace(/[()]/g, '').split(',').map((n) => n.trim().split(/\s+/)[0]!).filter(Boolean);
 
 /**
- * The source as Python reads its statements: comments dropped, `\` continuations joined, `;` statements apart.
- * ponytail: a `#` or a `;` inside a string reads as one too; an import holds no string.
+ * The source as Python reads its statements: `;` statements apart, then comments dropped, then `\` continuations joined.
+ * Split first, so a `#` in a string of the statement before (`c = "#fff"; from .arb import x`) drops no import.
+ * ponytail: a `;` in a string or a comment splits too: at worst an extra test file frozen, never one left out.
  */
-const statements = (source: string): string => source.replace(/#[^\n]*/g, '').replace(/\\\r?\n/g, ' ').replace(/;/g, '\n');
+const statements = (source: string): string => source.replace(/;/g, '\n').replace(/#[^\n]*/g, '').replace(/\\\r?\n/g, ' ');
 
 /** The `__init__.py` of each package a dotted module goes through, which Python runs before it: `a.b.c` gives `a/` and `a/b/`. */
 const packages = (dotted: string): string[] => dotted.split('.').slice(0, -1).map((_, i, parts) => `${parts.slice(0, i + 1).join('/')}/__init__.py`);

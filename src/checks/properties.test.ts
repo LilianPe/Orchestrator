@@ -83,6 +83,11 @@ describe('the generators of the property tests, frozen with them (ORC-261)', () 
     ]);
   });
 
+  it('keeps an import that follows a `#` in a string of the statement before it', async () => {
+    const files = { 'tests/test_orc_12_property_1.py': 'COLOR = "#fff"; from .colors import palette\n', 'tests/colors.py': '' };
+    expect(await propertySupport(['tests/test_orc_12_property_1.py'], view(files))).toEqual(['tests/colors.py']);
+  });
+
   it("follows TypeScript's `import x = require()`", async () => {
     const files = { 'test/orc-12.property-1.test.ts': "import arb = require('./arb/audits');", 'test/arb/audits.ts': '' };
     expect(await propertySupport(['test/orc-12.property-1.test.ts'], view(files))).toEqual(['test/arb/audits.ts']);
