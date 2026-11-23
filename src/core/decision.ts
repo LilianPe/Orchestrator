@@ -2,6 +2,7 @@ import type { ReviewLens } from './workflow.js';
 import type { AgentOutput, Finding } from './agent-output.js';
 import type { BlockFacts } from './block-comment.js';
 import type { DecidedEvent, InputKind, LogicalState, TimerFired } from './types.js';
+import type { DiffQuality } from '../checks/diff-quality.js';
 import type { VisualProof } from '../checks/visual-proof.js';
 import type { Spec } from './spec.js';
 
@@ -29,7 +30,7 @@ export type Effect =
    * the `post_output` the job's end writes once it is out. `rewrite`: the commit of a rebase (ORC-146), which may
    * replace the head the factory published last, and that head only.
    */
-  | { kind: 'publish'; runId: string; job: string; sha: string; output?: AgentOutput; commands?: readonly string[]; rewrite?: true; visualProof?: VisualProof }
+  | { kind: 'publish'; runId: string; job: string; sha: string; output?: AgentOutput; commands?: readonly string[]; rewrite?: true; visualProof?: VisualProof; quality?: DiffQuality }
   /** `keepReviewSha`: a move back to Human Review that concludes no work of the factory keeps the reviewed commit (ORC-148). */
   | { kind: 'move'; to: LogicalState; keepReviewSha?: true }
   | { kind: 'labels'; add: string[]; remove: string[] }

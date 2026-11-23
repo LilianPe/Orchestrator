@@ -134,9 +134,12 @@ export function readQuality({ code, stdout, stderr }: ExecResult, added: Readonl
   return { functions: functions.slice(0, LISTED), pairs: pairs.slice(0, LISTED), ...(more ? { more } : {}) };
 }
 
-const at = (s: QualitySpan) => mdCode(`${s.path}:${s.start}-${s.end}`);
+/** A path or a name from the agent's code, cut so that no line of the check or the PR outgrows its room. */
+const clip = (s: string): string => (s.length > CLIPPED ? `${s.slice(0, CLIPPED - 1)}…` : s);
+const CLIPPED = 120;
+const at = (s: QualitySpan) => mdCode(`${clip(s.path)}:${s.start}-${s.end}`);
 const functionLine = (f: QualityFunction) =>
-  `${at(f)} ${mdCode(f.name)}: ${f.crap === null ? `CC ${f.cc}, coverage unknown` : `CRAP ${f.crap} (CC ${f.cc}, coverage ${f.coverage} %)`}`;
+  `${at(f)} ${mdCode(clip(f.name))}: ${f.crap === null ? `CC ${f.cc}, coverage unknown` : `CRAP ${f.crap} (CC ${f.cc}, coverage ${f.coverage} %)`}`;
 const pairLine = (p: QualityPair) => `${at(p.left)} and ${at(p.right)}: similarity ${p.score.toFixed(2)}`;
 
 /**

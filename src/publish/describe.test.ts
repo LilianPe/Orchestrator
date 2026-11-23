@@ -37,6 +37,14 @@ describe('describePr (ORC-195)', () => {
     ]);
   });
 
+  it("adds the factory's two worst measures under the agent's hints in « Where to look first » (ORC-280)", () => {
+    const lookFirst = ['`src/a.ts:1-8` `grade`: CRAP 90 (CC 9, coverage 0 %)', '`pkg/d.py:1-6` and `lib/c.py:1-6`: similarity 0.90'];
+    const text = sections(describePr(full, facts({ lookFirst })).body).find((s) => s.title === 'Where to look first')!.text;
+    expect(text).toBe(`- \`src/export.ts\`: the quoting\n\n**Measured by the factory** (\`factory/qualité-diff\`):\n- ${lookFirst[0]}\n- ${lookFirst[1]}`);
+    const alone = sections(describePr(undefined, facts({ lookFirst: lookFirst.slice(0, 1) })).body).find((s) => s.title === 'Where to look first')!.text;
+    expect(alone).toContain(`**Measured by the factory** (\`factory/qualité-diff\`):\n- ${lookFirst[0]}`);
+  });
+
   it('criterion 1: an empty field keeps its place, said empty, so the order never moves', () => {
     const got = sections(describePr(output(), facts()).body);
     expect(got.map((s) => s.title)).toEqual([...PR_SECTIONS]);

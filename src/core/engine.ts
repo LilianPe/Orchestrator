@@ -2400,11 +2400,11 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (job.red) freeze(out, ticket, event.payload.frozen);
       if (toPublish && diffClass && unapprovedConfig(ticket, diffClass)) return ticket?.blocked ? out : block(out, workflow, configGate(diffClass, job.name));
       if (toPublish) {
-        const { runId, output, commands, visualProof } = event.payload;
+        const { runId, output, commands, visualProof, quality } = event.payload;
         out.events.push({ type: 'verify.started', runId });
         // A rebase rewrites the branch (ORC-146): its commit may replace the head the factory published, and that head only.
         const rewrite = job.step === REBASE ? { rewrite: true as const } : {};
-        out.effects.push({ kind: 'publish', runId, job: job.name, sha: toPublish, ...(output ? { output } : {}), ...(commands ? { commands } : {}), ...rewrite, ...(visualProof ? { visualProof } : {}) });
+        out.effects.push({ kind: 'publish', runId, job: job.name, sha: toPublish, ...(output ? { output } : {}), ...(commands ? { commands } : {}), ...rewrite, ...(visualProof ? { visualProof } : {}), ...(quality ? { quality } : {}) });
         return out;
       }
       return success(out, { event, ticket, workflow }, job, event.payload.runId, event.payload.output);

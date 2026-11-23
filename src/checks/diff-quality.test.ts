@@ -112,6 +112,14 @@ describe('diffQualityCheck', () => {
     expect(r.summary).toContain('`pkg/d.py:1-6` and `lib/c.py:1-6`: similarity 1.00');
   });
 
+  it('clips a path or a name past 120 characters: the summary and the PR keep their size', () => {
+    const long = `src/${'x'.repeat(300)}.ts`;
+    const r = diffQualityCheck(q({ functions: [{ path: long, name: 'n'.repeat(300), start: 1, end: 9, cc: 7, coverage: null, crap: null }] }));
+    expect(r.summary).not.toContain('x'.repeat(130));
+    expect(r.summary).not.toContain('n'.repeat(130));
+    expect(r.summary).toContain('…');
+  });
+
   it('says the coverage is unknown rather than a score', () => {
     expect(diffQualityCheck(q({ functions: [{ path: 'a.py', name: 'g', start: 1, end: 9, cc: 7, coverage: null, crap: null }] })).summary).toContain('`a.py:1-9` `g`: CC 7, coverage unknown');
   });

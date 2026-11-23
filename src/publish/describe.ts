@@ -30,6 +30,8 @@ export interface PrFacts {
   captures?: readonly PublishedCapture[];
   /** Why the captures `verify` took are not shown (ORC-407): the forge refused to host them, or nothing here can. */
   unhosted?: string;
+  /** The two worst of `factory/qualité-diff` (ORC-280), as its check words them: the factory's measure, after the agent's hints. */
+  lookFirst?: readonly string[];
 }
 
 /**
@@ -123,7 +125,7 @@ export function describePr(o: AgentOutput | undefined, f: PrFacts): { title: str
     Untested: agent((r) => list(r.untested)),
     // The approved spec's section (ORC-212), as the agent carries it: ORC-212 may hand the spec's own once it keeps it.
     'Trusted without verification': agent((r) => list(r.trusted ?? [])),
-    'Where to look first': agent((r) => bullets(r.review_hints.map((h) => `${mdCode(entry(h.file))}: ${entry(h.reason)}`))),
+    'Where to look first': [agent((r) => bullets(r.review_hints.map((h) => `${mdCode(entry(h.file))}: ${entry(h.reason)}`))), ...(f.lookFirst?.length ? [`**Measured by the factory** (\`factory/qualité-diff\`):\n${bullets(f.lookFirst)}`] : [])].join('\n\n'),
     Evidence: evidence(o, f),
   };
   return { title: prTitle(f), body: [`Ticket: ${f.ticketId}`, ...PR_SECTIONS.map((s) => `## ${s}\n\n${text[s]}`)].join('\n\n') };
