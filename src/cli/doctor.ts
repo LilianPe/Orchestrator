@@ -16,7 +16,7 @@ import { effectiveInstance, validatorWarnings, type ProjectConfig } from '../con
 import type { Workflow } from '../core/workflow.js';
 import { isFantome } from '../presets/fantome.js';
 import { defaultWorkflow, missingStatusWarning } from '../presets/workflow.js';
-import { activeClaudeAccount, claudeAccountReader, stepSettings } from '../config/factory-yml.js';
+import { activeClaudeAccount, claudeAccountReader, stepSettings, type FactoryYml } from '../config/factory-yml.js';
 import { startRefusals } from '../config/start-refusals.js';
 import { cliLinearTracker } from './linear.js';
 import { originGithub, sameGithub } from '../app/project-github.js';
@@ -1093,15 +1093,15 @@ export interface DoctorCommandOptions {
  * The statuses factory.yml names that the Linear team of each project lacks (ORC-382): a warning, never the verdict. The daemon
  * cannot refuse them at load, before it reads the team: `doctor` reads it, through the daemon's Linear connection.
  */
-async function statusWarnings(projects: readonly Pick<ProjectConfig, 'id' | 'linearTeamKey' | 'preset'>[], o: { home: string; env: NodeJS.ProcessEnv; states: Workflow['states']; read?: ((teamKey: string) => Promise<string[]>) | undefined }): Promise<string[]> {
+async function statusWarnings(projects: readonly Pick<ProjectConfig, 'id' | 'linearTeamKey' | 'preset'>[], o: { home: string; env: NodeJS.ProcessEnv; states: Workflow['states']; read?: ((teamKey: string) => Promise<string[]>) | undefined; sealed?: FactoryYml | undefined }): Promise<string[]> {
   const mine = projects.filter((p) => !isFantome(p));
   if (!mine.length) return [];
   let teamStatuses = o.read;
   if (!teamStatuses) {
     let tracker;
     try {
-      // Linear's secrets read apart from the GitHub App's: one that cannot be read leaves the other checks as they were.
-      tracker = cliLinearTracker(o.home, (await loadSealedFactoryYml(o.home, o.env, { only: LINEAR_SECRETS })).yml);
+      // Linear's secrets read apart from the GitHub App's: one that cannot be read leaves the other checks as they were. Already read under `--secrets`.
+      tracker = cliLinearTracker(o.home, o.sealed ?? (await loadSealedFactoryYml(o.home, o.env, { only: LINEAR_SECRETS })).yml);
     } catch (error) {
       return [`Linear statuses not checked: ${errorMessage(error)}`];
     }
@@ -1150,9 +1150,11 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   let projects;
   let states;
   let knowledge;
+  let sealedYml: FactoryYml | undefined;
   try {
     // The App's alone by default (ORC-448); `--secrets`, all of them, by the start's call (ORC-456).
     const { yml, sealed } = await loadSealedFactoryYml(options.home, env, options.secrets ? {} : { only: GITHUB_APP_SECRETS });
+    if (options.secrets) sealedYml = yml;
     // Each refusal of the daemon's start, in its order and by the function it calls, with its message (ORC-448): the exposed
     // host's sign-in and secrets_key, the Smee relay (ORC-446). Its warnings are said here: the relay's, an old SQLite file's (ORC-463).
     const instance = effectiveInstance(yml);
@@ -1175,7 +1177,7 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     return doctorFailure(reportOf(), errorMessage(error));
   }
   // Its Linear team's statuses against factory.yml's (ORC-382): a warning, never the verdict.
-  if (!options.json) for (const line of await statusWarnings(projects, { home: options.home, env, states, read: options.teamStatuses })) out(line);
+  if (!options.json) for (const line of await statusWarnings(projects, { home: options.home, env, states, read: options.teamStatuses, sealed: sealedYml })) out(line);
   const report = reportOf();
   if (!githubApp) {
     return doctorFailure(

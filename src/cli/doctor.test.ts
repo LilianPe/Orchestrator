@@ -1,5 +1,5 @@
 import { generateKeyPairSync } from 'node:crypto';
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -151,6 +151,22 @@ const protectedEnvironment: EnvironmentProtection = { name: 'ci-protected', requ
 const tempDirs: string[] = [];
 
 /** A home with its factory.yml, empty: without one, doctor refuses as the start does (ORC-199). */
+/** A loopback instance without projects: what the start accepts when nothing else refuses. */
+const local: InstanceConfig = { port: 4160, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] };
+
+const NO_APP = 'GitHub App not configured: `factory doctor` needs github.app_id and github.private_key in factory.yml (or GH_APP_ID and GH_APP_KEY) to read the workflows and the environments.';
+
+/** The message the daemon's start refuses with, undefined when it starts; on a MemoryStore, so the refusal is said, not the missing FACTORY_DATABASE_URL (ORC-178). */
+function startRefusal(home: string, env: NodeJS.ProcessEnv = {}): Promise<string | undefined> {
+  return startFactory({ home, fakeRunner: true, log: () => {}, env, store: new MemoryStore() }).then(
+    async (app) => {
+      await app.stop();
+      return undefined;
+    },
+    (error: Error) => error.message,
+  );
+}
+
 function tempHome(): string {
   const dir = mkdtempSync(join(tmpdir(), 'factory-doctor-'));
   tempDirs.push(dir);
@@ -1093,7 +1109,6 @@ describe('a config.yaml left in FACTORY_HOME (ORC-199)', () => {
 
 // ORC-448: every refusal of the daemon's start that its configuration decides, said by doctor, which fails with the same message.
 describe("the daemon's start refusals, each one doctor's", () => {
-  const local: InstanceConfig = { port: 4160, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] };
   const exposed: InstanceConfig = { ...local, host: '0.0.0.0', publicUrl: 'https://factory.example' };
   const smee = { kind: 'smee' as const, url: 'https://smee.io/abc' };
   const client = { GH_APP_CLIENT_ID: 'Iv1.client', GH_APP_CLIENT_SECRET: 'client-secret' };
@@ -1146,14 +1161,7 @@ describe("the daemon's start refusals, each one doctor's", () => {
       if (r.factoryYml !== undefined) appendFileSync(join(home, 'factory.yml'), r.factoryYml);
       if (r.secretsJson !== undefined) writeFileSync(join(home, 'secrets.json'), r.secretsJson);
       const env = r.env ?? {};
-      // On a MemoryStore: the refusal said, not the missing FACTORY_DATABASE_URL (ORC-178).
-      const started = await startFactory({ home, fakeRunner: true, log: () => {}, env, store: new MemoryStore() }).then(
-        async (app) => {
-          await app.stop();
-          return undefined;
-        },
-        (error: Error) => error.message,
-      );
+      const started = await startRefusal(home, env);
       expect(started, name).toMatch(r.reason);
       const lines: string[] = [];
       const code = await runDoctorCommand({ checkout: '/repo', home, env, out: (line) => lines.push(line) });
@@ -1170,14 +1178,12 @@ describe("the daemon's start refusals, each one doctor's", () => {
     // The daemon would take the active account's token, never this one.
     await runDoctorCommand({ checkout: '/repo', home, env: { ...client, CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-x\r\nX-Injected: 1' }, out: (line) => lines.push(line) });
     expect(lines.filter((l) => l.startsWith('host: 0.0.0.0') || l.startsWith('CLAUDE_CODE_OAUTH_TOKEN'))).toEqual([]);
-    expect(lines).toContain('GitHub App not configured: `factory doctor` needs github.app_id and github.private_key in factory.yml (or GH_APP_ID and GH_APP_KEY) to read the workflows and the environments.');
+    expect(lines).toContain(NO_APP);
   });
 });
 
 // ORC-456: `--secrets` reads the server secrets the start reads, by its path, and says none of their values.
 describe('doctor --secrets', () => {
-  const local: InstanceConfig = { port: 4160, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] };
-  const NO_APP = 'GitHub App not configured: `factory doctor` needs github.app_id and github.private_key in factory.yml (or GH_APP_ID and GH_APP_KEY) to read the workflows and the environments.';
   const WITNESS = 'witness-value-456';
   const files: Record<string, string> = {
     'secrets.key': `${WITNESS}-key-${'k'.repeat(32)}`,
@@ -1185,16 +1191,14 @@ describe('doctor --secrets', () => {
     'linear-webhook': `${WITNESS}-webhook`,
     claude: `sk-ant-oat01-${WITNESS}`,
   };
-  /** factory.yml with Linear's secrets, secrets_key and the Claude token in a `file` source; `drop` removes one of its files. */
-  const sealedHome = (o: { drop?: string; values?: Record<string, string> } = {}): string => {
+  /** factory.yml with Linear's secrets, secrets_key and the Claude token in a `file` source: `drop` removes one of its files, `open` leaves one readable by others. */
+  const sealedHome = (o: { drop?: string; open?: string; values?: Record<string, string> } = {}): string => {
     const home = tempHome();
     saveInstance(home, local);
-    const dir = mkdtempSync(join(tmpdir(), 'factory-doctor-secrets-'));
-    tempDirs.push(dir);
+    const dir = join(home, 'sealed');
+    mkdirSync(dir);
     for (const [name, value] of Object.entries({ ...files, ...o.values })) {
-      if (name === o.drop) continue;
-      writeFileSync(join(dir, name), value);
-      chmodSync(join(dir, name), 0o600);
+      if (name !== o.drop) writeFileSync(join(dir, name), value, { mode: name === o.open ? 0o644 : 0o600 });
     }
     appendFileSync(
       join(home, 'factory.yml'),
@@ -1205,70 +1209,46 @@ describe('doctor --secrets', () => {
     );
     return home;
   };
-  const startMessage = (home: string): Promise<string | undefined> =>
-    startFactory({ home, fakeRunner: true, log: () => {}, env: {}, store: new MemoryStore() }).then(
-      async (app) => {
-        await app.stop();
-        return undefined;
-      },
-      (error: Error) => error.message,
-    );
-  const doctorText = async (home: string, secrets?: boolean) => {
-    const lines: string[] = [];
-    const code = await runDoctorCommand({ checkout: '/repo', home, env: {}, secrets, teamStatuses: async () => [], out: (line) => lines.push(line) });
-    return { code, lines };
-  };
-  const doctorJson = async (home: string, secrets?: boolean) => {
-    const lines: string[] = [];
-    const code = await runDoctorCommand({ checkout: '/repo', home, env: {}, secrets, json: true, teamStatuses: async () => [], out: (line) => lines.push(line) });
-    return { code, text: lines.join('\n'), report: JSON.parse(lines.join('\n')) as { error?: string } };
+  /** doctor in text and in --json, neither saying a value read. */
+  const doctorBoth = async (home: string, secrets?: boolean) => {
+    const run = async (json: boolean) => {
+      const lines: string[] = [];
+      const code = await runDoctorCommand({ checkout: '/repo', home, env: {}, secrets, json, teamStatuses: async () => [], out: (line) => lines.push(line) });
+      expect(lines.join('\n')).not.toContain(WITNESS);
+      return { code, lines };
+    };
+    const text = await run(false);
+    const json = await run(true);
+    return { code: text.code, last: text.lines.at(-1), lines: text.lines, jsonCode: json.code, error: (JSON.parse(json.lines.join('\n')) as { error?: string }).error };
   };
 
   it('changes nothing without --secrets: a sealed secret its source cannot give is not read', async () => {
     const home = sealedHome({ drop: 'claude' });
-    expect(await startMessage(home)).toMatch(/claude\.accounts\[0\]\.token \(sealed:claude\) could not be read/);
-    const text = await doctorText(home);
-    expect(text.code).toBe(1);
-    expect(text.lines.at(-1)).toBe(NO_APP);
-    expect((await doctorJson(home)).report.error).toBe(NO_APP);
+    expect(await startRefusal(home)).toContain('claude.accounts[0].token (sealed:claude) could not be read');
+    expect(await doctorBoth(home)).toMatchObject({ code: 1, last: NO_APP, error: NO_APP });
   });
 
-  it.each(['secrets.key', 'linear-secret', 'claude'])('fails with the start\'s message when the file %s is absent, in text as in --json', async (drop) => {
-    const home = sealedHome({ drop });
-    const message = await startMessage(home);
-    expect(message).toMatch(new RegExp(`\\(sealed:${drop.replace('.', '\\.')}\\) could not be read`));
-    const text = await doctorText(home, true);
-    expect(text).toEqual({ code: 1, lines: expect.arrayContaining([message]) });
-    const json = await doctorJson(home, true);
-    expect({ code: json.code, error: json.report.error }).toEqual({ code: 1, error: message });
+  it.each([
+    { file: { drop: 'secrets.key' }, key: 'secrets_key (sealed:secrets.key)' },
+    { file: { drop: 'linear-secret' }, key: 'linear.client_secret (sealed:linear-secret)' },
+    { file: { drop: 'claude' }, key: 'claude.accounts[0].token (sealed:claude)' },
+    { file: { open: 'linear-secret' }, key: 'linear.client_secret (sealed:linear-secret)' },
+  ])("fails with the start's message, in text as in --json, for $file", async ({ file, key }) => {
+    const home = sealedHome(file);
+    const message = await startRefusal(home);
+    expect(message).toContain(`${key} could not be read`);
+    const doctor = await doctorBoth(home, true);
+    expect({ code: doctor.code, said: doctor.lines.includes(message!), jsonCode: doctor.jsonCode, error: doctor.error }).toEqual({ code: 1, said: true, jsonCode: 1, error: message });
   });
 
-  it('fails with the start\'s message when a file is unreadable (readable by others)', async () => {
-    const home = sealedHome();
-    const dir = /dir: "([^"]+)"/.exec(readFileSync(join(home, 'factory.yml'), 'utf8'))![1]!;
-    chmodSync(join(dir, 'linear-secret'), 0o644);
-    const message = await startMessage(home);
-    expect(message).toMatch(/linear\.client_secret \(sealed:linear-secret\) could not be read/);
-    expect((await doctorText(home, true)).lines).toContain(message);
-    expect((await doctorJson(home, true)).report.error).toBe(message);
-  });
-
-  it('says no value it read, in text as in --json, read or refused', async () => {
+  it('says no value it read, every secret read or one refused after its read', async () => {
     // Every secret read: doctor goes on to the GitHub App it lacks.
-    const read = sealedHome();
-    const text = await doctorText(read, true);
-    expect(text.lines.at(-1)).toBe(NO_APP);
-    const json = await doctorJson(read, true);
-    expect(json.report.error).toBe(NO_APP);
+    expect(await doctorBoth(sealedHome(), true)).toMatchObject({ last: NO_APP, error: NO_APP });
     // A Claude token read but refused by the start: its message names the key, never the value.
     const refused = sealedHome({ values: { claude: `sk-ant-${WITNESS}\u0001` } });
-    const message = await startMessage(refused);
+    const message = await startRefusal(refused);
     expect(message).toMatch(/the Claude token holds a character/);
-    const refusedText = await doctorText(refused, true);
-    expect(refusedText.lines).toContain(message);
-    const refusedJson = await doctorJson(refused, true);
-    expect(refusedJson.report.error).toBe(message);
-    for (const output of [text.lines.join('\n'), json.text, refusedText.lines.join('\n'), refusedJson.text]) expect(output).not.toContain(WITNESS);
+    expect(await doctorBoth(refused, true)).toMatchObject({ code: 1, error: message });
   });
 });
 
