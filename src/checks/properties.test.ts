@@ -67,6 +67,27 @@ describe('the generators of the property tests, frozen with them (ORC-261)', () 
     ]);
   });
 
+  it('reads Python imports as Python does: comments, `;`, `\\` continuations, `from.x`, and the packages on the way', async () => {
+    const files = {
+      'tests/test_orc_12_property_1.py': 'from . import (\n    cells,  # cell strategy\n    dates,\n)\nimport os; from .money import rows\nfrom .arb.text \\\n  import words\nfrom.amounts import cents\n',
+      'tests/__init__.py': '',
+      'tests/cells.py': '',
+      'tests/dates.py': '',
+      'tests/money.py': '',
+      'tests/arb/__init__.py': '',
+      'tests/arb/text.py': '',
+      'tests/amounts.py': '',
+    };
+    expect(await propertySupport(['tests/test_orc_12_property_1.py'], view(files))).toEqual([
+      'tests/__init__.py', 'tests/amounts.py', 'tests/arb/__init__.py', 'tests/arb/text.py', 'tests/cells.py', 'tests/dates.py', 'tests/money.py',
+    ]);
+  });
+
+  it("follows TypeScript's `import x = require()`", async () => {
+    const files = { 'test/orc-12.property-1.test.ts': "import arb = require('./arb/audits');", 'test/arb/audits.ts': '' };
+    expect(await propertySupport(['test/orc-12.property-1.test.ts'], view(files))).toEqual(['test/arb/audits.ts']);
+  });
+
   it('leaves out the property tests themselves and a cycle of imports', async () => {
     const files = { 'test/orc-12.property-1.test.ts': "import './a';", 'test/a.ts': "import './orc-12.property-1.test';\nimport './a';" };
     expect(await propertySupport(['test/orc-12.property-1.test.ts'], view(files))).toEqual(['test/a.ts']);
