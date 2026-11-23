@@ -1,5 +1,5 @@
 import type { BlockCause, BlockKind, ParetoCause } from '../../src/core/block-cause.js';
-import type { MissRate } from '../../src/core/serious-defect.js';
+import type { DefectCategory, DefectLevel, MissRate } from '../../src/core/serious-defect.js';
 
 export interface RunView {
   id: string;
@@ -185,6 +185,8 @@ export interface ReviewDefectView {
   findingId: string | null;
   file?: string;
   line?: number;
+  level: DefectLevel;
+  category: DefectCategory | null;
   definition: string | null;
   enteredBy: string;
   at: number;
@@ -194,6 +196,8 @@ export interface ReviewDefectView {
 export interface DefectEntry {
   prNumber: number;
   description: string;
+  level: DefectLevel;
+  category: DefectCategory;
   findingId?: string;
   file?: string;
   line?: number;

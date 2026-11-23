@@ -14,6 +14,7 @@ import {
 import type { ReviewLens } from '../../core/workflow.js';
 import type { Finding } from '../../core/agent-output.js';
 import type { KeptFinding, ReviewDefect } from '../../core/audit.js';
+import { categoryOf, levelOf } from '../../core/serious-defect.js';
 import type { Baseline, BaselineMeasure } from '../../core/baseline.js';
 import type { DryRun } from '../../core/dry-run.js';
 import type { GhostGrade, GhostJudgment, GhostReplay, GhostSide, GhostTicket } from '../../ghost/replay.js';
@@ -1203,7 +1204,7 @@ export class PgStore implements AsyncStore {
       .insert(schema.reviewDefects)
       .values({
         id: d.id, projectId: d.projectId, ticketId: d.ticketId, prNumber: d.prNumber, description: d.description, findingId: d.findingId,
-        file: d.file ?? null, line: d.line ?? null, seriousDefect: d.definition, enteredBy: d.enteredBy, enteredAt: new Date(d.at),
+        file: d.file ?? null, line: d.line ?? null, level: d.level, category: d.category, seriousDefect: d.definition, enteredBy: d.enteredBy, enteredAt: new Date(d.at),
       })
       .onConflictDoNothing()
       .returning({ id: schema.reviewDefects.id });
@@ -1219,13 +1220,13 @@ export class PgStore implements AsyncStore {
   }
 
   private async defectsWhere(where: SQL): Promise<ReviewDefect[]> {
-    const rows = await this.db.execute<{ id: string; project_id: string; ticket_id: string; pr_number: number; description: string; finding_id: string | null; file: string | null; line: number | null; definition: string | null; entered_by: string; at: string | number }>(sql`
-      select id, project_id, ticket_id, pr_number, description, finding_id, file, line, serious_defect as definition, entered_by, round(extract(epoch from entered_at) * 1000) as at
+    const rows = await this.db.execute<{ id: string; project_id: string; ticket_id: string; pr_number: number; description: string; finding_id: string | null; file: string | null; line: number | null; level: string | null; category: string | null; definition: string | null; entered_by: string; at: string | number }>(sql`
+      select id, project_id, ticket_id, pr_number, description, finding_id, file, line, level, category, serious_defect as definition, entered_by, round(extract(epoch from entered_at) * 1000) as at
       from review_defects where ${where} order by entered_at, id
     `);
     return rows.rows.map((r) => ({
       id: r.id, projectId: r.project_id, ticketId: r.ticket_id, prNumber: r.pr_number, description: r.description, findingId: r.finding_id,
-      ...(r.file === null ? {} : { file: r.file }), ...(r.line === null ? {} : { line: r.line }), definition: r.definition, enteredBy: r.entered_by, at: Number(r.at),
+      ...(r.file === null ? {} : { file: r.file }), ...(r.line === null ? {} : { line: r.line }), level: levelOf(r.level), category: categoryOf(r.category), definition: r.definition, enteredBy: r.entered_by, at: Number(r.at),
     }));
   }
 

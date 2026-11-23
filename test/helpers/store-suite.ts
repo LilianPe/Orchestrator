@@ -671,16 +671,16 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     ]);
   });
 
-  it('keeps the defects humans enter from review, once by id, read by ticket and by period (ORC-229)', async () => {
+  it('keeps the defects humans enter from review, once by id, with their level and category, read by ticket and by period (ORC-229, ORC-378)', async () => {
     const s = await store();
     const d = (id: string, at: number, patch: object = {}) => ({
-      id, projectId: 'p', ticketId: 'REL-1', prNumber: 3, description: `${id} found`, findingId: null, definition: null, enteredBy: 'dashboard:armand', at, ...patch,
+      id, projectId: 'p', ticketId: 'REL-1', prNumber: 3, description: `${id} found`, findingId: null, level: 'serious' as const, category: null, definition: null, enteredBy: 'dashboard:armand', at, ...patch,
     });
-    expect(await s.putReviewDefect(d('d2', 200, { findingId: 'r2:security:0', file: 'b.ts', line: 3, definition: 'loses data' }))).toBe(true);
+    expect(await s.putReviewDefect(d('d2', 200, { findingId: 'r2:security:0', file: 'b.ts', line: 3, level: 'important', category: 'bypassed_control', definition: 'loses data' }))).toBe(true);
     expect(await s.putReviewDefect(d('d1', 100))).toBe(true);
     expect(await s.putReviewDefect({ ...d('d1', 100), description: 'changed' })).toBe(false);
     expect(await s.putReviewDefect(d('d3', 300, { ticketId: 'REL-2' }))).toBe(true);
-    expect(await s.ticketDefects('p', 'REL-1')).toEqual([d('d1', 100), d('d2', 200, { findingId: 'r2:security:0', file: 'b.ts', line: 3, definition: 'loses data' })]);
+    expect(await s.ticketDefects('p', 'REL-1')).toEqual([d('d1', 100), d('d2', 200, { findingId: 'r2:security:0', file: 'b.ts', line: 3, level: 'important', category: 'bypassed_control', definition: 'loses data' })]);
     expect((await s.reviewDefects(100, 300)).map((x) => x.id)).toEqual(['d1', 'd2']);
     expect((await s.reviewDefects(200, 301)).map((x) => x.id)).toEqual(['d2', 'd3']);
   });

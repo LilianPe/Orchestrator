@@ -21,7 +21,7 @@ const finding = (patch: Partial<KeptFinding> = {}): KeptFinding => ({
 });
 
 const defect = (patch: Partial<ReviewDefect> = {}): ReviewDefect => ({
-  id: 'd1', projectId: 'p', ticketId: 'REL-1', prNumber: 3, description: 'the header row is missing', findingId: null, definition: 'breaks a user flow', enteredBy: 'dashboard:armand', at: 100, ...patch,
+  id: 'd1', projectId: 'p', ticketId: 'REL-1', prNumber: 3, description: 'the header row is missing', findingId: null, level: 'serious', category: 'wrong_behavior', definition: 'breaks a user flow', enteredBy: 'dashboard:armand', at: 100, ...patch,
 });
 
 /** A ticket specified, built, checked, reviewed by an AI lens then by a human, sent back once, merged. */
@@ -116,10 +116,48 @@ describe('missRate (ORC-229)', () => {
       // Out of the period.
       defect({ id: 'd7', at: 1_000 }),
     ], def);
-    expect(rate).toEqual({ counted: true, definition: def, defects: 4, missed: 2, rate: 0.5, leftOut: 2 });
+    expect(rate).toMatchObject({ counted: true, definition: def, defects: 4, missed: 2, rate: 0.5, leftOut: 2 });
   });
 
   it('gives no rate, never a zero, without a defect to count', () => {
-    expect(missRate(period, [], 'breaks a user flow')).toEqual({ counted: true, definition: 'breaks a user flow', defects: 0, missed: 0, rate: null, leftOut: 0 });
+    expect(missRate(period, [], 'breaks a user flow')).toEqual({
+      counted: true, definition: 'breaks a user flow', defects: 0, missed: 0, rate: null, leftOut: 0,
+      levels: [{ level: 'serious', defects: 0, missed: 0, rate: null, categories: [] }, { level: 'important', defects: 0, missed: 0, rate: null, categories: [] }],
+    });
+  });
+
+  it('gives the rate by level, every level, then by category within it, the defects with no category last (ORC-378)', () => {
+    const rate = missRate(period, [
+      defect({ id: 'd1', category: 'security' }),
+      defect({ id: 'd2', category: 'security', findingId: 'rv1:security:0' }),
+      defect({ id: 'd3', category: 'data' }),
+      // Entered before ORC-378: no category, counted as serious.
+      defect({ id: 'd4', category: null }),
+      defect({ id: 'd5', level: 'important', category: 'bypassed_control', findingId: 'rv1:correctness:0' }),
+    ], 'breaks a user flow');
+    expect(rate).toEqual({
+      counted: true, definition: 'breaks a user flow', defects: 5, missed: 3, rate: 0.6, leftOut: 0,
+      levels: [
+        {
+          level: 'serious', defects: 4, missed: 3, rate: 0.75,
+          categories: [
+            { category: 'security', defects: 2, missed: 1, rate: 0.5 },
+            { category: 'data', defects: 1, missed: 1, rate: 1 },
+            { category: null, defects: 1, missed: 1, rate: 1 },
+          ],
+        },
+        { level: 'important', defects: 1, missed: 0, rate: 0, categories: [{ category: 'bypassed_control', defects: 1, missed: 0, rate: 0 }] },
+      ],
+    });
+  });
+
+  it('counts an important defect the AI missed in the important rate only: the serious rate does not move (ORC-378)', () => {
+    const before = [defect({ id: 'd1' }), defect({ id: 'd2', findingId: 'rv1:correctness:0' })];
+    const serious = (r: ReturnType<typeof missRate>) => (r.counted ? r.levels.find((l) => l.level === 'serious') : undefined);
+    const important = (r: ReturnType<typeof missRate>) => (r.counted ? r.levels.find((l) => l.level === 'important') : undefined);
+    const without = missRate(period, before, 'breaks a user flow');
+    const withIt = missRate(period, [...before, defect({ id: 'd3', level: 'important', category: 'data' })], 'breaks a user flow');
+    expect(serious(withIt)).toEqual(serious(without));
+    expect(important(withIt)).toMatchObject({ defects: 1, missed: 1, rate: 1 });
   });
 });
