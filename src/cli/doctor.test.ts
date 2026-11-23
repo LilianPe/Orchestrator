@@ -1292,6 +1292,33 @@ describe('the host: the engine on cgroup v2, able to set the limits (ORC-208, cr
     expect(noImage.reasons).toEqual(['FACTORY_RUNNER_IMAGE is required with FACTORY_CONTAINER_CLI.']);
   });
 
+  it("says a limit's refusal even when the start refuses for another reason first (ORC-455)", async () => {
+    const asked = (env: NodeJS.ProcessEnv) =>
+      checkHost({ FACTORY_CONTAINER_CLI: 'podman', ...RUNNER, ...env }, engine({ host: { ...PODMAN_INFO.host, cgroupControllers: ['memory', 'pids'] } }).exec);
+    const noImage = await asked({ FACTORY_RUNNER_IMAGE: '', FACTORY_SANDBOX_CPUS: 'lots' });
+    expect(noImage.verdict).toBe('refused');
+    expect(noImage.reasons).toEqual([
+      'FACTORY_RUNNER_IMAGE is required with FACTORY_CONTAINER_CLI.',
+      expect.stringMatching(/^FACTORY_SANDBOX_CPUS=lots: a number of CPUs/),
+      expect.stringContaining('cannot limit through the cpu controller(s)'),
+    ]);
+    vi.spyOn(process, 'getuid').mockReturnValue(undefined as unknown as number);
+    try {
+      const noUid = await asked({ FACTORY_SANDBOX_MEMORY: '4m' });
+      expect(noUid.reasons.slice(0, 2)).toEqual([
+        'The sandboxes require a daemon on Linux (uid and gid).',
+        'FACTORY_SANDBOX_MEMORY=4m: at least 6m expected, or 0 / none for no limit.',
+      ]);
+    } finally {
+      vi.restoreAllMocks();
+    }
+    const otherCli = await checkHost({ FACTORY_CONTAINER_CLI: 'lxc', ...RUNNER, FACTORY_SANDBOX_CPUS: 'lots' }, engine(PODMAN_INFO).exec);
+    expect(otherCli.reasons).toEqual([expect.stringContaining('docker or podman expected'), expect.stringMatching(/^FACTORY_SANDBOX_CPUS=lots: /)]);
+    // The limit is the start's own refusal: said once.
+    const malformed = await asked({ FACTORY_SANDBOX_CPUS: 'lots' });
+    expect(malformed.reasons.filter((r) => r.startsWith('FACTORY_SANDBOX_CPUS='))).toHaveLength(1);
+  });
+
   it('refuses a rootless Podman on cgroupfs, which ignores the limits, even with every controller listed', async () => {
     const host = await podman({ host: { ...PODMAN_INFO.host, cgroupManager: 'cgroupfs' } });
     expect(host.verdict).toBe('refused');
