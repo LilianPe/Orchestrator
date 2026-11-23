@@ -92,7 +92,7 @@ describe.skipIf(!enabled)(`what an agent leaves in its git dir, under the factor
   const origin = join(base, 'origin.git');
   const trap = `touch '${posix(witnesses)}`;
   const ws = new GitWorkspaces({ root: join(base, 'ws') });
-  const ask = (patch: object = {}) => ({ projectId: 'p', repoPath: repo, ticketId: 'ISO-1', title: 'hostile', kind: 'worktree' as const, slot: 0, portBase: 4200, runId: 'aaaaaaaa1111', ...patch });
+  const ask = (patch: object = {}) => ({ projectId: 'p', mirror: repo, ticketId: 'ISO-1', title: 'hostile', kind: 'worktree' as const, slot: 0, portBase: 4200, runId: 'aaaaaaaa1111', ...patch });
 
   const scripted = async (id: string, script: string) => {
     // In a global config, as the runner's image has it in its system one: git clears GIT_CONFIG_* for a local transport's upload-pack, which then refuses a mount it does not own.

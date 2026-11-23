@@ -46,7 +46,7 @@ describe.skipIf(!enabled)('isolation 8: logical escape through the diff', () => 
     git(repoPath, 'commit', '-q', '-m', 'base');
     git(repoPath, 'push', '-q', 'origin', 'main');
     git(repoPath, 'remote', 'set-head', 'origin', 'main');
-    const { path: repo, branch } = await new GitWorkspaces({ root: join(root, 'ws') }).prepare({ projectId: 'p', repoPath, ticketId: 'ISO-8', title: 'iso', kind: 'worktree', slot: 0, portBase: 4200, runId: 'r0' } as never);
+    const { path: repo, branch } = await new GitWorkspaces({ root: join(root, 'ws') }).prepare({ projectId: 'p', mirror: repoPath, ticketId: 'ISO-8', title: 'iso', kind: 'worktree', slot: 0, portBase: 4200, runId: 'r0' } as never);
     const forge = new FakeForge();
     forge.gitUrl = remote;
     const publisher = new GitPublisher({ sandboxes: provider, forge, runsDir: join(root, 'runs'), gitleaks: false, log: () => {} });

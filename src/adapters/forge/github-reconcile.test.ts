@@ -14,7 +14,7 @@ describe('GithubReconciler', () => {
     const events: FactoryEvent[] = [];
     const clock = new FakeClock(100);
     await store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b' });
-    const reconciler = new GithubReconciler({ store, forge, projects: [{ id: 'p', repoPath: '/r', github: 'acme/r', teamKey: 'REL', workflow }], submit: (e) => events.push(e), clock, log: () => {} });
+    const reconciler = new GithubReconciler({ store, forge, projects: [{ id: 'p', mirror: '/r', github: 'acme/r', teamKey: 'REL', workflow }], submit: (e) => events.push(e), clock, log: () => {} });
 
     await reconciler.once();
     expect(events).toEqual([]);
@@ -43,7 +43,7 @@ describe('GithubReconciler', () => {
     const forge = new FakeForge();
     const events: FactoryEvent[] = [];
     const clock = new FakeClock(100);
-    const reconciler = new GithubReconciler({ store, forge, projects: [{ id: 'p', repoPath: '/r', github: 'acme/r', teamKey: 'REL', workflow }], submit: submit ?? ((e) => events.push(e)), clock, log });
+    const reconciler = new GithubReconciler({ store, forge, projects: [{ id: 'p', mirror: '/r', github: 'acme/r', teamKey: 'REL', workflow }], submit: submit ?? ((e) => events.push(e)), clock, log });
     return { store, forge, events, reconciler };
   }
 

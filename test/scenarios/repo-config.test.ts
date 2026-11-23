@@ -193,7 +193,7 @@ describe("the repository's config at the launch", () => {
       git(repo, 'commit', '--quiet', '-am', 'widen');
       const read = makeRepoConfig();
       const reads: { fetch: boolean }[] = [];
-      const repoConfig = (_: unknown, o?: { fetch?: boolean }) => (reads.push({ fetch: o?.fetch ?? true }), read({ repoPath: repo }, o));
+      const repoConfig = (_: unknown, o?: { fetch?: boolean }) => (reads.push({ fetch: o?.fetch ?? true }), read({ mirror: repo }, o));
       const h = createHarness({ sandboxed: true, workflow: VERIFIED, cleanVerify: async () => verdicts.shift()!, repoConfig });
       h.runner.enqueue({});
       await delegate(h);

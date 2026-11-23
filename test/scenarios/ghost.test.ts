@@ -152,7 +152,7 @@ describe('the replay of a closed ticket, from its start to its collection (ORC-3
     expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake', '/factory:spec-draft', '/factory:tests', '/factory:build']);
     const worktrees = h.workspaces.prepared.filter((w) => w.kind === 'worktree');
     expect(worktrees.length).toBeGreaterThan(0);
-    expect(new Set(worktrees.map((w) => w.repoPath))).toEqual(new Set([CLONE]));
+    expect(new Set(worktrees.map((w) => w.mirror))).toEqual(new Set([CLONE]));
     // The ticket as it was: its text, its thread and its linked ticket of before the start; nothing written after, no human work.
     const intake = h.runner.requests[0]!.prompt;
     expect(intake).toContain('Export the audits as CSV from the audit list.');

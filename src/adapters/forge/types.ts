@@ -180,8 +180,8 @@ export interface ArtifactHost {
 export type GitAuth = (github: string) => Promise<Record<string, string>>;
 
 /**
- * `GitAuth` of the clone at `repoPath`: the token of the GitHub repository it is the factory's clone of (`cloneAuth`), `{}` for
- * any other. ponytail: ORC-471 part 2 fetches a mirror the daemon names by its repository, and this goes with `repo_path`.
+ * `GitAuth` of the repository at a path: the token of the GitHub repository a daemon's mirror stands for (`RepoMirrors.auth`, ORC-479),
+ * or the knowledge base's clone (`cloneAuth`, until ORC-471 part 4); `{}` for any other.
  */
 export type CloneAuth = (repoPath: string) => Promise<Record<string, string>>;
 

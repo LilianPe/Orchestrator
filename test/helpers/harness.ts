@@ -13,6 +13,7 @@ import { openSecretSources, SECRET_SOURCE_KINDS } from '../../src/adapters/secre
 import type { SecretSource } from '../../src/adapters/secrets/types.js';
 import { FakeTracker } from '../../src/adapters/tracker/fake.js';
 import { FakeWorkspaces } from '../../src/adapters/workspace/fake.js';
+import type { WorkspaceManager } from '../../src/adapters/workspace/types.js';
 import type { Workflow } from '../../src/core/workflow.js';
 import { parseRepoConfig, type RepoConfig } from '../../src/config/repo-config.js';
 import { saveAgentOutput } from '../../src/core/agent-output.js';
@@ -254,6 +255,8 @@ export function createHarness(
     secretEnv?: NodeJS.ProcessEnv;
     /** `.factory/config.yml` as the launch reads it on the default branch (ORC-209 C); the socle by default. */
     repoConfig?: DaemonDeps['repoConfig'];
+    /** Real git workspaces on the project's `mirror` (ORC-479) in place of the fake ones, which `workspaces` then is not. */
+    git?: { workspaces: WorkspaceManager; mirror: string };
     /** `budgets.per_ticket_tokens` and `budgets.on_usage_limit` of factory.yml (ORC-340, ORC-216). */
     perTicketTokens?: number;
     onUsageLimit?: 'wait';
@@ -303,6 +306,8 @@ export function createHarness(
   const forge = new FakeForge();
   const runner = new FakeRunner(clock);
   const workspaces = new FakeWorkspaces();
+  /** What the daemon prepares worktrees with: the fake, or a test's real git (`git`). */
+  const workspacesInUse: WorkspaceManager = opts.git?.workspaces ?? workspaces;
   const checks = new FakeCheckRunner(opts.verify);
   const sandboxes = new FakeSandboxProvider();
   const secrets = new SecretReader({ ...openSecretSources(undefined, SECRET_SOURCE_KINDS, opts.secretEnv ?? {}), ...opts.secretSources });
@@ -314,7 +319,7 @@ export function createHarness(
   const logs: { level: string; message: string }[] = [];
   if (opts.fantome) opts.noEffect ??= true;
   const keptEffectsDir = opts.noEffect === true ? mkdtempSync(join(tmpdir(), 'factory-kept-')) : undefined;
-  const project = { id: 'p', repoPath: '/repo', github: 'acme/app', teamKey: 'REL', workflow, ...(opts.noEffect ? { effects: 'none' as const } : {}) };
+  const project = { id: 'p', mirror: opts.git?.mirror ?? '/repo', github: 'acme/app', teamKey: 'REL', workflow, ...(opts.noEffect ? { effects: 'none' as const } : {}) };
   const authz = opts.authz && { teamKey: 'REL', github: 'acme/app', maintainers: [], validators: [], githubLogins: {}, ...opts.authz };
   /** One life of the process: its store and its adapters, all of them silent once it is killed. */
   const connect = () => {
@@ -333,12 +338,12 @@ export function createHarness(
       // The visual proof's captures, on the fake forge's `factory/artifacts` (ORC-407).
       captureHost: life.gate(forge),
       ...(opts.noPublisher ? {} : { publisher: life.gate(publisher) }),
-      workspaces: life.gate(workspaces),
+      workspaces: life.gate(workspacesInUse),
       ...(opts.hostChecks === false ? {} : { verify: life.gate(checks.run) }),
       originUrl: async () => '/origin',
       // The clean check is proved by itself (clean-verify.test.ts, the isolation suite): a scenario decides its verdict through the same fake.
       // A human's push (ORC-159) is checked on the commit pushed, not on the worktree.
-      cleanVerify: opts.cleanVerify ?? (async (req: CleanVerifyRequest) => ({ ...(req.commands.length ? await life.gate(checks.run)(req.worktree, [...req.commands], undefined, {}) : { ok: true, failures: [] }), sha: req.head ?? (await workspaces.head(req.worktree)) ?? 'head', tree: 'clean-tree' })),
+      cleanVerify: opts.cleanVerify ?? (async (req: CleanVerifyRequest) => ({ ...(req.commands.length ? await life.gate(checks.run)(req.worktree, [...req.commands], undefined, {}) : { ok: true, failures: [] }), sha: req.head ?? (await workspacesInUse.head(req.worktree)) ?? 'head', tree: 'clean-tree' })),
       // The proxy's journal of a run (ORC-296) beside its refusals log: a test writes both.
       ...(sessionsDir ? { sandboxes: life.gate(sandboxes), sessionsDir, runsDir, runnerImage: 'factory/runner:test', egressJournal: (id: string) => join(runsDir!, id, 'egress.jsonl') } : {}),
       ...(opts.dryRunner ? { dryRunner: opts.dryRunner } : {}),
@@ -373,7 +378,7 @@ export function createHarness(
     })(),
     scheduler: new Scheduler(store, queueCapacity(opts.concurrency)),
     ...outside,
-    projects: [project, ...(opts.extraProjects ?? []).map((id) => ({ ...project, id, repoPath: `/${id}`, github: `acme/${id}` }))],
+    projects: [project, ...(opts.extraProjects ?? []).map((id) => ({ ...project, id, mirror: `/${id}`, github: `acme/${id}` }))],
     packDir: pack,
     agentEnv: (r) => ({ FACTORY_RUN_TOKEN: r.token }),
     newId: () => `id-${++n}`,

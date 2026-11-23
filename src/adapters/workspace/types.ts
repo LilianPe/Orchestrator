@@ -5,7 +5,8 @@ export type WorkspaceKind = 'worktree' | 'trunk-readonly' | 'published';
 
 export interface WorkspaceRequest {
   projectId: string;
-  repoPath: string;
+  /** The repository its git is read from: the project's mirror (ORC-479), or a replayed ticket's clone. */
+  mirror: string;
   ticketId: string;
   title: string;
   kind: WorkspaceKind;
@@ -51,30 +52,30 @@ export interface WorkspaceManager {
   /** The trunk a run asked for (a question's, or an AI review's clone), once its sandbox is gone. A run that had none: nothing to do. */
   release(projectId: string, runId: string): Promise<void>;
   /** Whether origin has a branch `matches` takes: a ticket's own, whatever its type or title (ORC-283). */
-  remoteBranchExists(repoPath: string, matches: (name: string) => boolean): Promise<boolean>;
+  remoteBranchExists(mirror: string, matches: (name: string) => boolean): Promise<boolean>;
   /** The commit a worktree's run ended on (ORC-148: only it may be recorded as reviewed); none for a path that is no worktree. */
   head(path: string): Promise<string | undefined>;
   /**
    * A ticket's worktree diff against the trunk, its commits only, capped (`capDiff`): the last diff the answer agent reads
    * (ORC-182). Read on the factory's repository, as `stepDiff`; none for a path that is no worktree.
    */
-  ticketDiff(repoPath: string, path: string): Promise<string | undefined>;
+  ticketDiff(mirror: string, path: string): Promise<string | undefined>;
   /** What the commits from `base` to a worktree's head changed (ORC-123); none for a path that is no worktree. */
-  stepDiff(repoPath: string, path: string, base: string): Promise<StepDiff | undefined>;
+  stepDiff(mirror: string, path: string, base: string): Promise<StepDiff | undefined>;
   /**
    * A worktree's branch as the path rules read it (ORC-338), on the factory's repository against its default branch: the
    * same `gitReader` as the clone's. With `fetch`, the forge's default branch, its `HEAD` fetched as the clone fetches it
    * (ORC-358); without, the repository's own, no forge read. None for a path that is no worktree. Without sandboxes only,
    * where `verify` reads no clone.
    */
-  branchReader(repoPath: string, path: string, o: { fetch: boolean }): Promise<BranchReader | undefined>;
+  branchReader(mirror: string, path: string, o: { fetch: boolean }): Promise<BranchReader | undefined>;
   /**
    * A worktree's files at the ticket's base commit (ORC-396), read on the factory's repository as `stepDiff`: the head's fork
    * point from the repository's default branch, or that branch itself when the head shares no commit with it (an agent can
    * point its head at a commit of its own). Never the worktree's files. A file past its cap reads `\0too large: …`. None for a
    * path that is no worktree.
    */
-  baseReader(repoPath: string, path: string): Promise<BranchReader['showAtFork'] | undefined>;
+  baseReader(mirror: string, path: string): Promise<BranchReader['showAtFork'] | undefined>;
   /** The worktree's changes that are not committed, untracked files included, read on the host (ORC-123). Without sandboxes only. */
   uncommitted(path: string): Promise<string[]>;
   /** Hides the repository's `.claude/` from a worktree before each session (ORC-284), without its PR deleting it. */

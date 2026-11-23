@@ -18,6 +18,7 @@ import { cloneAtStart } from '../../ghost/history.js';
 import { KnowledgeBase } from '../../knowledge/kb.js';
 import { isTransient } from '../../runtime/transient.js';
 import { fetchOrigin, GitWorkspaces } from '../workspace/git-workspaces.js';
+import { RepoMirrors } from '../workspace/repo-mirrors.js';
 
 /**
  * ORC-442: the daemon reads a private repository with the App's installation token, on a machine without any git credential of
@@ -158,8 +159,17 @@ describe('the daemon fetches a private repository with the App installation toke
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 const READS: Record<string, (f: Fixture, auth?: CloneAuth) => Promise<unknown>> = {
   "a launch's fetch (GitWorkspaces)": (f, auth) =>
-    new GitWorkspaces({ root: join(f.dir, 'ws'), exec: f.exec, ...(auth ? { auth } : {}) }).prepare({ projectId: 'p', repoPath: f.repo, ticketId: 'T-1', title: 't', kind: 'trunk-readonly', runId: 'r1' }),
-  "the repository's config, on its default branch (read before a launch)": (f, auth) => makeRepoConfig({ exec: f.exec, ...(auth ? { auth } : {}) })({ repoPath: f.repo }),
+    new GitWorkspaces({ root: join(f.dir, 'ws'), exec: f.exec, ...(auth ? { auth } : {}) }).prepare({ projectId: 'p', mirror: f.repo, ticketId: 'T-1', title: 't', kind: 'trunk-readonly', runId: 'r1' }),
+  "the repository's config, on its default branch (read before a launch)": (f, auth) => makeRepoConfig({ exec: f.exec, fetch: (repo, o) => fetchOrigin(f.exec, repo, { ...o, auth }) })({ mirror: f.repo }),
+  "the daemon's mirror, made then fetched again (ORC-479), the token in no file of it": async (f, auth) => {
+    const mirrors = new RepoMirrors({ root: join(f.dir, 'repos'), exec: f.exec, url: () => f.url, ...(auth ? { auth: (github) => f.forge.fetchEnv(github) } : {}) });
+    const mirror = await mirrors.ready('acme/app');
+    await mirrors.ready('acme/app');
+    expect(execFileSync('git', ['-C', mirror, 'rev-parse', 'refs/remotes/origin/main'], { encoding: 'utf8' }).trim()).toBe(f.second);
+    const everyFile = (dir: string): string[] => readdirSync(dir).flatMap((n) => (statSync(join(dir, n)).isDirectory() ? everyFile(join(dir, n)) : [join(dir, n)]));
+    const secrets = [TOKEN, Buffer.from(`x-access-token:${TOKEN}`).toString('base64')];
+    expect(everyFile(mirror).filter((file) => secrets.some((t) => readFileSync(file, 'latin1').includes(t)))).toEqual([]);
+  },
   "verify's and the dry run's clone": async (f, auth) => {
     const clone = mkdtempSync(join(f.dir, 'clone-'));
     git(clone, 'init', '--quiet');
