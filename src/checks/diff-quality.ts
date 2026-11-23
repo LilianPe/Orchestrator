@@ -109,7 +109,7 @@ const worse = (a: QualityFunction, b: QualityFunction): number => (a.crap === nu
 
 const isSpan = (s: unknown): s is QualitySpan => isRecord(s) && typeof s['path'] === 'string' && typeof s['start'] === 'number' && typeof s['end'] === 'number';
 const isFunction = (f: unknown): f is QualityFunction =>
-  isSpan(f) && typeof f['name'] === 'string' && typeof f['cc'] === 'number' && (f['coverage'] === null || typeof f['coverage'] === 'number') && (f['crap'] === null || typeof f['crap'] === 'number');
+  isRecord(f) && isSpan(f) && typeof f['name'] === 'string' && typeof f['cc'] === 'number' && (f['coverage'] === null || typeof f['coverage'] === 'number') && (f['crap'] === null || typeof f['crap'] === 'number');
 const isPair = (p: unknown): p is QualityPair => isRecord(p) && typeof p['score'] === 'number' && isSpan(p['left']) && isSpan(p['right']);
 
 /**
