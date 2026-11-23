@@ -442,14 +442,14 @@ export const dryRunHolds = (last: DryRun, now: { sha: string; fingerprint: DryRu
 /** What breaks a dry run, each kind in its command once (ORC-409, and the `main` maturity card of ORC-410). */
 export const dryRunBroke = (run: DryRun): string => [...new Set(run.breaks.map((b) => `${b.kind} in \`${b.command}\``))].join(', ');
 
-/** Green, red, or unverifiable: green but for a setup that failed without its secrets (ORC-453), whose commands did not run. */
+/** Green, red, or, on a dry run recorded before ORC-461, unverifiable: green but for a setup that failed without its secrets (ORC-453). */
 export const dryRunVerdict = (run: DryRun): 'green' | 'red' | 'unverifiable' =>
   !run.ok ? 'red' : run.unverified ? 'unverifiable' : 'green';
 
 /**
  * The `main` maturity card's value (ORC-410): the project's last dry run on its default branch, green, unverifiable without its
- * secrets or red with what breaks, its commit and when it ended; without one, not checked yet. `init` stores it, and each dry run
- * on main sets it (ORC-437).
+ * secrets (recorded before ORC-461) or red with what breaks, its commit and when it ended; without one, not checked yet. `init`
+ * stores it, and each dry run on main sets it (ORC-437).
  */
 export function mainCardValue(run: DryRun | undefined): string {
   if (!run) return MAIN_UNCHECKED;

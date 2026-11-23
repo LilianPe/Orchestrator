@@ -360,6 +360,12 @@ describe('runCleanVerify', () => {
         expect(sandboxes.created.map((c) => c.runId)).not.toContain('r1-verify-setup');
       });
 
+      it("with the workflow's setup, none of the config's own, it is refused all the same", async () => {
+        const { sandboxes, req } = setup({ commands: ['true'], setup: ['echo workflow-setup'] }, 'setup_secrets: [NPM_TOKEN]\n');
+        await expect(runCleanVerify(req)).rejects.toThrow(/setup_secrets \(NPM_TOKEN\).*if it needs it, the repository cannot be verified/);
+        expect(sandboxes.ran.map((r) => r.command)).not.toContain('echo workflow-setup');
+      });
+
       it('with no setup to run, nothing is withheld: the commands run', async () => {
         const { req } = setup({ commands: ['true'], setup: [] }, 'setup_secrets: [NPM_TOKEN]\n');
         expect((await runCleanVerify(req)).ok).toBe(true);

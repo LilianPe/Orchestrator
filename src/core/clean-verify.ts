@@ -265,7 +265,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     // As the commit declares them, which the launch did not read: provided, or refused before any of its code runs (ORC-282).
     const unprovided = req.sandboxes.unprovided([...new Set(config.services)]);
     if (unprovided.length) throw new Error(servicesUnavailable(unprovided, true));
-    if (setup.length && config.setupSecrets.length) throw new Error(`${setupSecretsWithheld(config.setupSecrets)}, then reply here.`);
+    if (setup.length && config.setupSecrets.length) throw new Error(`${setupSecretsWithheld(config.setupSecrets)}. Reply here once setup_secrets is changed on the default branch.`);
     // The repository's services (ORC-309), new for this check, never the agent's: filled by the setup, gone with the commands' sandbox.
     const withServices = { ...DEFAULT_REQUIREMENTS, services: config.services };
     await setUp('verify', cloneDir, config.services);
@@ -323,7 +323,7 @@ export function servicesUnavailable(missing: readonly string[], sandboxed: boole
  */
 export function setupSecretsWithheld(secrets: readonly string[]): string {
   const them = secrets.length === 1 ? 'it' : 'them';
-  return `${REPO_CONFIG_PATH} declares setup_secrets (${secrets.join(', ')}) for its setup, and verify does not run such a setup: the commit it checks has commits beyond the default branch, which nobody reviewed, and as at the launch a setup on such a commit gets no secret. Take ${them} out of setup_secrets if the setup passes without ${them}`;
+  return `${REPO_CONFIG_PATH} declares setup_secrets (${secrets.join(', ')}) for its setup, and verify does not run such a setup: the commit it checks is ahead of the default branch, which nobody reviewed, and as at the launch a setup on such a commit gets no secret. If the setup passes without ${them}, take ${them} out of setup_secrets; if it needs ${them}, the repository cannot be verified by this factory yet`;
 }
 
 export const BASE = 'refs/factory/base';

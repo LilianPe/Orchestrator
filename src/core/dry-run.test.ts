@@ -262,6 +262,11 @@ describe('runDryRun (ORC-408)', () => {
       expect(dryRunRefusal(run).tried).toEqual([expect.stringContaining('secret, .factory/config.yml declares setup_secrets (NPM_TOKEN, REGISTRY_TOKEN)')]);
     });
 
+    it("with the workflow's setup, none of the config's own, it is red all the same", async () => {
+      const { req } = forge({ setup: ['npm ci'] }, { '.factory/config.yml': 'setup_secrets: [NPM_TOKEN]\ncommands:\n  test: grep green state.txt\n' });
+      expect(await runDryRun(req)).toMatchObject({ ok: false, breaks: [{ kind: 'secret', step: 'config' }] });
+    });
+
     it('with no setup to run, nothing is withheld: green', async () => {
       const { req } = forge({ setup: [] }, { '.factory/config.yml': 'setup_secrets: [NPM_TOKEN]\ncommands:\n  test: grep green state.txt\n' });
       expect(await runDryRun(req)).toMatchObject({ ok: true, breaks: [], commands: ['grep green state.txt'] });
