@@ -108,8 +108,9 @@ export abstract class DaemonChecks extends DaemonBase {
       // The freeze (ORC-131) on the same commit: the step's tests and the harness, whatever the red's verdict.
       // ponytail: committed files only; a test left uncommitted is not frozen (verify reads commits once ORC-151 lands).
       const tests = diff.changed.filter((f) => !f.deleted && isTestFile(f.path)).map((f) => f.path);
-      // The generators of the property tests (ORC-261), whoever wrote them and whenever: what a property draws its inputs from.
-      const read = await freezeTests([...tests, ...(await propertySupport(properties, view))], view);
+      // The property tests the red check took (ORC-261), this pass's or at the head already, and their generators, whoever wrote
+      // them and whenever: what a property draws its inputs from. One frozen already keeps its first print (the freeze's merge).
+      const read = await freezeTests([...tests, ...properties, ...(await propertySupport(properties, view))], view);
       return { ...red, frozen: t.frozenTests ? newTestsOnly(read) : read };
     } catch (err) {
       return { verified: false, cause: 'infra', command: '', exitCode: null, detail: `The red check could not run: ${(err as Error).message}` };

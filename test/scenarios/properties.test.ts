@@ -52,6 +52,11 @@ describe('the property tests of the approved spec (ORC-261)', () => {
     expect(Object.keys((await h.ticket()).frozenTests!.files)).toContain('test/arb/audits.ts');
   });
 
+  it('a property test at the head the step did not commit, which the red check takes, is frozen too', async () => {
+    const h = await approved([PROPERTY], ['src/export.test.ts']);
+    expect(Object.keys((await h.ticket()).frozenTests!.files)).toContain('test/rel-1.property-1.test.ts');
+  });
+
   it('criterion 3: a commit that narrows a frozen generator fails verify', async () => {
     const h = await approved([PROPERTY], ['src/export.test.ts', 'test/rel-1.property-1.test.ts']);
     h.workspaces.heads.set(WORKTREE, 'sha-dev');
