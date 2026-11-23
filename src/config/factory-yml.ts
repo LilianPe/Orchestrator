@@ -10,6 +10,7 @@ import { MAX_DIFF } from '../checks/diff-size.js';
 import { MIN_SECRETS_KEY_LENGTH } from './secrets-file.js';
 import { READ_CAPS, type ReadCaps } from '../network/reads.js';
 import { GITHUB_LOGIN, type DashboardAccess } from '../adapters/forge/github-login.js';
+import { isRecord } from '../adapters/graphql-pages.js';
 import type { Effort } from '../presets/preset.js';
 import type { StepSettings } from '../presets/workflow.js';
 
@@ -33,10 +34,13 @@ export interface ProjectConfig {
   effects?: 'none';
   /** The preset its runs follow (ORC-231): `factory/fantome` replays closed tickets, at the Rapide level, always without effects. */
   preset?: typeof FANTOME;
-  /** Never read by `loadInstance`, nor written by `saveInstance`, which keeps the file's as written. */
-  env?: Record<string, string>;
-  secrets?: Record<string, SecretRef>;
 }
+
+/** An entry of `repos` as the daemon reads it: the instance's part, and its `env` and `secrets` (`REPO_DAEMON_KEYS`). */
+export type RepoEntry = ProjectConfig & { env?: Record<string, string>; secrets?: Record<string, SecretRef> };
+
+/** The keys of a `repos` entry the daemon alone reads: `loadInstance` leaves them out, `saveInstance` keeps them as the file writes them. */
+export const REPO_DAEMON_KEYS = ['env', 'secrets'] as const;
 
 /** The preset of the replay of closed tickets (ORC-231), named here without loading the presets: `isFantome` reads `fantome.name`. */
 export const FANTOME = 'factory/fantome';
@@ -86,7 +90,7 @@ export interface FactoryYml {
   /** `off` disables the baseline of `factory/taille-du-diff` (ORC-381): only a repository's own `max_diff` bounds its diffs. */
   maxDiff?: 'off';
   /** The repositories (ORC-480): an instance key, but for each entry's `env` and `secrets`, the daemon's alone. */
-  repos?: ProjectConfig[];
+  repos?: RepoEntry[];
   /** The secret managers a reference may name besides `env` (ORC-308), each validated against its adapter. */
   secretSources?: Record<string, SecretSourceDecl>;
   /** The key `secrets.json` is encrypted with at rest (ORC-398), read through its reference; without it, the file stays in clear. */
@@ -223,21 +227,14 @@ function parseSection(text: string, keys: string[], env?: NodeJS.ProcessEnv, sea
   // Whatever keys are read: no command runs on repositories written as before ORC-480.
   const old = oldRepoKeys(record);
   if (old.length) throw new FactoryYmlError(old);
-  const kept = Object.fromEntries(keys.map((k) => [k, k === 'repos' ? instanceRepos(record[k]) : record[k]]).filter(([, v]) => v !== undefined && v !== null));
+  const kept = Object.fromEntries(keys.map((k) => [k, k === 'repos' ? reposWithout(record[k], REPO_DAEMON_KEYS) : record[k]]).filter(([, v]) => v !== undefined && v !== null));
   return Object.keys(kept).length === 0 ? undefined : parseFactoryYml(stringify(kept), env, SECRET_SOURCE_KINDS, sealed);
 }
 
-/** The instance's part of each `repos` entry (ORC-480), the only one a section reads: its `env` and `secrets` are the daemon's, read with its environment and sources. */
-function instanceRepos(repos: unknown): unknown {
-  return Array.isArray(repos) ? repos.map((r: unknown) => (isEntry(r) ? Object.fromEntries(Object.entries(r).filter(([k]) => k !== 'env' && k !== 'secrets')) : r)) : repos;
+/** `repos` with `keys` left out of each entry: the instance's view, without the daemon's keys. */
+function reposWithout(repos: unknown, keys: readonly string[]): unknown {
+  return Array.isArray(repos) ? repos.map((r: unknown) => (isRecord(r) ? Object.fromEntries(Object.entries(r).filter(([k]) => !keys.includes(k))) : r)) : repos;
 }
-
-/** `repos` without the `repo_path` its entries may still hold, which `oldRepoKeys` refuses with its own message. */
-function withoutRepoPath(repos: unknown): unknown {
-  return Array.isArray(repos) ? repos.map((r: unknown) => (isEntry(r) ? Object.fromEntries(Object.entries(r).filter(([k]) => k !== 'repo_path')) : r)) : repos;
-}
-
-const isEntry = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 
 /**
  * The repositories as factory.yml wrote them before ORC-480, refused by every read of the file with how to rewrite them, as the
@@ -259,7 +256,7 @@ export function oldRepoKeys(r: Record<string, unknown>): string[] {
   const repos = r['repos'];
   if (Array.isArray(repos)) {
     repos.forEach((entry: unknown, i) => {
-      if (isEntry(entry) && 'repo_path' in entry) found.push(`repos[${i}].repo_path: no longer read (ORC-480): the daemon fetches the repository github names into a mirror of its own; delete it`);
+      if (isRecord(entry) && 'repo_path' in entry) found.push(`repos[${i}].repo_path: no longer read (ORC-480): the daemon fetches the repository github names into a mirror of its own; delete it`);
     });
   }
   return found;
@@ -400,11 +397,13 @@ export function parseFactoryYml(
   }
   if (typeof raw !== 'object' || Array.isArray(raw)) throw new FactoryYmlError(['a YAML object is expected']);
   const r = raw as Record<string, unknown>;
+  // Alone, before anything else: the rest of a file written as before ORC-480 is to rewrite whole.
+  const old = oldRepoKeys(r);
+  if (old.length) throw new FactoryYmlError(old);
   const violations: string[] = [];
   const out: FactoryYml = {};
 
-  // `projects`: refused with how to rewrite it (`oldRepoKeys`).
-  for (const key of Object.keys(r)) if (!(key in SECTIONS) && key !== 'projects') violations.push(`${key}: unknown key`);
+  for (const key of Object.keys(r)) if (!(key in SECTIONS)) violations.push(`${key}: unknown key`);
   const section = (key: string): Record<string, unknown> | undefined => {
     const v = r[key];
     if (v === undefined || v === null) return undefined;
@@ -641,10 +640,7 @@ export function parseFactoryYml(
   }
   const perStepTools = leaf('tools.per_step', section('tools')?.['per_step'], z.record(z.string(), z.array(z.string().min(1))), '`step: [tool, …]` expected');
   if (perStepTools) out.tools = { perStep: perStepTools };
-  const old = oldRepoKeys(r);
-  violations.push(...old);
-  // Before ORC-480, `repos` held only the env and secrets of a project's repository: its refusal above says how to merge them.
-  const repos = 'projects' in r ? undefined : shaped('repos', withoutRepoPath(r['repos']), z.array(repoSchema));
+  const repos = shaped('repos', r['repos'], z.array(repoSchema));
   if (repos) {
     const ids = new Map<string, number>();
     out.repos = repos.map(({ linear_team, authz, env, secrets, ...repo }, i) => {

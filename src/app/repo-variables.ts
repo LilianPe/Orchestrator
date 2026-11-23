@@ -158,8 +158,8 @@ export function pyprojectStart(text: string): string {
 const START_PART: Partial<Record<string, (text: string) => string>> = { 'package.json': packageScripts, 'pyproject.toml': pyprojectStart };
 
 /**
- * Where `verify`, the dry run and the start recipe read a project's forge (ORC-151): the URL of its repository on GitHub as the start
- * resolved it (`projectGithub`, ORC-478), never what a clone's config or an agent says. A replayed ticket's (ORC-376) is its clone at
+ * Where `verify`, the dry run and the start recipe read a project's forge (ORC-151): the URL of its repository on GitHub as its entry in
+ * factory.yml names it (ORC-478, ORC-480), never what a clone's config or an agent says. A replayed ticket's (ORC-376) is its clone at
  * the start, which stands for the repository: never the forge's default branch, which holds the human's PR and all that came after.
  */
 export function makeOriginUrl(): (project: { github: string; mirror: string; replayed?: unknown }) => Promise<string> {

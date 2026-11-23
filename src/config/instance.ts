@@ -2,8 +2,8 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import { isDeepStrictEqual } from 'node:util';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { Document, isMap, isSeq, parseDocument, type YAMLSeq } from 'yaml';
-import { FANTOME, FactoryYmlError, factoryYmlText, parseInstanceKeys, type FactoryYml, type ProjectConfig, type Relay } from './factory-yml.js';
+import { Document, isMap, isSeq, parseDocument, type YAMLMap } from 'yaml';
+import { FANTOME, FactoryYmlError, factoryYmlText, parseInstanceKeys, REPO_DAEMON_KEYS, type FactoryYml, type ProjectConfig, type Relay } from './factory-yml.js';
 import { isSealed, LINEAR_NEEDS_SECRETS_KEY, openSecretsFile, sealSecretsFile } from './secrets-file.js';
 import { validatorsNeeded } from '../core/authz.js';
 
@@ -103,7 +103,7 @@ export function loadInstance(home: string): InstanceConfig {
   return effectiveInstance(text === undefined ? undefined : parseInstanceKeys(text));
 }
 
-/** A repository as factory.yml writes it (ORC-480), without its `env` and `secrets` (`repoNodes`). */
+/** A repository as factory.yml writes it (ORC-480), without the daemon's keys (`repoNodes`). */
 function projectYml({ id, github, linearTeamKey, authz, effects, preset }: ProjectConfig): Record<string, unknown> {
   return {
     id,
@@ -116,21 +116,14 @@ function projectYml({ id, github, linearTeamKey, authz, effects, preset }: Proje
 }
 
 /**
- * The repositories as factory.yml writes them (ORC-480), each with the `env` and `secrets` nodes its entry of the same id holds in the
- * file, as written, comments included: references, never a value read from them.
+ * The repositories as factory.yml writes them (ORC-480), each with the daemon's keys (`env`, `secrets`) its entry of the same id holds
+ * in the file, as their nodes: written as they are, comments included, references never replaced by a value read from them.
  */
-function repoNodes(doc: Document, projects: readonly ProjectConfig[]): YAMLSeq {
+function repoNodes(doc: Document, projects: readonly ProjectConfig[]): unknown {
   const old = doc.get('repos', true);
   const kept = new Map((isSeq(old) ? old.items : []).filter(isMap).map((entry) => [entry.get('id'), entry]));
-  const node = doc.createNode(projects.map(projectYml)) as YAMLSeq;
-  node.items.forEach((item, i) => {
-    const entry = kept.get(projects[i]!.id);
-    for (const key of ['env', 'secrets']) {
-      const value = entry?.get(key, true);
-      if (value != null && isMap(item)) item.set(key, value);
-    }
-  });
-  return node;
+  const daemonKeys = (entry: YAMLMap | undefined) => Object.fromEntries(REPO_DAEMON_KEYS.map((k) => [k, entry?.get(k, true)]).filter(([, v]) => v != null));
+  return doc.createNode(projects.map((p) => ({ ...projectYml(p), ...daemonKeys(kept.get(p.id)) })));
 }
 
 /**
@@ -152,13 +145,13 @@ export function saveInstance(home: string, cfg: Omit<InstanceConfig, 'github'>, 
     ['publicUrl', 'public_url', cfg.publicUrl],
     ['dev', 'dev', cfg.dev],
     ['relay', 'relay', cfg.relay],
-    ['projects', 'repos', cfg.projects],
+    ['projects', 'repos', repoNodes(doc, cfg.projects)],
     ['knowledge', 'knowledge', cfg.knowledge && { repo_path: cfg.knowledge.repoPath }],
   ];
   for (const [key, yml, value] of keys) {
     if (isDeepStrictEqual(before[key], cfg[key])) continue;
     if (value === undefined) doc.delete(yml);
-    else doc.set(yml, key === 'projects' ? repoNodes(doc, cfg.projects) : doc.createNode(value));
+    else doc.set(yml, doc.createNode(value));
   }
   if (keyFile) {
     // A bare `secret_sources:` holds no map to add to.

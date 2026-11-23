@@ -1042,7 +1042,9 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   }
   if (!options.json && serverSecrets) for (const line of serverSecretLines(serverSecrets)) out(line);
   let githubApp;
-  let origin: string | Error;
+  // The entries of this repository (ORC-480), by the GitHub repository its checkout's origin names, as `factory init` wrote it. An
+  // origin git cannot read, or not on GitHub, is said once the checks of the instance are said.
+  const origin = await originGithub(options.repoPath, options.exec).catch((error: unknown) => new Error(errorMessage(error)));
   let validators: string[] = [];
   let startWarnings: string[] = [];
   // What every failure from here reports, the warnings said so far included: `--json` keeps its form whatever stops the check (ORC-449).
@@ -1056,11 +1058,7 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     const instance = effectiveInstance(yml);
     startWarnings = startRefusals(options.home, instance, yml, env).warnings;
     if (!options.json) for (const line of startWarnings) out(line);
-    // The entries of this repository (ORC-480), by the GitHub repository its checkout's origin names, as `factory init` wrote it. An
-    // origin git cannot read, or not on GitHub, is said once the checks of the instance are said.
-    origin = await originGithub(options.repoPath, options.exec).catch((error: unknown) => new Error(errorMessage(error)));
-    const named = origin;
-    projects = typeof named === 'string' ? instance.projects.filter((p) => sameGithub(p.github, named)) : [];
+    projects = typeof origin === 'string' ? instance.projects.filter((p) => sameGithub(p.github, origin)) : [];
     // The project of this repository whose spec gate no validator can pass (ORC-421): a warning, never the verdict.
     validators = validatorWarnings(projects);
     if (!options.json) for (const line of validators) out(line);

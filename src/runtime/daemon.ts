@@ -46,7 +46,7 @@ export interface ProjectRuntime {
    */
   mirror: string;
   /**
-   * The repository on GitHub, `owner/name` (ORC-478), resolved once at the start (`projectGithub`): what the forge, its writer,
+   * The repository on GitHub, `owner/name` (ORC-478), its entry's `github` in factory.yml (ORC-480): what the forge, its writer,
    * the captures, the App's git token and the roles name it by. A replayed ticket's is its project's.
    */
   github: string;

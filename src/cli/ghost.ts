@@ -352,7 +352,8 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
       humanPr: async (github, number) => (await (forge ??= githubForge(home))).pullRequest(github, number),
       // The merge commit fetched from the forge into the mirror, with its history: the start is one of its ancestors.
       humanDiff: async (github, { start, mergeSha }) => {
-        const mirror = await mirrorOf(github);
+        // A missing mirror is made by this fetch.
+        const mirror = mirrors.path(github);
         await mirrors.fetch(mirror, { refspecs: [mergeSha] });
         // The format of the factory's side whatever the user's git config, which would tell the sides apart on a blind screen.
         return mustExec(execCmd, 'git', ['-C', mirror, 'diff', '--no-color', '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/', start, mergeSha]);

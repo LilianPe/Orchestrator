@@ -361,7 +361,6 @@ export async function runInit(d: InitDeps): Promise<void> {
   // The project's other fields (its id, its roles, written by hand) stay. A new one's id is its folder's, made unique: the key of
   // its tickets and labels, which another repository of the same folder name already holds.
   const entry = { ...previous, id: previous?.id ?? freeId(slugify(basename(repoPath), 30), cfg.projects), github: previous?.github ?? github, linearTeamKey: teamKey };
-  const { id } = entry;
   cfg.projects = previous ? cfg.projects.map((p) => (p === previous ? entry : p)) : [...cfg.projects, entry];
   // Smee only on demand (ORC-411): a public channel, for a workstation; a server has its public URL, and --dev changes nothing
   // there, even beside an old channel. The development mode is what --dev writes (ORC-444): the daemon's leave to start the
@@ -395,7 +394,7 @@ export async function runInit(d: InitDeps): Promise<void> {
   saveInstance(d.home, cfg, written?.text, drawn?.file);
   // The maturity report (ORC-410): each point the same detection read, as a card to approve, over a repository `init` proposes.
   // After factory.yml: a database that fails loses none of the answers.
-  if (detected) await printMaturity(d, id, (run) => maturityReport(repoPath, detected, run), cfg.publicUrl ?? `http://localhost:${cfg.port}`);
+  if (detected) await printMaturity(d, entry.id, (run) => maturityReport(repoPath, detected, run), cfg.publicUrl ?? `http://localhost:${cfg.port}`);
   // An App factory.yml already has is set up: its steps would only add noise.
   if (firstSetup && !appDeclared) io.print(githubAppSteps(cfg.publicUrl, d.home, !written));
   if (!written) {
