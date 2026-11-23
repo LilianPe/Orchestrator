@@ -516,7 +516,7 @@ export function createApp(d: ServerDeps): Hono {
     return c.json({ ok: true, defect });
   });
 
-  // The maturity cards `factory init` stored (ORC-410), every project's, and the approval of one by an operator, of the value
+  // The maturity cards `factory init` stored (ORC-410), those of the configuration's projects (ORC-454), and the approval of one by an operator, of the value
   // it was shown at: a detection that changes the value drops it, and an approval of a value no longer stored is refused.
   const approvalLimit = bodyLimit({ maxSize: 64 * 1024, onError: (c) => c.json({ error: 'approval over 64 KB' }, 413) });
   // factory.yml read once per request (ORC-454): every card of a response judged against one version of the file.

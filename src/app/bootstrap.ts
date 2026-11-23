@@ -128,7 +128,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const webDir = join(root, 'web/dist');
   const env = o.env ?? process.env;
   // factory.yml read once (ORC-209): an invalid file stops the start here, and an edit made while the daemon
-  // runs is never half-read by a request; without one, `startRefusals` stops it, config.yaml never read (ORC-199). Its server secrets are read now from
+  // runs is never half-read by a request, but for its `projects`, read again at each request of the maturity cards with the start's
+  // list as their fallback (ORC-454); without one, `startRefusals` stops it, config.yaml never read (ORC-199). Its server secrets are read now from
   // their sources (ORC-398): one that fails stops the start. The sources stay open for the repositories' secrets, read at
   // each setup (ORC-308), whose references' syntax alone is checked here.
   const { yml, sealed, reader: repoSecrets } = await loadSealedFactoryYml(o.home, env);

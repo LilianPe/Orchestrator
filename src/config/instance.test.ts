@@ -53,6 +53,14 @@ describe('instance config', () => {
     expect(currentProjectIds(home, ['x'])).toEqual(['x']);
     writeFileSync(homePaths(home).factoryYml, '');
     expect(currentProjectIds(home, ['x'])).toEqual(['x']);
+    // Not a YAML object, which the daemon refuses: not a file without projects.
+    for (const text of ['proj\n', '- a\n']) {
+      writeFileSync(homePaths(home).factoryYml, text);
+      expect(currentProjectIds(home, ['x']), text).toEqual(['x']);
+    }
+    // A `projects` left out or empty is no project, as the daemon reads it.
+    writeFileSync(homePaths(home).factoryYml, 'port: 4100\nprojects:\n');
+    expect(currentProjectIds(home, ['x'])).toEqual([]);
     expect(currentProjectIds(mkdtempSync(join(tmpdir(), 'factory-home-')), ['x'])).toEqual(['x']);
   });
 
