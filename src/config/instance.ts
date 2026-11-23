@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import { isDeepStrictEqual } from 'node:util';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { Document, isMap, isSeq, parseDocument, type YAMLMap } from 'yaml';
+import { Document, isMap, isSeq, parse, parseDocument, type YAMLMap } from 'yaml';
 import { FANTOME, FactoryYmlError, factoryYmlText, parseInstanceKeys, REPO_DAEMON_KEYS, type FactoryYml, type ProjectConfig, type Relay } from './factory-yml.js';
 import { isSealed, LINEAR_NEEDS_SECRETS_KEY, openSecretsFile, sealSecretsFile } from './secrets-file.js';
 import { validatorsNeeded } from '../core/authz.js';
@@ -101,6 +101,22 @@ export function effectiveInstance(yml: FactoryYml | undefined): InstanceConfig {
 export function loadInstance(home: string): InstanceConfig {
   const text = factoryYmlText(home);
   return effectiveInstance(text === undefined ? undefined : parseInstanceKeys(text));
+}
+
+/**
+ * The ids of factory.yml's projects as the file is now (ORC-454): one `factory init` added while the daemon runs included, one
+ * removed left out. `fallback` when the file is missing, empty (an editor caught between its truncation and its write), not a
+ * YAML object or does not read, which the daemon would refuse; a `repos` left out is no project, as the daemon reads it (a file still written with `projects`, refused, gives `fallback`, ORC-480).
+ */
+export function currentProjectIds(home: string, fallback: readonly string[]): readonly string[] {
+  try {
+    const text = factoryYmlText(home);
+    if (!text?.trim()) return fallback;
+    const raw: unknown = parse(text);
+    return raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? effectiveInstance(parseInstanceKeys(text)).projects.map((p) => p.id) : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 /** A repository as factory.yml writes it (ORC-480), without the daemon's keys (`repoNodes`). */
