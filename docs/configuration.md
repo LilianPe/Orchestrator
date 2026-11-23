@@ -250,7 +250,7 @@ repos:
       DB_SEED_KEY: coffre:kv/app#seed_key
 ```
 
-**Adapters shipped**: `env`, built in (it is not declared under `secret_sources`), and `systemd-creds` (ORC-398, [below](#server-secrets-orc-398)). No adapter that needs a network credential (a cloud KMS, Vault) before ORC-151 and ORC-179 take `verify` and the runs off the host: their code can read the daemon's environment, and with it a manager's credential, worth far more than one secret. The port and how to add an adapter: [`ports/secret-source.md`](ports/secret-source.md).
+**Adapters shipped**: `env`, built in (it is not declared under `secret_sources`), `systemd-creds` (ORC-398, [below](#server-secrets-orc-398)), `file` (ORC-470), and since ORC-418 `sops` (a file encrypted by sops with age or a cloud KMS, [its options](ports/secret-source.md#sops)) and `vault` (HashiCorp Vault's KV v2 engine, [its options](ports/secret-source.md#vault)). The last two hold a manager's credential, worth far more than one secret: they came once `verify` and the runs left the host (ORC-151, ORC-179), whose code could read the daemon's environment. The port and how to add an adapter: [`ports/secret-source.md`](ports/secret-source.md).
 
 - **At startup**, only the syntax is checked: the source is `env` or declared under `secret_sources`, and its adapter accepts the path (for `env`, a variable name). Otherwise the daemon does not start, with the path of the key (`repos[0].secrets.DB_SEED_KEY: its source is neither `env` nor declared under secret_sources`). An unknown `kind`, or options its adapter refuses, are refused the same way. A variable that is not set is **not** refused at startup any more.
 - **At each `setup`** that gets the repository's secrets, the daemon reads the values of the names `.factory/config.yml` declares under `setup_secrets`, and of those only, before the setup's container exists. A value shorter than 8 characters is refused there: sealing it would purge every file holding those letters.
@@ -268,7 +268,7 @@ github: { app_id: 123456, private_key: creds:github-app-key, webhook_secret: cre
 secrets_key: creds:factory-secrets-key
 ```
 
-- Switching sources is a change of `factory.yml`, not of the code. An option of a source written `env:NAME` is resolved at the start and masked.
+- Switching sources is a change of `factory.yml`, not of the code: `private_key: creds:github-app-key` becomes `private_key: vault:factory/github#private_key` with a `vault` source declared ([`sops`](ports/secret-source.md#sops), [`vault`](ports/secret-source.md#vault)). An option of a source written `env:NAME` (Vault's `token: env:VAULT_TOKEN`) is resolved at the start and masked.
 - A Claude account read from another source than `env` keeps the value read at the start; one added since waits for the next start.
 - `factory doctor` says, before the workflows, each server secret in clear (`env`, a `file` source, a GitHub key in `GH_APP_KEY`, `secrets.json` not yet encrypted) and the rotation date of the sealed ones (a warning past 180 days, or when unknown). Never part of its verdict.
 

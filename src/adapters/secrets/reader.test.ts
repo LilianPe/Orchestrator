@@ -60,7 +60,7 @@ describe('openSecretSources', () => {
     expect(() => openSecretSources({ a: { kind: 'toString', options: {} } })).toThrow('secret_sources.a: no adapter toString');
   });
 
-  it('only env, systemd-creds and file are registered: no adapter that needs a network credential before ORC-179', () => {
-    expect(Object.keys(SECRET_SOURCE_KINDS)).toEqual(['env', 'systemd-creds', 'file']);
+  it('registers env, systemd-creds, file, and since ORC-179 took the runs off the host, sops and vault (ORC-418)', () => {
+    expect(Object.keys(SECRET_SOURCE_KINDS)).toEqual(['env', 'systemd-creds', 'file', 'sops', 'vault']);
   });
 });

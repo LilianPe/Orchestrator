@@ -16,7 +16,7 @@ export interface SecretDescription {
 export interface SecretSource {
   /** The value at `path`. Rejects when the source does not hold it or is out of service; its error never carries a value. */
   read(path: string): Promise<string>;
-  /** What it knows of `path` without reading its value, for `doctor`; optional, a source without it knows no rotation date. */
+  /** What it knows of `path`, never its value (it may read it to know `path` is held), for `doctor`; optional, a source without it knows no rotation date. */
   describe?(path: string): Promise<SecretDescription>;
 }
 
@@ -24,6 +24,10 @@ export interface SecretSource {
 export interface SecretSourceKind {
   /** Why `path` is not one of its paths, checked at startup without reading anything; undefined when it is. */
   checkPath(path: string): string | undefined;
+  /** Its options that hold a credential: written `env:NAME`, resolved and masked, refused in clear in factory.yml (ORC-418). */
+  credentialOptions?: readonly string[];
+  /** Its options that name a file holding a credential (`age_key_file`, `token_file`): `doctor` lists each as in clear in a file (ORC-418). */
+  credentialFiles?: readonly string[];
   /** The faults of a declaration's options (every key but `kind`), each prefixed by its key. */
   checkOptions(options: Record<string, unknown>): string[];
   /** The source of a declaration whose options passed `checkOptions`. */
