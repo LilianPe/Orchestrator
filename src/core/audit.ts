@@ -2,7 +2,7 @@ import type { MeasureFacts } from '../store/types.js';
 import { handedToHuman, mergeTime, ticketMeasures, type Rework, type RunMeasure } from './measures.js';
 import type { ReviewFinding } from './review.js';
 import { checkOf, humanReviewOf, stepCosts, type CheckVerdict, type HumanReview, type StepCost } from './run-detail.js';
-import { NO_DEFINITION, type MissRate } from './serious-defect.js';
+import { DEFECT_CATEGORIES, DEFECT_LEVELS, NO_DEFINITION, type DefectCategory, type DefectLevel, type MissCount, type MissRate } from './serious-defect.js';
 import type { Spec } from './spec.js';
 import type { FactoryEvent } from './types.js';
 import { upcast, type StoredEvent } from './upcast.js';
@@ -17,7 +17,8 @@ export type KeptFinding = ReviewFinding & { id: string; sha: string; at: number 
  * A defect a human found in reviewing a PR of the factory (ORC-229), entered from the dashboard: linked to the AI finding that
  * saw it (`findingId`), or not, which makes it a miss of the AI reviewers. `definition`: the definition of a serious defect in
  * force when it was entered (`audit.serious_defect` of factory.yml), null without one; only the defects entered under the
- * definition in force are counted. `enteredBy`: the operator who entered it, as the dashboard names them.
+ * definition in force are counted. `level` and `category` (ORC-378): one entered before them is serious, with no category.
+ * `enteredBy`: the operator who entered it, as the dashboard names them.
  */
 export interface ReviewDefect {
   id: string;
@@ -28,6 +29,8 @@ export interface ReviewDefect {
   findingId: string | null;
   file?: string;
   line?: number;
+  level: DefectLevel;
+  category: DefectCategory | null;
   definition: string | null;
   enteredBy: string;
   at: number;
@@ -64,6 +67,8 @@ export interface AuditSheet {
 }
 
 export { NO_DEFINITION, type MissRate };
+
+const CATEGORY_ORDER: readonly (DefectCategory | null)[] = [...DEFECT_CATEGORIES, null];
 
 /** The PRs of the journal, in the order they were opened, each with where it ended, a merge timed by GitHub when it says. */
 export function prsOf(events: readonly FactoryEvent[]): AuditPr[] {
@@ -117,6 +122,18 @@ export function missRate(period: { since: number; until: number }, defects: read
   if (definition === undefined) return { counted: false, why: NO_DEFINITION };
   const within = defects.filter((d) => d.at >= period.since && d.at < period.until);
   const counted = within.filter((d) => d.definition === definition);
-  const missed = counted.filter((d) => d.findingId === null).length;
-  return { counted: true, definition, defects: counted.length, missed, rate: counted.length ? missed / counted.length : null, leftOut: within.length - counted.length };
+  const levels = DEFECT_LEVELS.map((level) => {
+    const at = counted.filter((d) => d.level === level);
+    const categories = CATEGORY_ORDER.flatMap((category) => {
+      const of = at.filter((d) => d.category === category);
+      return of.length ? [{ category, ...missCount(of) }] : [];
+    });
+    return { level, ...missCount(at), categories };
+  });
+  return { counted: true, definition, ...missCount(counted), leftOut: within.length - counted.length, levels };
+}
+
+function missCount(defects: readonly ReviewDefect[]): MissCount {
+  const missed = defects.filter((d) => d.findingId === null).length;
+  return { defects: defects.length, missed, rate: defects.length ? missed / defects.length : null };
 }

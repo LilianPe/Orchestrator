@@ -21,6 +21,11 @@ const BASELINE = {
   },
 } satisfies OverviewView['baseline'];
 const tile = (o: OverviewView, label: string) => overviewTiles(o).find((t) => t.label === label);
+const counted = (patch: object = {}) => ({
+  counted: true as const, definition: 'Loses data', defects: 0, missed: 0, rate: null, leftOut: 0,
+  levels: [{ level: 'serious' as const, defects: 0, missed: 0, rate: null, categories: [] }, { level: 'important' as const, defects: 0, missed: 0, rate: null, categories: [] }],
+  ...patch,
+});
 
 describe("the AI reviewers' miss rate (ORC-229)", () => {
   it('shows no figure while no definition of a serious defect is set, and says why', () => {
@@ -30,10 +35,40 @@ describe("the AI reviewers' miss rate (ORC-229)", () => {
   });
 
   it('shows the share of the human defects no AI finding saw, and what it is over', () => {
-    const t = tile(view({ aiReviewMisses: { counted: true, definition: 'Loses data', defects: 4, missed: 1, rate: 0.25, leftOut: 2 } }), 'AI reviewers’ miss rate');
+    const t = tile(view({ aiReviewMisses: counted({ defects: 4, missed: 1, rate: 0.25, leftOut: 2 }) }), 'AI reviewers’ miss rate');
     expect(t).toMatchObject({ value: '25%', detail: expect.stringContaining('1 of 4 defects found in human review') });
     expect(t?.detail).toContain('2 entered under another definition');
-    expect(tile(view({ aiReviewMisses: { counted: true, definition: 'Loses data', defects: 0, missed: 0, rate: null, leftOut: 0 } }), 'AI reviewers’ miss rate')?.value).toBe('—');
+    expect(tile(view({ aiReviewMisses: counted() }), 'AI reviewers’ miss rate')?.value).toBe('—');
+  });
+
+  it('gives the rate by level, then by category within each level, the defects with no category said so (ORC-378)', () => {
+    const o = view({
+      aiReviewMisses: counted({
+        defects: 4, missed: 3, rate: 0.75,
+        levels: [
+          {
+            level: 'serious', defects: 3, missed: 2, rate: 2 / 3,
+            categories: [{ category: 'security', defects: 2, missed: 1, rate: 0.5 }, { category: null, defects: 1, missed: 1, rate: 1 }],
+          },
+          { level: 'important', defects: 1, missed: 1, rate: 1, categories: [{ category: 'bypassed_control', defects: 1, missed: 1, rate: 1 }] },
+        ],
+      }),
+    });
+    expect(tile(o, 'AI reviewers’ miss rate')?.value).toBe('75%');
+    expect(tile(o, 'AI reviewers’ miss rate · Serious')).toMatchObject({ value: '67%', detail: '2 of 3 defects without an AI finding · Security: 50% (1 of 2) · No category: 100% (1 of 1)' });
+    expect(tile(o, 'AI reviewers’ miss rate · Important')).toMatchObject({ value: '100%', detail: '1 of 1 defect without an AI finding · Bypassed control: 100% (1 of 1)' });
+    // A level with no defect: no rate, never a zero.
+    expect(tile(view({ aiReviewMisses: counted() }), 'AI reviewers’ miss rate · Important')).toMatchObject({ value: '—', detail: 'no defect' });
+    // Not counted: no figure by level either.
+    expect(tile(view({ aiReviewMisses: { counted: false, why: 'no definition' } }), 'AI reviewers’ miss rate · Serious')).toBeUndefined();
+  });
+
+  it('shows the total and no level from an older server, whose miss rate has no levels (ORC-378)', () => {
+    const { levels: _, ...older } = counted({ defects: 2, missed: 1, rate: 0.5 });
+    const o = view({ aiReviewMisses: older });
+    expect(tile(o, 'AI reviewers’ miss rate')?.value).toBe('50%');
+    expect(overviewTiles(o).filter((t) => t.label.startsWith('AI reviewers’ miss rate ·'))).toEqual([]);
+    expect(() => renderToStaticMarkup(createElement(Overview, { overview: o }))).not.toThrow();
   });
 });
 

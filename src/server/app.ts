@@ -11,6 +11,7 @@ import { maskTranscriptLine, TRANSCRIPT_RETENTION_MS } from '../adapters/runner/
 import type { ReplaySource } from '../ghost/delegate.js';
 import type { SignIn } from '../adapters/forge/github-login.js';
 import { auditSheet, humanReviewed, prsOf, type ReviewDefect } from '../core/audit.js';
+import { DEFECT_CATEGORIES, DEFECT_LEVELS } from '../core/serious-defect.js';
 import type { BusMessage, EventBus } from './live-feed.js';
 import type { Clock } from '../core/clock.js';
 import type { DryRun } from '../core/dry-run.js';
@@ -114,6 +115,8 @@ const defectEntry = z
   .object({
     prNumber: z.number().int().positive(),
     description: z.string().trim().min(1).max(4_000),
+    level: z.enum(DEFECT_LEVELS),
+    category: z.enum(DEFECT_CATEGORIES),
     findingId: z.string().min(1).max(200).optional(),
     file: z.string().trim().min(1).max(500).optional(),
     line: z.number().int().positive().optional(),
@@ -489,7 +492,7 @@ export function createApp(d: ServerDeps): Hono {
     const parsed = defectEntry.safeParse(await c.req.json().catch(() => undefined));
     if (!parsed.success) {
       const fields = [...new Set(parsed.error.issues.map((i) => i.path.join('.') || 'body'))];
-      return c.json({ error: `expected { prNumber, description, findingId?, file?, line? }: ${fields.join(', ')} at fault` }, 400);
+      return c.json({ error: `expected { prNumber, description, level, category, findingId?, file?, line? }: ${fields.join(', ')} at fault` }, 400);
     }
     // Only what the entry is checked against: the ticket's PRs and its kept findings, not the whole sheet.
     const projectId = c.req.param('projectId');
@@ -506,6 +509,8 @@ export function createApp(d: ServerDeps): Hono {
       prNumber: entry.prNumber,
       description: entry.description,
       findingId: entry.findingId ?? null,
+      level: entry.level,
+      category: entry.category,
       ...(entry.file === undefined ? {} : { file: entry.file }),
       ...(entry.line === undefined ? {} : { line: entry.line }),
       definition,

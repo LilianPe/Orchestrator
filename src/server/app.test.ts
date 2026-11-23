@@ -339,15 +339,15 @@ describe('server', () => {
     it('takes a defect found in human review, linked to an AI finding of the ticket or not, with its operator and the definition in force', async () => {
       const { app, store } = await setup({ seriousDefect: 'loses data' });
       await reviewedPr(store);
-      const linked = await post(app, { prNumber: 3, description: 'header row missing', findingId: 'rv1:correctness:0', file: 'a.ts', line: 2 });
+      const linked = await post(app, { prNumber: 3, description: 'header row missing', level: 'serious', category: 'data', findingId: 'rv1:correctness:0', file: 'a.ts', line: 2 });
       expect(linked.status).toBe(200);
-      expect((await post(app, { prNumber: 3, description: 'no empty-list case' })).status).toBe(200);
+      expect((await post(app, { prNumber: 3, description: 'no empty-list case', level: 'important', category: 'wrong_behavior' })).status).toBe(200);
       // Both in the same millisecond: in no order between them.
       const kept = await store.ticketDefects('p', 'REL-1');
       expect(kept).toHaveLength(2);
       expect(kept).toEqual(expect.arrayContaining([
-        { id: expect.any(String), projectId: 'p', ticketId: 'REL-1', prNumber: 3, description: 'header row missing', findingId: 'rv1:correctness:0', file: 'a.ts', line: 2, definition: 'loses data', enteredBy: 'dashboard:local', at: 10 },
-        { id: expect.any(String), projectId: 'p', ticketId: 'REL-1', prNumber: 3, description: 'no empty-list case', findingId: null, definition: 'loses data', enteredBy: 'dashboard:local', at: 10 },
+        { id: expect.any(String), projectId: 'p', ticketId: 'REL-1', prNumber: 3, description: 'header row missing', findingId: 'rv1:correctness:0', file: 'a.ts', line: 2, level: 'serious', category: 'data', definition: 'loses data', enteredBy: 'dashboard:local', at: 10 },
+        { id: expect.any(String), projectId: 'p', ticketId: 'REL-1', prNumber: 3, description: 'no empty-list case', findingId: null, level: 'important', category: 'wrong_behavior', definition: 'loses data', enteredBy: 'dashboard:local', at: 10 },
       ]));
       expect((await (await app.request('/api/audit/p/REL-1')).json()).defects).toHaveLength(2);
     });
@@ -355,20 +355,34 @@ describe('server', () => {
     it('refuses a defect on an unknown ticket, a PR not of the ticket, a finding not of the ticket, or an empty description; and one from another origin', async () => {
       const { app, store } = await setup();
       await reviewedPr(store);
-      expect((await app.request('/api/audit/p/REL-9/defects', { method: 'POST', body: JSON.stringify({ prNumber: 3, description: 'x' }) })).status).toBe(404);
-      for (const bad of [{ prNumber: 4, description: 'x' }, { prNumber: 3, description: 'x', findingId: 'other:correctness:0' }, { prNumber: 3, description: '  ' }, { prNumber: 3 }, 'not json']) {
+      const ok = { level: 'serious', category: 'security' };
+      expect((await app.request('/api/audit/p/REL-9/defects', { method: 'POST', body: JSON.stringify({ prNumber: 3, description: 'x', ...ok }) })).status).toBe(404);
+      for (const bad of [
+        { prNumber: 4, description: 'x', ...ok },
+        { prNumber: 3, description: 'x', findingId: 'other:correctness:0', ...ok },
+        { prNumber: 3, description: '  ', ...ok },
+        { prNumber: 3, ...ok },
+        'not json',
+        // ORC-378: a level and a category, each from its closed list.
+        { prNumber: 3, description: 'x', category: 'security' },
+        { prNumber: 3, description: 'x', level: 'serious' },
+        { prNumber: 3, description: 'x', level: 'minor', category: 'security' },
+        { prNumber: 3, description: 'x', level: 'serious', category: 'performance' },
+        { prNumber: 3, description: 'x', level: 'serious', category: null },
+      ]) {
         expect((await post(app, bad)).status, JSON.stringify(bad)).toBe(400);
       }
       // The refusal names the field at fault.
-      expect((await (await post(app, { prNumber: 3, description: 'x', line: 2.5 })).json()).error).toContain('line');
-      expect((await post(app, { prNumber: 3, description: 'x' }, { origin: 'https://evil.test' })).status).toBe(403);
+      expect((await (await post(app, { prNumber: 3, description: 'x', line: 2.5, ...ok })).json()).error).toContain('line');
+      expect((await (await post(app, { prNumber: 3, description: 'x', level: 'serious', category: 'performance' })).json()).error).toContain('category');
+      expect((await post(app, { prNumber: 3, description: 'x', ...ok }, { origin: 'https://evil.test' })).status).toBe(403);
       expect(await store.ticketDefects('p', 'REL-1')).toEqual([]);
     });
 
     it('counts nothing on the overview while no definition of a serious defect is set, and says why (ORC-153)', async () => {
       const { app, store } = await setup();
       await reviewedPr(store);
-      expect((await post(app, { prNumber: 3, description: 'no empty-list case' })).status).toBe(200);
+      expect((await post(app, { prNumber: 3, description: 'no empty-list case', level: 'serious', category: 'data' })).status).toBe(200);
       const o = await (await app.request('/api/overview?since=0&until=100')).json();
       expect(o.aiReviewMisses).toEqual({ counted: false, why: expect.stringContaining('audit.serious_defect') });
     });
@@ -376,10 +390,20 @@ describe('server', () => {
     it('gives the miss rate on the overview once the definition is set, over the defects entered under it', async () => {
       const { app, store } = await setup({ seriousDefect: 'loses data' });
       await reviewedPr(store);
-      await post(app, { prNumber: 3, description: 'header row missing', findingId: 'rv1:correctness:0' });
-      await post(app, { prNumber: 3, description: 'no empty-list case' });
+      await post(app, { prNumber: 3, description: 'header row missing', level: 'serious', category: 'data', findingId: 'rv1:correctness:0' });
+      await post(app, { prNumber: 3, description: 'no empty-list case', level: 'serious', category: 'wrong_behavior' });
+      await post(app, { prNumber: 3, description: 'typo in a log line', level: 'important', category: 'wrong_behavior' });
       const o = await (await app.request('/api/overview?since=0&until=100')).json();
-      expect(o.aiReviewMisses).toEqual({ counted: true, definition: 'loses data', defects: 2, missed: 1, rate: 0.5, leftOut: 0 });
+      expect(o.aiReviewMisses).toEqual({
+        counted: true, definition: 'loses data', defects: 3, missed: 2, rate: 2 / 3, leftOut: 0,
+        levels: [
+          {
+            level: 'serious', defects: 2, missed: 1, rate: 0.5,
+            categories: [{ category: 'data', defects: 1, missed: 0, rate: 0 }, { category: 'wrong_behavior', defects: 1, missed: 1, rate: 1 }],
+          },
+          { level: 'important', defects: 1, missed: 1, rate: 1, categories: [{ category: 'wrong_behavior', defects: 1, missed: 1, rate: 1 }] },
+        ],
+      });
     });
   });
 
@@ -703,7 +727,7 @@ describe('server', () => {
       expect(submitted[0]!.payload).toEqual({ runId: 'r1', pause: true });
       await store.putTicket({ ...newTicketState('p', 'REL-1', 'Export', 'dev', 1), prNumber: 3 });
       await store.recordEvent({ ...TRUSTED, id: 'o', type: 'pr.opened', at: 2, projectId: 'p', ticketId: 'REL-1', payload: { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1' } } as FactoryEvent);
-      const defect = await app.request('/api/audit/p/REL-1/defects', { method: 'POST', headers, body: JSON.stringify({ prNumber: 3, description: 'header row missing' }) });
+      const defect = await app.request('/api/audit/p/REL-1/defects', { method: 'POST', headers, body: JSON.stringify({ prNumber: 3, description: 'header row missing', level: 'serious', category: 'data' }) });
       expect(defect.status).toBe(200);
       expect((await defect.json()).defect.enteredBy).toBe('github:armand');
     });

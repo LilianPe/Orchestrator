@@ -1,4 +1,5 @@
 import { formatDuration, formatTokens, percent, plural } from './Flow.js';
+import type { DefectCategory, DefectLevel, MissCount } from '../../src/core/serious-defect.js';
 import type { BaselineValueView, BaselineView, MissRateView, OverviewView, ReworkCause } from './types.js';
 
 /** The measures of the MVP doc that nothing in the factory feeds yet, and the ticket that brings each (ORC-223). */
@@ -15,6 +16,11 @@ export const REWORK_LABELS: Record<ReworkCause, string> = {
   sent_back: 'sent back to dev',
   changes_requested: 'changes requested',
 };
+
+/** A defect's level and category in the dashboard's words (ORC-378); a defect entered before them has no category. */
+export const LEVEL_LABELS: Record<DefectLevel, string> = { serious: 'Serious', important: 'Important' };
+export const CATEGORY_LABELS: Record<DefectCategory, string> = { security: 'Security', data: 'Data', wrong_behavior: 'Wrong behavior', bypassed_control: 'Bypassed control' };
+export const categoryLabel = (c: DefectCategory | null): string => (c === null ? 'No category' : CATEGORY_LABELS[c]);
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const orDash = (v: number | null, format: (n: number) => string) => (v === null ? '—' : format(v));
@@ -56,6 +62,22 @@ function missRateTile(m: MissRateView): Tile {
   };
 }
 
+/**
+ * The miss rate by level (ORC-378), every level, each with its categories: only once counted. The serious level is the one a
+ * threshold on defects is to read (ORC-143).
+ */
+function missRateByLevel(m: MissRateView): Tile[] {
+  if (!m.counted || !m.levels) return [];
+  const share = (c: MissCount) => `${orDash(c.rate, percent)} (${c.missed} of ${c.defects})`;
+  return m.levels.map((l) => ({
+    label: `AI reviewers’ miss rate · ${LEVEL_LABELS[l.level]}`,
+    value: orDash(l.rate, percent),
+    detail: l.defects
+      ? join(`${l.missed} of ${plural(l.defects, 'defect')} without an AI finding`, ...l.categories.map((c) => `${categoryLabel(c.category)}: ${share(c)}`))
+      : 'no defect',
+  }));
+}
+
 /** The figures of the overview: the four headline ones face the baseline, then the human messages and the quality signals. */
 export function overviewTiles(o: OverviewView): Tile[] {
   const verdicts = o.red.verified + o.red.wouldHaveBlocked;
@@ -92,7 +114,7 @@ export function overviewTiles(o: OverviewView): Tile[] {
     { label: 'Reverted within 14 days', value: o.reverted.known ? `${o.reverted.yes} of ${o.reverted.known}` : '—', detail: 'merged tickets where it is known' },
     { label: 'CI per merged ticket', value: orDash(o.ciPerMerged.mean, formatDuration), detail: without(o.ciPerMerged.leftOut) },
     { label: 'Red check', value: verdicts ? `${o.red.verified} verified` : '—', detail: verdicts ? `would have blocked ${o.red.wouldHaveBlocked}` : 'no verdict' },
-    ...(o.aiReviewMisses ? [missRateTile(o.aiReviewMisses)] : []),
+    ...(o.aiReviewMisses ? [missRateTile(o.aiReviewMisses), ...missRateByLevel(o.aiReviewMisses)] : []),
   ];
 }
 

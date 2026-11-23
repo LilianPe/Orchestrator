@@ -83,14 +83,14 @@ describe('overview (ORC-299)', () => {
   });
 
   it('counts no defect of the audit sheets while no definition of a serious defect is set, and says why (ORC-229)', () => {
-    const defect = { id: 'd1', projectId: 'p', ticketId: 'A', prNumber: 1, description: 'x', findingId: null, definition: null, enteredBy: 'dashboard:local', at: 11 * DAY };
+    const defect = { id: 'd1', projectId: 'p', ticketId: 'A', prNumber: 1, description: 'x', findingId: null, level: 'serious' as const, category: null, definition: null, enteredBy: 'dashboard:local', at: 11 * DAY };
     expect(overview(PERIOD, []).aiReviewMisses).toEqual({ counted: false, why: NO_DEFINITION });
     expect(overview(PERIOD, [], 0, null, { defects: [defect] }).aiReviewMisses).toEqual({ counted: false, why: NO_DEFINITION });
   });
 
   it("gives the AI reviewers' miss rate over the defects entered in the period under the definition in force (ORC-229)", () => {
-    const d = (id: string, at: number, findingId: string | null) => ({ id, projectId: 'p', ticketId: 'A', prNumber: 1, description: 'x', findingId, definition: 'loses data', enteredBy: 'dashboard:local', at });
+    const d = (id: string, at: number, findingId: string | null) => ({ id, projectId: 'p', ticketId: 'A', prNumber: 1, description: 'x', findingId, level: 'serious' as const, category: 'data' as const, definition: 'loses data', enteredBy: 'dashboard:local', at });
     const o = overview(PERIOD, [], 0, null, { defects: [d('d1', 11 * DAY, null), d('d2', 12 * DAY, 'r:correctness:0'), d('d3', 200 * DAY, null)], definition: 'loses data' });
-    expect(o.aiReviewMisses).toEqual({ counted: true, definition: 'loses data', defects: 2, missed: 1, rate: 0.5, leftOut: 0 });
+    expect(o.aiReviewMisses).toMatchObject({ counted: true, definition: 'loses data', defects: 2, missed: 1, rate: 0.5, leftOut: 0 });
   });
 });

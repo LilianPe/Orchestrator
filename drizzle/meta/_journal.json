@@ -127,6 +127,13 @@
       "when": 1795227620876,
       "tag": "0017_maturity_cards",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1795396411722,
+      "tag": "0018_review_defect_level",
+      "breakpoints": true
     }
   ]
 }
