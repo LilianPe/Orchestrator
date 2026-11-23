@@ -59,7 +59,7 @@ function missRateTile(m: MissRateView): Tile {
 
 /**
  * The miss rate by level (ORC-378), every level, each with its categories: only once counted. The serious level is the one a
- * threshold on defects reads (ORC-143).
+ * threshold on defects is to read (ORC-143).
  */
 function missRateByLevel(m: MissRateView): Tile[] {
   if (!m.counted) return [];

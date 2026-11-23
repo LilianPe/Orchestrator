@@ -6,7 +6,7 @@
 export const NO_DEFINITION =
   'No definition of a serious defect is set (audit.serious_defect in factory.yml, ORC-153): the defects of the audit sheets are kept, not counted.';
 
-/** The level of a defect (ORC-153, ORC-378): serious first, the only level a threshold on defects reads (ORC-143: no serious defect). */
+/** The level of a defect (ORC-153, ORC-378): serious first, the only level a threshold on defects is to read (ORC-143: no serious defect; none reads them yet). */
 export const DEFECT_LEVELS = ['serious', 'important'] as const;
 export type DefectLevel = (typeof DEFECT_LEVELS)[number];
 
