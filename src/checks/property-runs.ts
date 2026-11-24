@@ -178,8 +178,8 @@ const names = (tests: readonly ReadTest[], file: string): boolean => tests.some(
 /**
  * The property tests run again with the factory's settings, `sources` their text at the commit (none read for Python), by `lines`:
  * the repository's test command of each language, vitest or jest for JS and TS, pytest for Python, the files appended. The JS and
- * TS files are rewritten where they are checked out. Each run is judged by its report, as the commands are: a failing test that
- * counts fails it, a run that names no test of its own (it did not load, a hook failed) fails it on any exit but 0, and an exit
+ * TS files are rewritten where they are checked out. Each run is judged by its report: a failing test that counts fails it, a
+ * run without a report that names its tests (it did not load, a hook failed) fails it on any exit but 0, and an exit
  * no test carries (a coverage threshold missed on these few files) does not. No rerun when no file ran again and none failed.
  */
 export async function rerunProperties(
