@@ -117,6 +117,11 @@ export interface TicketMeasures {
   runs: RunMeasure[];
   /** Each version of the spec the factory published (`publish_spec` done), in order, with its count of « for any input » properties (ORC-261). */
   specs: { version: number; properties: number }[];
+  /**
+   * Each rerun of the property tests by `verify` (ORC-261), in journal order, with the factory's runs and seed. `found`: it failed
+   * where the repository's commands had passed, a defect a property found that the examples did not.
+   */
+  propertyReruns: { id: string; runs: number; seed: number; found: boolean }[];
 }
 
 /** One attempt as measured from its record (ORC-223): never its text. */
@@ -409,6 +414,7 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
     reviewRounds: { ai: facts.runs.filter(reviewed).length, human: facts.effects.filter(handedToHuman).length },
     runs,
     specs: facts.effects.flatMap((r) => (r.status === 'done' && r.effect.kind === 'publish_spec' ? [{ version: r.effect.version, properties: r.effect.spec.properties?.length ?? 0 }] : [])),
+    propertyReruns: events.flatMap((e) => ((e.type === 'verify.passed' || e.type === 'verify.failed') && e.payload.properties ? [{ id: e.id, runs: e.payload.properties.runs, seed: e.payload.properties.seed, found: e.payload.properties.found }] : [])),
   };
 }
 

@@ -45,6 +45,12 @@ describe('the publish effect (ORC-125)', () => {
     expect(out.effects).toEqual([{ kind: 'publish', runId: 'r1', job: 'dev', sha: 'abc', quality }]);
   });
 
+  it('carries the property tests verify ran again, with their runs and seed, to the check it publishes (ORC-261)', () => {
+    const properties = { runs: 1000, seed: 42, files: ['a.property-1.test.ts'], unsettled: [], notRun: [], found: false };
+    const out = decide(verifying(), ev('verify.passed', { runId: 'r1', job: 'dev', sha: 'abc', properties }), workflow);
+    expect(out.effects).toEqual([{ kind: 'publish', runId: 'r1', job: 'dev', sha: 'abc', properties }]);
+  });
+
   it('the ticket stays held while it publishes: no next run starts beside it, and a stop fences its result', () => {
     const event = passed();
     const t = after(verifying(), event, decide(verifying(), event, workflow));

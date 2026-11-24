@@ -15,6 +15,8 @@ import type { RegistryOpener } from '../checks/registry.js';
 import { freezeTests } from '../checks/freeze.js';
 import { VISUAL_PROOF_CHECK } from '../checks/visual-proof.js';
 import { QUALITY_SCRIPT } from '../checks/diff-quality.js';
+import { underFactorySettings } from '../checks/property-runs.js';
+import { REPORT_FLAGS } from '../checks/red.js';
 import type { PreviewRecipe } from '../knowledge/preview-recipe.js';
 import { RepoConfigRefusal } from '../config/repo-config.js';
 import { BUNDLE_TARGET } from '../publish/extract.js';
@@ -1667,5 +1669,81 @@ describe('factory/qualité-diff (ORC-280)', () => {
     await runCleanVerify(req);
     expect(sandboxes.ran.find((r) => r.command.includes('vitest run'))!.command).not.toContain('--coverage');
     expect(argv[6]).toBe('');
+  });
+});
+
+describe('the property tests run again with the factory settings (ORC-261)', () => {
+  const PROPERTY = 'src/orc-1.property-1.test.ts';
+  const withProperty = (over: Partial<CleanVerifyRequest> = { properties: 1 }) => {
+    const s = setup({ commands: ['npx vitest run'], ...over });
+    write(s.repo, PROPERTY, "import fc from 'fast-check';\nfc.assert(fc.property(fc.integer(), () => true), { numRuns: 5 });\n");
+    commit(s.repo, 'property');
+    return s;
+  };
+  const rerunLine = `npx vitest run --passWithNoTests '${PROPERTY}'`;
+  /** Each file the rerun wrote in the sandbox, its chunks put back together. */
+  const written = (ran: { command: string }[]) => {
+    const files = new Map<string, string>();
+    for (const r of ran) {
+      const chunk = /printf %s (\S*) \| base64 -d >>? '([^']+)'/.exec(r.command);
+      if (chunk) files.set(chunk[2]!, (files.get(chunk[2]!) ?? '') + chunk[1]);
+    }
+    return [...files].map(([path, b64]) => ({ path, content: Buffer.from(b64, 'base64').toString() }));
+  };
+
+  it('reruns them once the commands pass, their settings over the file, and says the runs and the seed', async () => {
+    const { sandboxes, req } = withProperty();
+    sandboxes.answer = (command) => (command.includes('npx vitest run') ? { stdout: '', stderr: '', code: 0 } : undefined);
+    const res = await runCleanVerify(req);
+    expect(res).toMatchObject({ ok: true, failures: [], properties: { runs: 1000, files: [PROPERTY], unsettled: [], notRun: [], found: false } });
+    const rerun = sandboxes.ran.filter((r) => r.box === 'r1-verify' && r.command.includes(rerunLine));
+    // With its runner's report, which decides; the factory's settings are in the file, none in the environment of the code under test.
+    expect(rerun).toEqual([expect.objectContaining({ command: expect.stringContaining(`${rerunLine} ${REPORT_FLAGS.vitest}`) })]);
+    expect(Object.keys(rerun[0]!.env).filter((k) => k.startsWith('FACTORY_PROPERTY'))).toEqual([]);
+    expect(written(sandboxes.ran)).toEqual([{ path: PROPERTY, content: expect.stringContaining(`numRuns: 1000, seed: ${res.properties!.seed}, path: undefined`) }]);
+  });
+
+  it('a red rerun fails verify, with the runs and the seed, and counts as a defect the properties found', async () => {
+    const { sandboxes, req } = withProperty();
+    sandboxes.answer = (command) => (command.includes('npx vitest run') ? { stdout: 'Property failed after 412 tests', stderr: '', code: command.includes(rerunLine) ? 1 : 0 } : undefined);
+    const res = await runCleanVerify(req);
+    expect(res.ok).toBe(false);
+    expect(res.properties!.found).toBe(true);
+    expect(res.failures).toEqual([{ command: rerunLine, exitCode: 1, output: expect.stringMatching(new RegExp(`^Property tests rerun by the factory: 1000 runs, seed ${res.properties!.seed},[\\s\\S]*412 tests`)) }]);
+  });
+
+  it('writes a property test past what one argument may weigh, chunk by chunk', async () => {
+    const { repo, sandboxes, req } = withProperty();
+    const big = `${"import fc from 'fast-check';\nfc.assert(p);\n"}// ${'x'.repeat(200_000)}\n`;
+    write(repo, PROPERTY, big);
+    commit(repo, 'big');
+    sandboxes.answer = (command) => (command.includes('npx vitest run') ? { stdout: '', stderr: '', code: 0 } : undefined);
+    const res = await runCleanVerify(req);
+    expect(written(sandboxes.ran)).toEqual([{ path: PROPERTY, content: underFactorySettings(PROPERTY, big, { runs: 1000, seed: res.properties!.seed }).source }]);
+  });
+
+  it('a command that passed once its failure was a known flaky test still has its properties run again', async () => {
+    const state = mkdtempSync(join(tmpdir(), 'factory-flaky-'));
+    const plan = { head: { 'cart total': ['failed' as const] }, base: { 'cart total': ['passed' as const] } };
+    const { repo, sandboxes, req } = setup({ commands: ['node bin/vitest run'], properties: 1, knownFlaky: [{ test: 'src/a.test.ts > cart total', coversFrozen: false }] }, undefined, { 'bin/vitest': fakeVitest(state, plan) });
+    write(repo, PROPERTY, "import fc from 'fast-check';\nfc.assert(p);\n");
+    commit(repo, 'property');
+    const line = `node bin/vitest run --passWithNoTests '${PROPERTY}'`;
+    sandboxes.answer = (command) => (command.includes(line) ? { stdout: '', stderr: '', code: 0 } : undefined);
+    const res = await runCleanVerify(req);
+    expect(res).toMatchObject({ ok: true, failures: [], properties: { files: [PROPERTY], found: false } });
+    expect(sandboxes.ran.find((r) => r.command.includes(line))?.box).toBe('r1-verify');
+  });
+
+  it('reruns nothing when a command failed, nor without approved properties', async () => {
+    const red = withProperty();
+    red.sandboxes.answer = (command) => (command.includes('npx vitest run') ? { stdout: '', stderr: '', code: 1 } : undefined);
+    const failed = await runCleanVerify(red.req);
+    expect(failed.properties).toBeUndefined();
+    expect(red.sandboxes.ran.map((r) => r.command)).not.toContain(rerunLine);
+    const none = withProperty({});
+    none.sandboxes.answer = (command) => (command.includes('npx vitest run') ? { stdout: '', stderr: '', code: 0 } : undefined);
+    expect((await runCleanVerify(none.req)).properties).toBeUndefined();
+    expect(none.sandboxes.ran.map((r) => r.command)).not.toContain(rerunLine);
   });
 });

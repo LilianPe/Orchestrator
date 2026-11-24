@@ -30,7 +30,7 @@ import { DaemonBase, redBaseKey } from './daemon-base.js';
 import type { ProjectRuntime } from './daemon.js';
 
 /** A verdict on a commit: what ran on it, absent when it was found green before and nothing ran again. */
-type Verified = VerifyResult & { sha?: string | undefined; commands?: readonly string[]; visual?: CleanVerifyResult['visual']; flaky?: CleanVerifyResult['flaky']; diffClass?: CleanVerifyResult['diffClass']; quality?: CleanVerifyResult['quality'] };
+type Verified = VerifyResult & { sha?: string | undefined; commands?: readonly string[]; visual?: CleanVerifyResult['visual']; flaky?: CleanVerifyResult['flaky']; diffClass?: CleanVerifyResult['diffClass']; quality?: CleanVerifyResult['quality']; properties?: CleanVerifyResult['properties'] };
 
 /** A human's push is checked in a fresh clone of the forge (ORC-159): without sandboxes there is none, whatever stands in for `verify`. */
 const PUSH_NEEDS_SANDBOXES = 'no sandbox (FACTORY_CONTAINER_CLI): a commit a human pushed is only checked in a fresh clone of the forge, which needs the sandboxes.';
@@ -298,6 +298,7 @@ export abstract class DaemonChecks extends DaemonBase {
     if (!sandboxes || !runsDir || !originUrl) throw new Error('runsDir and originUrl are required with sandboxes');
     if (!t.branch || (!over.head && !t.worktreePath)) throw new Error(`no branch or no worktree for ${t.ticketId}`);
     const untrusted = await this.untrustedMark(project, t);
+    const properties = approvedProperties(t.spec);
     // A place the engine mounts from, new for each check: one cut can leave its own behind.
     const workDir = join(runsDir, runId, `verify-${randomUUID()}`);
     mkdirSync(workDir, { recursive: true });
@@ -320,6 +321,7 @@ export abstract class DaemonChecks extends DaemonBase {
         knownFlaky: await this.d.store.knownFlakyTests(project.id),
         ...over,
         ...(goesThroughFreeze(t, job) ? { frozen: t.frozenTests! } : {}),
+        ...(properties ? { properties } : {}),
         ...(untrusted ? { untrusted } : {}),
         ...(this.d.registries ? { registries: this.d.registries } : {}),
         env: async (config) => (await this.repoVariablesOf(project, config)).env,
@@ -427,8 +429,8 @@ export abstract class DaemonChecks extends DaemonBase {
     }
     await this.submitResult(
       res.ok
-        ? { ...base, type: 'verify.passed', payload: { ...payload, ...(res.sha ? { sha: res.sha } : {}), ...(res.commands ? { commands: res.commands } : {}), ...(output ? { output } : {}), ...(res.visual ? { visualProof: res.visual.proof } : {}), ...(res.flaky ? { flaky: res.flaky } : {}), ...(res.diffClass ? { diffClass: res.diffClass } : {}), ...(res.quality ? { quality: res.quality } : {}) } }
-        : { ...base, type: 'verify.failed', payload: { ...payload, failures: res.failures.map((f) => ({ ...f, output: logExcerpt(f.output) })), ...(res.tree ? { tree: res.tree } : {}), ...(res.flaky ? { flaky: res.flaky } : {}) } },
+        ? { ...base, type: 'verify.passed', payload: { ...payload, ...(res.sha ? { sha: res.sha } : {}), ...(res.commands ? { commands: res.commands } : {}), ...(output ? { output } : {}), ...(res.visual ? { visualProof: res.visual.proof } : {}), ...(res.flaky ? { flaky: res.flaky } : {}), ...(res.diffClass ? { diffClass: res.diffClass } : {}), ...(res.quality ? { quality: res.quality } : {}), ...(res.properties ? { properties: res.properties } : {}) } }
+        : { ...base, type: 'verify.failed', payload: { ...payload, failures: res.failures.map((f) => ({ ...f, output: logExcerpt(f.output) })), ...(res.tree ? { tree: res.tree } : {}), ...(res.flaky ? { flaky: res.flaky } : {}), ...(res.properties ? { properties: res.properties } : {}) } },
     );
   }
 

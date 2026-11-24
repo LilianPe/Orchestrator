@@ -24,7 +24,7 @@ describe('ticketMeasures (ORC-235)', () => {
     expect(ticketMeasures('p', 'REL-1', facts({}))).toEqual({
       projectId: 'p', ticketId: 'REL-1', mergedAt: null, tokens: null, attempts: 0, attemptsWithoutTokens: 0, usageLimitShare: null,
       firstTry: null, reworks: [], humanReviewMinutes: null, revertedWithin14Days: null, revertWindowEndsAt: null, ciCost: null, messages: [], red: [],
-      startedAt: null, leadTimeMs: null, workMs: 0, costUsd: 0, reviewRounds: { ai: 0, human: 0 }, runs: [], specs: [],
+      startedAt: null, leadTimeMs: null, workMs: 0, costUsd: 0, reviewRounds: { ai: 0, human: 0 }, runs: [], specs: [], propertyReruns: [],
     });
   });
 
@@ -405,5 +405,18 @@ describe('cost, duration and review rounds of each run (ORC-223)', () => {
       ],
     }));
     expect(m.specs).toEqual([{ version: 1, properties: 0 }, { version: 2, properties: 1 }]);
+  });
+
+  it('keeps each rerun of the property tests by verify, and whether a property found a defect the examples did not (ORC-261)', () => {
+    const rerun = (seed: number, found: boolean) => ({ runs: 1000, seed, files: ['a.property-1.test.ts'], unsettled: [], notRun: [], found });
+    const failures = [{ command: 'npx vitest run', exitCode: 1, output: '' }];
+    const m = ticketMeasures('p', 'REL-1', facts({
+      events: [
+        ev('v1', 'verify.failed', 10, { runId: 'r1', job: 'build', failures, properties: rerun(7, true) }),
+        ev('v2', 'verify.failed', 20, { runId: 'r2', job: 'build', failures }),
+        ev('v3', 'verify.passed', 30, { runId: 'r3', job: 'build', properties: rerun(8, false) }),
+      ],
+    }));
+    expect(m.propertyReruns).toEqual([{ id: 'v1', runs: 1000, seed: 7, found: true }, { id: 'v3', runs: 1000, seed: 8, found: false }]);
   });
 });

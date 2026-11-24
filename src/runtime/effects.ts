@@ -44,6 +44,7 @@ const publishFacts = (t: TicketState, c: Extract<Effect, { kind: 'publish' }>) =
   ticketId: t.ticketId, title: t.title, sha: c.sha, ...(c.commands ? { commands: c.commands } : {}), ...(t.visualProof ? { visualProof: t.visualProof } : {}),
   ...(c.visualProof?.start ? { start: c.visualProof.start } : {}),
   ...(c.quality ? { lookFirst: worstOfQuality(c.quality) } : {}),
+  ...(c.properties ? { properties: c.properties } : {}),
 });
 
 /** A session's plan as the store keeps it (ORC-171): the session is that of the delegation that opened it. */
@@ -754,7 +755,7 @@ export abstract class DaemonEffects extends DaemonChecks {
     const { sha, commands } = c;
     const frozen = Object.keys(t.frozenTests?.files ?? {}).length;
     const checks = [
-      { name: VERIFY_CHECK, ...verifySummary(sha, commands) },
+      { name: VERIFY_CHECK, ...verifySummary(sha, commands, c.properties) },
       { name: FREEZE_CHECK, conclusion: frozen ? 'success' : 'neutral', summary: frozen ? `${frozen} frozen file(s) intact.` : 'No frozen test for this ticket.' },
       { name: ANTI_CHEAT_CHECK, conclusion: 'success', summary: ANTI_CHEAT_OK },
       ...(c.visualProof ? [{ name: VISUAL_PROOF_CHECK, ...visualCheck(c.visualProof) }] : []),

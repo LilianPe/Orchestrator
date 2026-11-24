@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FREEZE_CHECK } from '../../src/checks/freeze.js';
+import type { CleanVerifier } from '../../src/core/clean-verify.js';
 import type { EventPayloads } from '../../src/core/types.js';
 import { exportJournal } from '../../src/runtime/replay.js';
 import { assessment, drafted, SPEC, toBuild } from '../helpers/chain.js';
@@ -21,8 +22,8 @@ const AT_FREEZE = { 'src/export.test.ts': ACCEPTANCE, 'test/rel-1.property-1.tes
 type Harness = ReturnType<typeof createHarness>;
 
 /** A ticket whose spec, with `properties`, is approved; the tests step committed `changed`, the build held. */
-async function approved(properties: (typeof PROPERTY)[], changed: string[], head: Record<string, string> = AT_FREEZE): Promise<Harness> {
-  const h = createHarness({ authz: { maintainers: [LEAD], validators: [MEMBER], githubLogins: { [LEAD]: 'lilian-gh', [MEMBER]: 'armand-gh' } }, repoConfig: withTestCommand(), fullChain: true });
+async function approved(properties: (typeof PROPERTY)[], changed: string[], head: Record<string, string> = AT_FREEZE, over: Parameters<typeof createHarness>[0] = {}): Promise<Harness> {
+  const h = createHarness({ ...over, authz: { maintainers: [LEAD], validators: [MEMBER], githubLogins: { [LEAD]: 'lilian-gh', [MEMBER]: 'armand-gh' } }, repoConfig: withTestCommand(), fullChain: true });
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
   h.tracker.setTeamMembers('REL', [LEAD, MEMBER]);
   h.forge.setRepoPermission('lilian-gh', 'write');
@@ -75,6 +76,22 @@ describe('the property tests of the approved spec (ORC-261)', () => {
     expect(red.red).toBe('missing_property');
     expect(red.failures[0]!.output).toContain('rel-1.property-1.test.ts');
     expect(h.runner.requests.some((r) => r.prompt.startsWith('/factory:build'))).toBe(true);
+  });
+
+  it('criterion 4: verify runs the property tests again, and factory/verify says the runs and the seed it drew', async () => {
+    const asked: (number | undefined)[] = [];
+    const cleanVerify: CleanVerifier = async (req) => {
+      asked.push(req.properties);
+      const properties = req.properties ? { runs: 1000, seed: 1234567, files: ['test/rel-1.property-1.test.ts'], unsettled: [], notRun: [], found: false } : undefined;
+      return { ok: true, failures: [], sha: 'sha-freeze', tree: 't', commands: ['npm test'], ...(properties ? { properties } : {}) };
+    };
+    const h = await approved([PROPERTY], ['src/export.test.ts', 'test/rel-1.property-1.test.ts'], AT_FREEZE, { sandboxed: true, cleanVerify });
+    h.runner.release(h.runner.requests.find((r) => r.prompt.startsWith('/factory:build'))!.runId);
+    await h.orch.drained();
+    expect(asked.at(-1)).toBe(1);
+    const check = h.forge.checkRuns.find((c) => c.name === 'factory/verify');
+    expect(check?.summary).toContain('1000 runs, seed 1234567');
+    expect(check?.summary).toContain('`test/rel-1.property-1.test.ts`');
   });
 
   it('criterion 5: a spec without properties asks for none, and the run goes on to the build', async () => {
