@@ -16,6 +16,7 @@ import { freezeTests } from '../checks/freeze.js';
 import { VISUAL_PROOF_CHECK } from '../checks/visual-proof.js';
 import { QUALITY_SCRIPT } from '../checks/diff-quality.js';
 import type { PreviewRecipe } from '../knowledge/preview-recipe.js';
+import { RepoConfigRefusal } from '../config/repo-config.js';
 import { BUNDLE_TARGET } from '../publish/extract.js';
 import { OutputPolicy, type Capture } from '../publish/output-policy.js';
 import { runCleanVerify, verifyCommand, type CleanVerifyRequest } from './clean-verify.js';
@@ -352,6 +353,8 @@ describe('runCleanVerify', () => {
         const refused = runCleanVerify(req);
         await expect(refused).rejects.toThrow(/setup_secrets \(NPM_TOKEN, REGISTRY_TOKEN\)/);
         await expect(refused).rejects.toThrow(/nobody reviewed/);
+        // The repository's to fix (ORC-493): the ticket is blocked as such, never as a breakdown of the factory.
+        await expect(refused).rejects.toBeInstanceOf(RepoConfigRefusal);
         expect(sandboxes.created.map((c) => c.runId)).not.toContain('r1-verify-setup');
         expect(sandboxes.ran.map((r) => r.command)).not.toContain('echo base-setup');
       });
@@ -1319,7 +1322,9 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
 
   it('a commit that declares a service no sandbox provides is refused before any of its code runs, naming it (ORC-282)', async () => {
     const { req, sandboxes } = setup({ commands: ['true'] }, 'services: [redis]\n');
-    await expect(runCleanVerify(req)).rejects.toThrow('The service redis is not available');
+    const refused = runCleanVerify(req);
+    await expect(refused).rejects.toThrow('The service redis is not available');
+    await expect(refused).rejects.toBeInstanceOf(RepoConfigRefusal);
     expect(sandboxes.ran).toEqual([]);
     expect(sandboxes.created.map((c) => c.runId)).not.toContain('r1-verify');
   });

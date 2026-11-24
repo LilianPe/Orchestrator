@@ -8,7 +8,7 @@ import { ExecFailure } from '../adapters/exec.js';
 import { ActivityRelay, composedActivity } from '../adapters/tracker/activity-relay.js';
 import type { Workspace } from '../adapters/workspace/types.js';
 import type { RepoVariables } from '../config/repo-variables.js';
-import { RepoConfigError, setupOf, ticketTokenCap } from '../config/repo-config.js';
+import { isRepoConfigFault, RepoConfigRefusal, setupOf, ticketTokenCap } from '../config/repo-config.js';
 import type { JobSpec } from '../core/workflow.js';
 import { attemptsFor, backoff, isTransient, TRANSIENT_WINDOW_MS, type RetryPolicy } from './transient.js';
 import { LEASE_MS, PAUSE_ACCEPTED, RUN_LEASE_MS, type QueueItem, type RunRecord, type SessionRole } from '../store/types.js';
@@ -597,7 +597,7 @@ export abstract class DaemonLaunch extends DaemonEffects {
     }
     // A file the repository has to fix is not a breakdown of the factory: the Flow shows it as such (`repo_config`).
     const [kind, reason]: [BlockKind, string] =
-      err instanceof RepoConfigError ? ['repo_config', `${REPO_CONFIG_REFUSED}${err.message}`] : err instanceof TicketBudgetError ? ['budget', err.message] : ['infra', `Launch error: ${launchErrorTold(err)}`];
+      isRepoConfigFault(err) ? ['repo_config', `${REPO_CONFIG_REFUSED}${err.message}`] : err instanceof TicketBudgetError ? ['budget', err.message] : ['infra', `Launch error: ${launchErrorTold(err)}`];
     // The whole of it in the daemon's log, what each error wraps included: the ticket may have been told less.
     if (kind === 'infra') this.log('error', `launch of ${job.name} on ${ticketId}: ${causeChain(err)}`);
     fresh = await this.apply(fresh, ...events, blockedOn(kind, reason, job.name));
@@ -858,7 +858,7 @@ export abstract class DaemonLaunch extends DaemonEffects {
       // Provided, or no run starts (ORC-282): never a setup nor an agent in an environment poorer than the repository declares.
       const declared = [...new Set(config.services)];
       const unprovided = this.d.sandboxes ? this.d.sandboxes.unprovided(declared) : declared;
-      if (unprovided.length) throw new Error(servicesUnavailable(unprovided, !!this.d.sandboxes));
+      if (unprovided.length) throw new RepoConfigRefusal(servicesUnavailable(unprovided, !!this.d.sandboxes));
       const setup = setupOf(config, wf.workspace.setup);
       setUp ||= !setup.length;
       const cap = ticketTokenCap(this.d.perTicketTokens, config);

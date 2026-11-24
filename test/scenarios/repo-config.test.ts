@@ -4,9 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { makeRepoConfig } from '../../src/app/repo-variables.js';
-import { parseRepoConfig, type RepoConfig } from '../../src/config/repo-config.js';
+import { parseRepoConfig, RepoConfigRefusal, setupSecretsRefusal, type RepoConfig } from '../../src/config/repo-config.js';
 import type { RepoVariables } from '../../src/config/repo-variables.js';
 import { causeOf } from '../../src/core/block-cause.js';
+import { servicesUnavailable } from '../../src/core/clean-verify.js';
 import { TRUSTED } from '../../src/core/types.js';
 import { WRITE_TOOLS } from '../../src/presets/tools.js';
 import { createHarness } from '../helpers/harness.js';
@@ -211,6 +212,31 @@ describe("the repository's config at the launch", () => {
   });
 });
 
+/** ORC-493: what verify refuses on the repository's config blocks the ticket as the repository's to fix, never as a breakdown. */
+describe("verify's refusals of the repository's config", () => {
+  it.each([
+    ['services (ORC-282)', () => servicesUnavailable(['redis'], true), /The service redis is not available.*take it out of `services`/],
+    ['setup_secrets (ORC-461)', () => setupSecretsRefusal(['npm ci'], ['NPM_TOKEN'])!, /\.factory\/config\.yml declares setup_secrets \(NPM_TOKEN\).*take it out of setup_secrets/],
+  ])('%s: blocked as repo_config, the comment naming what to change, nothing sent to the agent', async (_, refusal, told) => {
+    const h = createHarness({ sandboxed: true, cleanVerify: async () => Promise.reject(new RepoConfigRefusal(refusal())) });
+    await delegate(h);
+    const t = await h.ticket();
+    expect(t).toMatchObject({ blocked: true, blockKind: 'repo_config', blockedJob: 'dev' });
+    expect(causeOf(t.blockKind)).toBe('repo_config');
+    expect(h.runner.requests).toHaveLength(1);
+    const comment = h.tracker.comments('REL-1').at(-1)!;
+    expect(comment).toMatch(/^🔴 Blocked at step verify/);
+    expect(comment.split('\n').find((l) => l.startsWith('Reason: '))).toMatch(new RegExp(`^Reason: Repository configuration to fix: ${told.source}`));
+    expect(comment).not.toContain('infrastructure failure');
+  });
+
+  it('any other error of verify stays a breakdown of the factory', async () => {
+    const h = createHarness({ sandboxed: true, cleanVerify: async () => Promise.reject(new Error('engine down')) });
+    await delegate(h);
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockKind: 'infra' });
+  });
+});
+
 /** ORC-338: without sandboxes, `verify` on the host applies the path rules of `checkClone` to the worktree's commits. */
 describe('the path rules of verify on the host', () => {
   const WORKTREE = '/tmp/factory-fake/p/REL-1';
@@ -254,6 +280,8 @@ describe('the path rules of verify on the host', () => {
     expect(await errored(h)).toEqual([expect.stringContaining('sensitive_paths[0]')]);
     expect(await failed(h)).toEqual([]);
     expect(h.runner.requests).toHaveLength(1);
+    // The repository's to fix (ORC-493), not a breakdown.
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockKind: 'repo_config' });
   });
 
   it('runs no command on a branch it refuses, as on the clone', async () => {

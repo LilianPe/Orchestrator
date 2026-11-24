@@ -4,7 +4,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Sandbox } from '../adapters/sandbox/types.js';
 import { NO_REPO_VARIABLES, type RepoVariables } from '../config/repo-variables.js';
-import { parseRepoConfig, setupOf, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
+import { isRepoConfigFault, parseRepoConfig, setupOf, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
 import type { JobSpec } from '../core/workflow.js';
 import type { RunRecord } from '../store/types.js';
 import type { AgentOutput, PreviewRecipe } from '../core/agent-output.js';
@@ -422,7 +422,7 @@ export abstract class DaemonChecks extends DaemonBase {
       res = await check();
       if (res.ok && res.visual?.files.length) await this.keepCaptures(t, runId, res.visual.files);
     } catch (err) {
-      await this.submitResult({ ...base, type: 'verify.errored', payload: { ...payload, error: (err as Error).message } });
+      await this.submitResult({ ...base, type: 'verify.errored', payload: { ...payload, error: (err as Error).message, ...(isRepoConfigFault(err) ? { cause: 'repo_config' as const } : {}) } });
       return;
     }
     await this.submitResult(

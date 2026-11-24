@@ -112,6 +112,18 @@ describe('a human push on the agent branch (ORC-159)', () => {
       expect(decide(again, verdict('verify.passed', { sha: NEWER }, pushCheckId(NEWER, 2000)), workflow).effects.map((e) => e.kind)).toEqual(['block_comment']);
     });
 
+    it("a check that refused the repository's config says what to change, not a breakdown, and stays the push's block (ORC-493)", () => {
+      const t = after(ticket(), push(), decide(ticket(), push(), workflow));
+      const error = 'The service redis is not available: take it out of `services`, then reply here.';
+      const out = decide(t, verdict('verify.errored', { error, cause: 'repo_config' }), workflow);
+      const blocked = out.events.find((e) => e.type === 'ticket.blocked') as { kind: string; reason: string };
+      expect(blocked.kind).toBe('human_push');
+      expect(blocked.reason).toContain(`Repository configuration to fix: ${error}`);
+      expect(blocked.reason).not.toContain('infrastructure failure');
+      // Told once, in the reason: never repeated in what was tried.
+      expect(out.effects).toContainEqual({ kind: 'block_comment', block: expect.objectContaining({ tried: ['Started the verification of the pushed commit.'] }) });
+    });
+
     it('a check cut too often blocks the push for a human, not paused for good on a check nothing runs', () => {
       const t = after(ticket(), push(), decide(ticket(), push(), workflow));
       const cut = { ...t, cutRelaunches: Array.from({ length: CUT_RELAUNCHES }, (_, i) => 4000 + i) };

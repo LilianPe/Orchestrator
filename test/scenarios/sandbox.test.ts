@@ -686,9 +686,10 @@ describe('a service nobody provides', () => {
     expect(h.checks.calls).toEqual([]);
     expect(h.workspaces.cleaned).toEqual(['REL-1']);
     const t = await h.ticket();
-    expect(t).toMatchObject({ blocked: true });
+    // The repository's to fix (ORC-493), not a breakdown of the factory.
+    expect(t).toMatchObject({ blocked: true, blockKind: 'repo_config' });
     expect(t.activeRunId).toBeUndefined();
-    expect(h.tracker.comments('REL-1').at(-1)).toContain(`The service ${service} is not available`);
+    expect(h.tracker.comments('REL-1').at(-1)).toContain(`Reason: Repository configuration to fix: The service ${service} is not available`);
   }
 
   it('no backend provides it: no sandbox, not even for the setup, and the ticket is blocked naming it', async () => {

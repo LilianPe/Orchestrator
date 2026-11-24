@@ -109,6 +109,15 @@ export class RepoConfigError extends Error {
   }
 }
 
+/**
+ * A `.factory/config.yml` valid as written that this factory cannot honour (ORC-493): a service none of its backends provides
+ * (ORC-282), a setup `verify` does not run (ORC-461). Its message names what to change. The repository's to fix, never a breakdown.
+ */
+export class RepoConfigRefusal extends Error {}
+
+/** What blocks a ticket as `repo_config`: a file refused, or one this factory cannot honour. */
+export const isRepoConfigFault = (err: unknown): err is RepoConfigError | RepoConfigRefusal => err instanceof RepoConfigError || err instanceof RepoConfigRefusal;
+
 const KEYS = ['extends', 'setup', 'commands', 'preview', 'env', 'setup_secrets', 'services', 'sensitive_paths', 'budgets', 'max_diff', 'feature_flags', 'visual_paths', 'network', 'dependencies', 'branches', 'tools'];
 const strings = z.array(z.string().min(1));
 

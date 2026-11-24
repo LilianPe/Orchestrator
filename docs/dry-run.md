@@ -82,8 +82,8 @@ fail every `verify`, after the build. So `verify` refuses such a setup before it
   ORC-461 still says `unverifiable: …` until the next dry run on the default branch;
 - `factory dry-run` prints it red and exits 1; `factory doctor` warns about it ([CLI](cli.md#factory-doctor-repo));
 - on a ticket, `verify` gives no verdict: the check cannot run (`verify.errored`, [preset](preset.md)), and the ticket is
-  blocked as an infrastructure failure, the refusal (the secrets named, and what to change) in the block's detail, never sent to
-  the agent.
+  blocked as the repository's to fix (the Flow's `repo_config`, ORC-493), not as an infrastructure failure: the block's reason
+  is the refusal (`Repository configuration to fix: …`, the secrets named, and what to change), never sent to the agent.
 
 A `.factory/config.yml` that declares `setup_secrets` with no setup to run (none of its own, none in the workflow) withholds
 nothing and is not refused. To unblock a repository whose setup passes without its secrets, take them out of `setup_secrets`:
