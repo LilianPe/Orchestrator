@@ -180,7 +180,7 @@ const names = (tests: readonly ReadTest[], file: string): boolean => tests.some(
  * the repository's test command of each language, vitest or jest for JS and TS, pytest for Python, the files appended. The JS and
  * TS files are rewritten where they are checked out. Each run is judged by its report, as the commands are: a failing test that
  * counts fails it, a run that names no test of its own (it did not load, a hook failed) fails it on any exit but 0, and an exit
- * no test carries (a coverage threshold missed on these few files) does not. No rerun when no file ran again.
+ * no test carries (a coverage threshold missed on these few files) does not. No rerun when no file ran again and none failed.
  */
 export async function rerunProperties(
   sources: ReadonlyMap<string, string | undefined>,
@@ -206,9 +206,9 @@ export async function rerunProperties(
       if (settled.calls) await deps.write(file, settled.source);
       else unsettled.push(file);
     }
-    // jest reads its files as patterns.
+    // jest reads its files as patterns. A file the command's configuration leaves out is no failure: its report says it did not run.
     const runner = lines.js.runner;
-    await run(`${lines.js.line} ${js.map((f) => quote(runner === 'jest' ? escape(f) : f)).join(' ')}`, runner, js);
+    await run(`${lines.js.line} --passWithNoTests ${js.map((f) => quote(runner === 'jest' ? escape(f) : f)).join(' ')}`, runner, js);
   }
   if (py.length && lines.py) {
     const dir = `/tmp/factory-properties-${randomUUID()}`;
@@ -219,6 +219,6 @@ export async function rerunProperties(
     const settled = new Set((await deps.read(report)).split('\n'));
     unsettled.push(...py.filter((f) => !settled.has(posix.basename(f))));
   }
-  if (files.every((f) => notRun.includes(f))) return { failures };
+  if (!failures.length && files.every((f) => notRun.includes(f))) return { failures };
   return { rerun: { ...at, files, unsettled, notRun, found: failures.length > 0 }, failures };
 }

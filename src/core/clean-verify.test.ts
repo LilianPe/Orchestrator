@@ -1680,7 +1680,7 @@ describe('the property tests run again with the factory settings (ORC-261)', () 
     commit(s.repo, 'property');
     return s;
   };
-  const rerunLine = `npx vitest run '${PROPERTY}'`;
+  const rerunLine = `npx vitest run --passWithNoTests '${PROPERTY}'`;
   /** Each file the rerun wrote in the sandbox, its chunks put back together. */
   const written = (ran: { command: string }[]) => {
     const files = new Map<string, string>();
@@ -1728,7 +1728,7 @@ describe('the property tests run again with the factory settings (ORC-261)', () 
     const { repo, sandboxes, req } = setup({ commands: ['node bin/vitest run'], properties: 1, knownFlaky: [{ test: 'src/a.test.ts > cart total', coversFrozen: false }] }, undefined, { 'bin/vitest': fakeVitest(state, plan) });
     write(repo, PROPERTY, "import fc from 'fast-check';\nfc.assert(p);\n");
     commit(repo, 'property');
-    const line = `node bin/vitest run '${PROPERTY}'`;
+    const line = `node bin/vitest run --passWithNoTests '${PROPERTY}'`;
     sandboxes.answer = (command) => (command.includes(line) ? { stdout: '', stderr: '', code: 0 } : undefined);
     const res = await runCleanVerify(req);
     expect(res).toMatchObject({ ok: true, failures: [], properties: { files: [PROPERTY], found: false } });
