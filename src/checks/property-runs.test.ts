@@ -20,7 +20,7 @@ describe('the factory settings written into a property test (ORC-261)', () => {
 
   it('reads a namespace import, named imports under an alias, and a require', () => {
     const named = underFactorySettings('a.test.ts', "import { assert as check, property } from 'fast-check';\ncheck(property(), params);", at);
-    expect(named).toEqual({ source: `import { assert as check, property } from 'fast-check';\ncheck(property(), { ...(params), ${SET} });`, calls: 1 });
+    expect(named).toEqual({ source: `// @ts-nocheck\nimport { assert as check, property } from 'fast-check';\ncheck(property(), { ...(params), ${SET} });`, calls: 1 });
     expect(underFactorySettings('a.test.ts', "import * as f from 'fast-check';\nf.assert(p);", at).calls).toBe(1);
     expect(underFactorySettings('a.test.js', "const fc = require('fast-check');\nfc.assert(p);", at).calls).toBe(1);
     expect(underFactorySettings('a.test.js', "const { assert } = require('fast-check');\nassert(p);", at).calls).toBe(1);
@@ -33,6 +33,12 @@ describe('the factory settings written into a property test (ORC-261)', () => {
     expect(out.source).toContain(`test.prop([fc.integer()], { ...({ numRuns: 1 }), ${SET} })('x'`);
     expect(underFactorySettings('a.test.ts', "import { it as t } from '@fast-check/jest';\nt.prop([a])('x', () => {});", at).source).toContain(`t.prop([a], { ${SET} })`);
     expect(underFactorySettings('a.test.ts', "import { test } from '@fast-check/vitest';\ntest.skip.prop([a])('x', () => {});\ntest.concurrent.prop([a], p)('y', () => {});", at).calls).toBe(2);
+  });
+
+  it('turns type checking off in a file it rewrites, its shebang kept first, so that its settings cannot fail a typed run', () => {
+    expect(underFactorySettings('a.test.ts', "import fc from 'fast-check';\nfc.assert(p);", at).source).toMatch(/^\/\/ @ts-nocheck\nimport fc/);
+    expect(underFactorySettings('a.test.js', "#!/usr/bin/env node\nconst fc = require('fast-check');\nfc.assert(p);", at).source).toMatch(/^#!\/usr\/bin\/env node\n\/\/ @ts-nocheck\nconst fc/);
+    expect(underFactorySettings('a.test.ts', 'other.assert(x);', at).source).toBe('other.assert(x);');
   });
 
   it('leaves alone what is not fast-check: another assert, a shadowing name, a file without it', () => {
@@ -63,9 +69,11 @@ describe('a rewritten fast-check test runs under the factory settings, whatever 
       "import fc from 'fast-check';",
       'export const seen = [];',
       // What a setup file or the code under test could set, past the test's own parameters, to end the runs early.
-      'fc.configureGlobal({ numRuns: 2, interruptAfterTimeLimit: 1, skipAllAfterTimeLimit: 1, ignoreEqualValues: true });',
+      'fc.configureGlobal({ numRuns: 2, interruptAfterTimeLimit: 1, skipAllAfterTimeLimit: 1, ignoreEqualValues: true, skipEqualValues: true });',
       'const busy = () => { const end = Date.now() + 1; while (Date.now() < end); };',
-      "fc.assert(fc.property(fc.integer(), (n) => { busy(); seen.push(n); }), { numRuns: 3, seed: 7, path: '0:0' });",
+      "fc.assert(fc.property(fc.integer(), (n) => { busy(); seen.push(n); }), { numRuns: 3, seed: 7, path: '0:0', plugins: [fc.interruptAfterTimeLimit(1)] });",
+      // A reporter that does not throw would hide a failure.
+      "export const hidden = (() => { try { fc.assert(fc.property(fc.integer(), () => false), { reporter: () => {} }); return false; } catch { return true; } })();",
     ].join('\n');
     const rewritten = underFactorySettings('p.test.mjs', source, at).source;
     const fastCheck = pathToFileURL(createRequire(import.meta.url).resolve('fast-check')).href;
@@ -76,6 +84,7 @@ describe('a rewritten fast-check test runs under the factory settings, whatever 
     const [first, second] = [await load('a.mjs'), await load('b.mjs')];
     expect(first).toHaveLength(50);
     expect(second).toEqual(first);
+    expect(((await import(pathToFileURL(join(dir, 'a.mjs')).href)) as { hidden: boolean }).hidden).toBe(true);
   });
 });
 

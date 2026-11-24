@@ -31,8 +31,14 @@ export interface PropertyRerun extends PropertySettings {
 }
 
 const FAST_CHECK = 'fast-check';
-/** fast-check's parameters that end the runs before their number: set to their defaults, over any global configuration. */
-export const UNCUT = 'path: undefined, interruptAfterTimeLimit: undefined, skipAllAfterTimeLimit: undefined, ignoreEqualValues: false';
+/**
+ * fast-check's parameters that end the runs before their number, skip some, or hide a failure: set to their defaults, over the
+ * file's and `configureGlobal`'s. A plugin installed by `installGlobalPlugin` stays: no API of fast-check removes it.
+ */
+export const UNCUT =
+  'path: undefined, interruptAfterTimeLimit: undefined, skipAllAfterTimeLimit: undefined, ignoreEqualValues: false, skipEqualValues: false, plugins: [], reporter: undefined, asyncReporter: undefined';
+/** Type checking off in a rewritten file, under its shebang: `undefined` cannot be set to an optional parameter under `exactOptionalPropertyTypes`. */
+const NO_CHECK = '// @ts-nocheck\n';
 const PROP_PACKAGES = new Set(['@fast-check/vitest', '@fast-check/jest']);
 /** fast-check's runners: their parameters come second, as those of `test.prop`. */
 const RUNNERS = new Set(['assert', 'check']);
@@ -82,8 +88,8 @@ function isFastCheckCall(call: ts.CallExpression, b: ReturnType<typeof bindings>
 
 /**
  * A JS or TS property test with the factory's settings after those of each fast-check call, so that they win: `{ ...(theirs),
- * numRuns, seed, … }`, with what else would cut the runs short, from the file or from `configureGlobal` anywhere (a setup file,
- * the code under test): a replay `path`, a time limit, equal values skipped. `calls`: how many it changed. Pure.
+ * numRuns, seed, … }`, with `UNCUT`, what else would cut the runs short or hide a failure, from the file or from `configureGlobal`
+ * (a setup file, the code under test). Type checking is off in the file it rewrites. `calls`: how many it changed. Pure.
  */
 export function underFactorySettings(path: string, source: string, at: PropertySettings): { source: string; calls: number } {
   const sf = parse(path, source);
@@ -104,7 +110,9 @@ export function underFactorySettings(path: string, source: string, at: PropertyS
   visit(sf);
   // From the end: an edit never moves the positions of those before it.
   const out = edits.sort((x, y) => y.from - x.from).reduce((s, e) => s.slice(0, e.from) + e.text + s.slice(e.to), source);
-  return { source: out, calls: edits.length };
+  if (!edits.length) return { source, calls: 0 };
+  const shebang = /^#![^\n]*\n/.exec(out)?.[0] ?? '';
+  return { source: shebang + NO_CHECK + out.slice(shebang.length), calls: edits.length };
 }
 
 /**
