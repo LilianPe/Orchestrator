@@ -89,18 +89,24 @@ describe('a rewritten fast-check test runs under the factory settings, whatever 
 });
 
 describe('the rerun of the property tests (ORC-261)', () => {
-  const fake = (files: Record<string, string>, exit: (line: string) => number = () => 0) => {
+  /** A vitest JSON report: each file with its tests, `failed` those named. */
+  const vitestReport = (tests: Record<string, Record<string, 'passed' | 'failed'>>) =>
+    JSON.stringify({ testResults: Object.entries(tests).map(([name, results]) => ({ name, assertionResults: Object.entries(results).map(([title, status]) => ({ fullName: title, status })) })) });
+  const junit = (file: string) => `<testsuite><testcase classname="tests.test_orc_1_property_2" name="test_p" file="${file}"/></testsuite>`;
+  type Answer = { exitCode: number; report?: string };
+  const fake = (answer: (line: string) => Answer = (line) => ({ exitCode: 0, report: line.includes('pytest') ? junit('tests/test_orc_1_property_2.py') : vitestReport({ 'src/orc-1.property-1.test.ts': { p: 'passed' }, 'src/orc-1.property-3.test.ts': { x: 'passed' } }) }), known: string[] = []) => {
     const written: Record<string, string> = {};
-    const lines: { line: string; env: Record<string, string> }[] = [];
+    const lines: { line: string; runner: string; env: Record<string, string> }[] = [];
     const deps: RerunDeps = {
       write: async (p, content) => void (written[p] = content),
-      run: async (line, env) => {
-        lines.push({ line, env });
+      run: async (line, runner, env) => {
+        lines.push({ line, runner, env });
         const settled = env.FACTORY_PROPERTY_SETTLED;
         if (settled) written[settled] = 'test_orc_1_property_2.py';
-        return { exitCode: exit(line), output: 'out' };
+        return { ...answer(line), output: 'out' };
       },
       read: async (p) => written[p] ?? '',
+      counts: (t) => !known.includes(t.id),
     };
     return { deps, written, lines };
   };
@@ -111,37 +117,65 @@ describe('the rerun of the property tests (ORC-261)', () => {
   };
   const paths = Object.keys(files);
   const sources = new Map(Object.entries(files));
+  const js = new Map([...sources].filter(([f]) => f.endsWith('.ts')));
   const vitest = { line: 'npx vitest run', runner: 'vitest' as const };
+  const vitestLine = "npx vitest run 'src/orc-1.property-1.test.ts' 'src/orc-1.property-3.test.ts'";
 
-  it('writes the settled files, runs each language with its command, and says the runs and the seed', async () => {
-    const { deps, written, lines } = fake(files);
+  it('writes the settled files, runs each language with its command and its report, and says the runs and the seed', async () => {
+    const { deps, written, lines } = fake();
     const out = await rerunProperties(sources, { js: vitest, py: 'pytest' }, deps, at);
     expect(written['src/orc-1.property-1.test.ts']).toContain(SET);
     expect(written['src/orc-1.property-3.test.ts']).toBeUndefined();
-    expect(lines[0]!.line).toBe("npx vitest run 'src/orc-1.property-1.test.ts' 'src/orc-1.property-3.test.ts'");
+    expect(lines[0]).toMatchObject({ line: vitestLine, runner: 'vitest' });
     expect(lines[1]!.line).toMatch(/^export PYTHONPATH=\S+; pytest -p factory_properties 'tests\/test_orc_1_property_2.py'$/);
-    expect(lines[1]!.env).toMatchObject({ FACTORY_PROPERTY_RUNS: '50', FACTORY_PROPERTY_SEED: '42' });
+    expect(lines[1]).toMatchObject({ runner: 'pytest', env: { FACTORY_PROPERTY_RUNS: '50', FACTORY_PROPERTY_SEED: '42' } });
     expect(Object.values(written).some((c) => c.includes('_hypothesis_internal_use_seed'))).toBe(true);
     expect(out).toEqual({ rerun: { runs: 50, seed: 42, files: paths, unsettled: ['src/orc-1.property-3.test.ts'], notRun: [], found: false }, failures: [] });
   });
 
-  it('a red rerun is a failure that names the runs and the seed, and a defect the properties found', async () => {
-    const { deps } = fake(files, (line) => (line.includes('vitest') ? 1 : 0));
-    const out = await rerunProperties(sources, { js: vitest, py: 'pytest' }, deps, at);
-    expect(out.rerun.found).toBe(true);
-    expect(out.failures).toEqual([{ command: "npx vitest run 'src/orc-1.property-1.test.ts' 'src/orc-1.property-3.test.ts'", exitCode: 1, output: expect.stringMatching(/^Property tests rerun by the factory: 50 runs, seed 42[^\n]*\n[\s\S]*out$/) }]);
+  it('gives the code under test no sign of the rerun in JS and TS: the settings are in the files, not in its environment', async () => {
+    const { deps, lines } = fake();
+    await rerunProperties(js, { js: vitest }, deps, at);
+    expect(lines[0]!.env).toEqual({});
+  });
+
+  it('a failing test of its report is a failure that names the runs and the seed, and a defect the properties found', async () => {
+    const { deps } = fake(() => ({ exitCode: 1, report: vitestReport({ 'src/orc-1.property-1.test.ts': { p: 'failed' }, 'src/orc-1.property-3.test.ts': { x: 'passed' } }) }));
+    const out = await rerunProperties(js, { js: vitest }, deps, at);
+    expect(out.rerun!.found).toBe(true);
+    expect(out.failures).toEqual([{ command: vitestLine, exitCode: 1, output: expect.stringMatching(/^Property tests rerun by the factory: 50 runs, seed 42[^\n]*\n[\s\S]*out$/) }]);
+  });
+
+  it('a red exit whose report names no failing test that counts is no failure: a coverage threshold missed on a few files, a known flaky test', async () => {
+    const threshold = fake(() => ({ exitCode: 1, report: vitestReport({ 'src/orc-1.property-1.test.ts': { p: 'passed' }, 'src/orc-1.property-3.test.ts': { x: 'passed' } }) }));
+    expect(await rerunProperties(js, { js: vitest }, threshold.deps, at)).toMatchObject({ rerun: { found: false }, failures: [] });
+    const flaky = fake(() => ({ exitCode: 1, report: vitestReport({ 'src/orc-1.property-1.test.ts': { p: 'passed', 'cart total': 'failed' }, 'src/orc-1.property-3.test.ts': { x: 'passed' } }) }), ['src/orc-1.property-1.test.ts > cart total']);
+    expect(await rerunProperties(js, { js: vitest }, flaky.deps, at)).toMatchObject({ rerun: { found: false }, failures: [] });
+  });
+
+  it('a red exit without a report that names its tests is a failure: the files did not load', async () => {
+    const { deps } = fake(() => ({ exitCode: 1 }));
+    expect((await rerunProperties(js, { js: vitest }, deps, at)).failures).toHaveLength(1);
+  });
+
+  it('a file its run did not report did not run again, and no file run again is no rerun', async () => {
+    const some = fake(() => ({ exitCode: 0, report: vitestReport({ 'src/orc-1.property-1.test.ts': { p: 'passed' } }) }));
+    expect((await rerunProperties(js, { js: vitest }, some.deps, at)).rerun!.notRun).toEqual(['src/orc-1.property-3.test.ts']);
+    const none = fake(() => ({ exitCode: 1, report: vitestReport({}) }));
+    expect(await rerunProperties(js, { js: vitest }, none.deps, at)).toEqual({ failures: [] });
   });
 
   it('gives jest its files as patterns, escaped', async () => {
-    const { deps, lines } = fake({ 'app/[id]/orc-1.property-1.test.ts': "import fc from 'fast-check';\nfc.assert(p);" });
+    const { deps, lines } = fake();
     await rerunProperties(new Map([['app/[id]/orc-1.property-1.test.ts', "import fc from 'fast-check';\nfc.assert(p);"]]), { js: { line: 'npx jest', runner: 'jest' } }, deps, at);
     expect(lines[0]!.line).toBe("npx jest 'app/\\[id\\]/orc-1\\.property-1\\.test\\.ts'");
   });
 
-  it('runs nothing of a language no test command runs, and says so', async () => {
-    const { deps, lines } = fake(files);
+  it('runs nothing of a language no test command runs, and says so; with nothing run again, no rerun', async () => {
+    const { deps, lines } = fake();
     const out = await rerunProperties(sources, { js: vitest }, deps, at);
     expect(lines).toHaveLength(1);
-    expect(out.rerun.notRun).toEqual(['tests/test_orc_1_property_2.py']);
+    expect(out.rerun!.notRun).toEqual(['tests/test_orc_1_property_2.py']);
+    expect(await rerunProperties(sources, {}, fake().deps, at)).toEqual({ failures: [] });
   });
 });

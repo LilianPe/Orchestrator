@@ -4,6 +4,7 @@
 import { randomInt, randomUUID } from 'node:crypto';
 import { posix } from 'node:path';
 import type { VerifyFailure } from '../core/types.js';
+import { readTests, type ReadTest } from './flaky.js';
 import { escape, quote, type Runner } from './red.js';
 import { isPython, parse, stringValue, ts } from './ts-ast.js';
 
@@ -20,8 +21,9 @@ export interface PropertySettings {
 
 /**
  * What the rerun found, in the check and the measures. `unsettled`: files the factory found no call of fast-check in, or no
- * Hypothesis test of, run as they are. `notRun`: files of a language no test command of the repository runs. `found`: a
- * rerun failed while the repository's commands had passed: a defect a property found that the examples did not.
+ * Hypothesis test of, run as they are. `notRun`: files of a language no test command of the repository runs, or that its run
+ * did not report. `found`: a test of the rerun that counts failed while the repository's commands had passed: a defect a
+ * property found that the examples did not.
  */
 export interface PropertyRerun extends PropertySettings {
   files: string[];
@@ -148,34 +150,45 @@ def pytest_collection_modifyitems(items):
 /** What the rerun needs of the sandbox the commands ran in. */
 export interface RerunDeps {
   write(path: string, content: string): Promise<void>;
-  run(line: string, env: Record<string, string>): Promise<{ exitCode: number | null; output: string }>;
+  /** `line` run with its runner's report asked for (`REPORT_FLAGS`), and read back. */
+  run(line: string, runner: Runner, env: Record<string, string>): Promise<{ exitCode: number | null; output: string; report?: string }>;
   /** A file the run wrote, empty if none. */
   read(path: string): Promise<string>;
+  /** Whether a failing test counts: a known flaky one does not (ORC-164). */
+  counts(test: ReadTest): boolean;
 }
 
 /** The first line of a failure of the rerun: what the agent needs to reproduce it. */
 const said = (at: PropertySettings): string =>
   `Property tests rerun by the factory: ${at.runs} runs, seed ${at.seed}, whatever the repository sets. Reproduce with fast-check's \`{ numRuns: ${at.runs}, seed: ${at.seed} }\` or Hypothesis' \`@settings(max_examples=${at.runs})\` and \`@seed(${at.seed})\`.`;
 
+/** Whether a report names `file`: from the repository's root, or from a sub-root (pytest's rootdir). */
+const names = (tests: readonly ReadTest[], file: string): boolean => tests.some((t) => t.file === file || file.endsWith(`/${t.file}`));
+
 /**
  * The property tests run again with the factory's settings, `sources` their text at the commit (none read for Python), by `lines`:
  * the repository's test command of each language, vitest or jest for JS and TS, pytest for Python, the files appended. The JS and
- * TS files are rewritten where they are checked out.
+ * TS files are rewritten where they are checked out. Each run is judged by its report, as the commands are: a failing test that
+ * counts fails it, a run that names no test of its own (it did not load, a hook failed) fails it on any exit but 0, and an exit
+ * no test carries (a coverage threshold missed on these few files) does not. No rerun when no file ran again.
  */
 export async function rerunProperties(
   sources: ReadonlyMap<string, string | undefined>,
   lines: { js?: { line: string; runner: Runner }; py?: string },
   deps: RerunDeps,
   at: PropertySettings = { runs: PROPERTY_RUNS, seed: drawSeed() },
-): Promise<{ rerun: PropertyRerun; failures: VerifyFailure[] }> {
+): Promise<{ rerun?: PropertyRerun; failures: VerifyFailure[] }> {
   const files = [...sources.keys()];
   const failures: VerifyFailure[] = [];
-  const run = async (line: string, env: Record<string, string> = {}) => {
-    const r = await deps.run(line, { FACTORY_PROPERTY_RUNS: String(at.runs), FACTORY_PROPERTY_SEED: String(at.seed), ...env });
-    if (r.exitCode !== 0) failures.push({ command: line, exitCode: r.exitCode, output: `${said(at)}\n${r.output}` });
-  };
   const [py, js] = [files.filter(isPython), files.filter((f) => !isPython(f))];
   const notRun = [...(lines.js ? [] : js), ...(lines.py ? [] : py)];
+  const run = async (line: string, runner: Runner, of: readonly string[], env: Record<string, string> = {}) => {
+    const r = await deps.run(line, runner, env);
+    const tests = readTests(r.report);
+    const failed = tests?.filter((t) => t.status === 'failed' && deps.counts(t));
+    if (tests) notRun.push(...of.filter((f) => !names(tests, f)));
+    if (failed ? failed.length : r.exitCode !== 0) failures.push({ command: line, exitCode: r.exitCode, output: `${said(at)}\n${r.output}` });
+  };
   const unsettled: string[] = [];
   if (js.length && lines.js) {
     for (const file of js) {
@@ -185,15 +198,17 @@ export async function rerunProperties(
     }
     // jest reads its files as patterns.
     const runner = lines.js.runner;
-    await run(`${lines.js.line} ${js.map((f) => quote(runner === 'jest' ? escape(f) : f)).join(' ')}`);
+    await run(`${lines.js.line} ${js.map((f) => quote(runner === 'jest' ? escape(f) : f)).join(' ')}`, runner, js);
   }
   if (py.length && lines.py) {
     const dir = `/tmp/factory-properties-${randomUUID()}`;
     const report = `${dir}/settled`;
     await deps.write(`${dir}/factory_properties.py`, HYPOTHESIS_PLUGIN);
-    await run(`export PYTHONPATH=${dir}\${PYTHONPATH:+:$PYTHONPATH}; ${lines.py} -p factory_properties ${py.map(quote).join(' ')}`, { FACTORY_PROPERTY_SETTLED: report });
+    const env = { FACTORY_PROPERTY_RUNS: String(at.runs), FACTORY_PROPERTY_SEED: String(at.seed), FACTORY_PROPERTY_SETTLED: report };
+    await run(`export PYTHONPATH=${dir}\${PYTHONPATH:+:$PYTHONPATH}; ${lines.py} -p factory_properties ${py.map(quote).join(' ')}`, 'pytest', py, env);
     const settled = new Set((await deps.read(report)).split('\n'));
     unsettled.push(...py.filter((f) => !settled.has(posix.basename(f))));
   }
+  if (files.every((f) => notRun.includes(f))) return { failures };
   return { rerun: { ...at, files, unsettled, notRun, found: failures.length > 0 }, failures };
 }

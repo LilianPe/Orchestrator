@@ -9,7 +9,7 @@ import { ANTI_CHEAT_CHECK, antiCheatCheck, justifiedRemovals } from '../checks/a
 import { checkDependencies, DEPENDENCY_CHECK, manifestKind, type ManifestChange } from '../checks/deps.js';
 import { parseDiff, type DiffFile } from '../checks/diff.js';
 import { DIFF_SIZE_CHECK, diffSizeCheck } from '../checks/diff-size.js';
-import { needsBase, readTests, rerunOnBase, runAndRerun, settle, type CommandRun, type FlakyTest, type KnownFlaky, type Run, type Standing } from '../checks/flaky.js';
+import { counts, needsBase, readTests, rerunOnBase, runAndRerun, settle, type CommandRun, type FlakyTest, type KnownFlaky, type Run, type Standing } from '../checks/flaky.js';
 import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '../checks/freeze.js';
 import { checkForbiddenPaths, FORBIDDEN_CHECK, type ForbiddenView } from '../checks/forbidden-paths.js';
 import { coverageOf, QUALITY_MAX_FILES, qualityArgv, readQuality, unmeasured, type CoverageAsk, type DiffQuality } from '../checks/diff-quality.js';
@@ -248,11 +248,11 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     let flaky: FlakyTest[] = [];
     let preview: PreviewOutcome | undefined;
     let quality: DiffQuality | undefined;
-    let properties: { rerun: PropertyRerun; failures: VerifyFailure[] } | undefined;
+    let properties: { rerun?: PropertyRerun; failures: VerifyFailure[] } | undefined;
     // Every verdict goes out through here: the proof, decided, with it.
     const verdict = (files: Judged['files'] = []): CleanVerifyResult => ({
       ok: !failures.length, failures, sha, tree, commands, ...(diffClass ? { diffClass } : {}),
-      ...(flaky.length ? { flaky } : {}), ...(preview ? { preview } : {}), ...(quality ? { quality } : {}), ...(properties ? { properties: properties.rerun } : {}),
+      ...(flaky.length ? { flaky } : {}), ...(preview ? { preview } : {}), ...(quality ? { quality } : {}), ...(properties?.rerun ? { properties: properties.rerun } : {}),
       ...(proof ? { visual: { proof: files.length ? { ...proof, captures: files.map((f) => f.capture) } : proof, files } } : {}),
     });
     const setUp = async (suffix: string, workspacePath: string, services: readonly string[] = []) => {
@@ -301,7 +301,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
       if (measured) quality = await measureQuality(sandboxes, id, measured, { coverageDir, covered });
       // Last, as the rewritten tests stay in the checkout, and only on commands that pass, their known flaky failures aside (ORC-164):
       // the properties are then all that can find a defect. The verdict on those failures needs nothing of the base.
-      if (propertySources.size && !settle(ran, standing).failures.length) properties = await rerunProperties(propertySources, linesOf(tests), sandboxRerun(sandboxes, id, env));
+      if (propertySources.size && !settle(ran, standing).failures.length) properties = await rerunProperties(propertySources, linesOf(tests), sandboxRerun(sandboxes, id, env, standing));
     }, withServices);
     // The base's tests get services as the commit's do, new ones.
     if (onBase && needsBase(ran, standing)) {
@@ -455,7 +455,7 @@ const MAX_SETTLED_BYTES = 64 * 1024;
  * The rerun of the property tests in sandbox `id`, where the commands ran: what it writes goes in base64, whose letters no shell
  * reads, a chunk per exec.
  */
-function sandboxRerun(sandboxes: Boxes, id: string, env: Record<string, string>): RerunDeps {
+function sandboxRerun(sandboxes: Boxes, id: string, env: Record<string, string>, standing: Standing): RerunDeps {
   return {
     write: async (path: string, content: string) => {
       const b64 = Buffer.from(content).toString('base64');
@@ -467,7 +467,8 @@ function sandboxRerun(sandboxes: Boxes, id: string, env: Record<string, string>)
         if (out.code !== 0) throw new Error(`${path} not written (sandbox): ${out.stderr.trim()}`);
       }
     },
-    run: (line: string, extra: Record<string, string>) => reportRun(sandboxes, id, { ...env, ...extra })(line, undefined),
+    run: (line: string, runner: Runner, extra: Record<string, string>) => reportRun(sandboxes, id, { ...env, ...extra })(line, runner),
+    counts: (t) => counts(t, standing),
     // A regular file only: the agent's code, still running, could have put a pipe in its place.
     read: async (path: string) => (await sandboxes.exec(id, ['bash', '--norc', '-c', `[ -f ${quote(path)} ] && timeout ${REPORT_READ_S} head -c ${MAX_SETTLED_BYTES} ${quote(path)}`])).stdout,
   };

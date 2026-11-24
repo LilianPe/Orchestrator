@@ -221,6 +221,9 @@ export async function runAndRerun(command: string, runner: Runner | undefined, r
   return res;
 }
 
+/** Whether a failing test of a report counts (`standing`): any but a known flaky one. */
+export const counts = (t: ReadTest, at: Standing): boolean => standing({ test: t.id, file: t.file }, at) !== 'indicative';
+
 /** The failing tests of `runs` that count, those a base rerun can say something of. */
 const counted = (runs: readonly CommandRun[], at: Standing) => runs.flatMap((r) => r.tests.filter((t) => standing(t, at) !== 'indicative').map((t) => ({ r, t })));
 

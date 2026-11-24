@@ -103,7 +103,7 @@ function propertiesSaid(p: PropertyRerun): string {
   return [
     `Property tests run again with the factory settings, whatever the repository sets: ${p.runs} runs, seed ${p.seed}.${ran.map((f) => `\n- ${mdCode(f)}`).join('')}`,
     ...(p.unsettled.length ? [`No fast-check call or Hypothesis test found, run as written: ${codes(p.unsettled)}.`] : []),
-    ...(p.notRun.length ? [`Not run again, no test command runs vitest, jest or pytest: ${codes(p.notRun)}.`] : []),
+    ...(p.notRun.length ? [`Not run again, no test command runs them with vitest, jest or pytest, or its run did not report them: ${codes(p.notRun)}.`] : []),
   ].join('\n\n');
 }
 

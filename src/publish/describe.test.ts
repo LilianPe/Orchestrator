@@ -127,7 +127,7 @@ describe('describePr (ORC-195)', () => {
     const evidence = sections(describePr(full, facts({ commands: ['npm test'], properties })).body).at(-1)!.text;
     expect(evidence).toContain('Property tests run again with the factory settings, whatever the repository sets: 1000 runs, seed 42.\n- `a.property-1.test.ts`\n- `b.property-3.test.ts`');
     expect(evidence).toContain('No fast-check call or Hypothesis test found, run as written: `b.property-3.test.ts`');
-    expect(evidence).toContain('Not run again, no test command runs vitest, jest or pytest: `test_a_property_2.py`');
+    expect(evidence).toContain('Not run again, no test command runs them with vitest, jest or pytest, or its run did not report them: `test_a_property_2.py`');
   });
 
   it("criterion 4: a base64 blob in a field the agent submitted: the OutputPolicy refuses the description, nothing goes out", async () => {
