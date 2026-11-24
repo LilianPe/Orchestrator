@@ -1832,9 +1832,12 @@ function pushChecked(out: Decision, event: FactoryEvent<'verify.passed' | 'verif
   const resume = 'reply to resume the agent: it rebases its work on top of your commits, and never pushes over them.';
   if (event.type === 'verify.errored') {
     // Still the push's block: a next push replaces it, and its verdict is told.
-    const why = event.payload.cause === 'repo_config' ? `. ${REPO_CONFIG_REFUSED}${event.payload.error}` : ': infrastructure failure.';
+    // A refusal of the repository's config is told once, in the reason; a breakdown's error stays in what was tried.
+    const refused = event.payload.cause === 'repo_config';
+    const why = refused ? `. ${REPO_CONFIG_REFUSED}${event.payload.error}` : ': infrastructure failure.';
     const reason = `The verification of ${head.slice(0, 12)}, pushed by a human, could not run${why}`;
-    return block(out, workflow, { kind: 'human_push', reason, ...at, tried: [`Started the verification of the pushed commit: ${event.payload.error}`] });
+    const tried = refused ? 'Started the verification of the pushed commit.' : `Started the verification of the pushed commit: ${event.payload.error}`;
+    return block(out, workflow, { kind: 'human_push', reason, ...at, tried: [tried] });
   }
   if (event.type === 'verify.failed') {
     const reason = `${pushed(head)}: verify fails on it.`;

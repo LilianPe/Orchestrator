@@ -120,6 +120,8 @@ describe('a human push on the agent branch (ORC-159)', () => {
       expect(blocked.kind).toBe('human_push');
       expect(blocked.reason).toContain(`Repository configuration to fix: ${error}`);
       expect(blocked.reason).not.toContain('infrastructure failure');
+      // Told once, in the reason: never repeated in what was tried.
+      expect(out.effects).toContainEqual({ kind: 'block_comment', block: expect.objectContaining({ tried: ['Started the verification of the pushed commit.'] }) });
     });
 
     it('a check cut too often blocks the push for a human, not paused for good on a check nothing runs', () => {
