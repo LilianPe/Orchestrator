@@ -125,7 +125,7 @@ describe('describePr (ORC-195)', () => {
   it('ORC-261: the property tests the factory ran again, with its runs and seed, and those it could not set or run', () => {
     const properties = { runs: 1000, seed: 42, files: ['a.property-1.test.ts', 'test_a_property_2.py', 'b.property-3.test.ts'], unsettled: ['b.property-3.test.ts'], notRun: ['test_a_property_2.py'], found: false };
     const evidence = sections(describePr(full, facts({ commands: ['npm test'], properties })).body).at(-1)!.text;
-    expect(evidence).toContain('Property tests run again with the factory settings, whatever the repository sets: 1000 runs, seed 42.\n- `a.property-1.test.ts`\n- `b.property-3.test.ts`');
+    expect(evidence).toContain('Property tests run again with the factory settings, whatever the repository sets but its fast-check plugins: 1000 runs, seed 42.\n- `a.property-1.test.ts`\n- `b.property-3.test.ts`');
     expect(evidence).toContain('No fast-check call or Hypothesis test found, run as written: `b.property-3.test.ts`');
     expect(evidence).toContain('Not run again, no test command runs them with vitest, jest or pytest, or its run did not report them: `test_a_property_2.py`');
   });

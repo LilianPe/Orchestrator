@@ -101,7 +101,7 @@ function propertiesSaid(p: PropertyRerun): string {
   const ran = p.files.filter((f) => !p.notRun.includes(f));
   const codes = (files: readonly string[]) => files.map(mdCode).join(', ');
   return [
-    `Property tests run again with the factory settings, whatever the repository sets: ${p.runs} runs, seed ${p.seed}.${ran.map((f) => `\n- ${mdCode(f)}`).join('')}`,
+    `Property tests run again with the factory settings, whatever the repository sets but its fast-check plugins: ${p.runs} runs, seed ${p.seed}.${ran.map((f) => `\n- ${mdCode(f)}`).join('')}`,
     ...(p.unsettled.length ? [`No fast-check call or Hypothesis test found, run as written: ${codes(p.unsettled)}.`] : []),
     ...(p.notRun.length ? [`Not run again, no test command runs them with vitest, jest or pytest, or its run did not report them: ${codes(p.notRun)}.`] : []),
   ].join('\n\n');
