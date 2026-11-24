@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { MaturityCardView } from './types.js';
+import { oneAtATime } from './one-at-a-time.js';
 import { uncheckedMain } from '../../src/core/maturity.js';
 
 const time = (at: number) => new Date(at).toLocaleString('en-US');
@@ -16,10 +17,8 @@ export function approvalNotice({ already, card }: { already?: boolean; card?: Ma
  */
 function Card({ card, onApprove }: { card: MaturityCardView; onApprove: (c: MaturityCardView) => Promise<void> }) {
   const [sending, setSending] = useState(false);
-  const approve = () => {
-    setSending(true);
-    void onApprove(card).finally(() => setSending(false));
-  };
+  const [send] = useState(() => oneAtATime(setSending));
+  const approve = () => send(() => onApprove(card));
   return (
     <li className="maturity-card">
       <strong>{card.title}</strong>

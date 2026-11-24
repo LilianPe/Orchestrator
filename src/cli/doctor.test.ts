@@ -1297,6 +1297,22 @@ describe('doctor --secrets', () => {
     expect({ code: doctor.code, said: doctor.lines.includes(message!), jsonCode: doctor.jsonCode, error: doctor.error }).toEqual({ code: 1, said: true, jsonCode: 1, error: message });
   });
 
+  // ORC-494: a file with the sealed format's mark but cut short, never Node's TypeError, which names no file.
+  it.each([
+    { cut: 'no salt', what: 'its salt', drop: (f: Record<string, unknown>) => ({ ...f, salt: undefined }) },
+    { cut: 'no key', what: 'its key', drop: (f: Record<string, unknown>) => ({ ...f, key: undefined }) },
+    { cut: 'a key box without tag nor data', what: 'its key', drop: (f: Record<string, unknown>) => ({ ...f, key: { iv: (f['key'] as { iv: string }).iv } }) },
+  ])('refuses a sealed secrets.json with $cut as the start does, naming the file', async ({ what, drop }) => {
+    const home = sealedHome();
+    saveSecrets(home, { linear: { clientId: 'cid', clientSecret: '', webhookSecret: '', accessToken: `${WITNESS}-token` } }, files['secrets.key'] ?? '');
+    const path = join(home, 'secrets.json');
+    writeFileSync(path, JSON.stringify(drop(JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>)));
+    const message = await startRefusal(home);
+    expect(message).toBe(`secrets.json is encrypted at rest but incomplete: ${what} is missing`);
+    const doctor = await doctorBoth(home, true);
+    expect({ code: doctor.code, said: doctor.lines.includes(message!), jsonCode: doctor.jsonCode, error: doctor.error }).toEqual({ code: 1, said: true, jsonCode: 1, error: message });
+  });
+
   it('writes nothing to a secrets.json in clear it reads: the start encrypts it, not doctor', async () => {
     const home = sealedHome();
     const clear = JSON.stringify({ linear: { clientId: 'cid', clientSecret: '', webhookSecret: '', accessToken: `${WITNESS}-token` } });

@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import { oneAtATime } from './one-at-a-time.js';
 import { DEFECT_CATEGORIES, DEFECT_LEVELS, NO_DEFINITION, type DefectCategory, type DefectLevel } from '../../src/core/serious-defect.js';
 import { PrLink } from './Flow.js';
 import { runHash } from './Measures.js';
@@ -124,6 +125,8 @@ export function draftAfterKept(d: Pick<DefectDraft, 'prNumber'>): DefectDraft {
 
 function DefectForm({ sheet, onDefect }: { sheet: AuditSheetView; onDefect: OnDefect }) {
   const [draft, setDraft] = useState(() => draftAfterKept({ prNumber: sheet.result.prs.at(-1)?.number ?? 0 }));
+  const [sending, setSending] = useState(false);
+  const [enter] = useState(() => oneAtATime(setSending));
   const { prNumber, description, level, category, findingId, file, line } = draft;
   const set = (patch: Partial<DefectDraft>) => setDraft((d) => ({ ...d, ...patch }));
   const submit = (e: FormEvent) => {
@@ -131,9 +134,9 @@ function DefectForm({ sheet, onDefect }: { sheet: AuditSheetView; onDefect: OnDe
     if (!level || !category) return;
     const at = Number(line);
     // What was typed stays until the server keeps it: a refusal leaves it to correct.
-    void onDefect({ prNumber, description, level, category, ...(findingId ? { findingId } : {}), ...(file.trim() ? { file: file.trim() } : {}), ...(Number.isInteger(at) && at > 0 ? { line: at } : {}) }).then((kept) => {
+    enter(() => onDefect({ prNumber, description, level, category, ...(findingId ? { findingId } : {}), ...(file.trim() ? { file: file.trim() } : {}), ...(Number.isInteger(at) && at > 0 ? { line: at } : {}) }).then((kept) => {
       if (kept) setDraft(draftAfterKept);
-    });
+    }));
   };
   return (
     <form className="defect" onSubmit={submit}>
@@ -162,7 +165,7 @@ function DefectForm({ sheet, onDefect }: { sheet: AuditSheetView; onDefect: OnDe
       </label>
       <label>File <input value={file} onChange={(e) => set({ file: e.target.value })} /></label>
       <label>Line <input type="number" min={1} step={1} value={line} onChange={(e) => set({ line: e.target.value })} /></label>
-      <button type="submit" disabled={!sheet.result.prs.length}>Enter the defect</button>
+      <button type="submit" disabled={sending || !sheet.result.prs.length}>Enter the defect</button>
     </form>
   );
 }
