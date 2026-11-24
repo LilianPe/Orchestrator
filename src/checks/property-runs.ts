@@ -35,10 +35,11 @@ export interface PropertyRerun extends PropertySettings {
 const FAST_CHECK = 'fast-check';
 /**
  * fast-check's parameters that end the runs before their number, skip some, or hide a failure: set to their defaults, over the
- * file's and `configureGlobal`'s. A plugin installed by `installGlobalPlugin` stays: no API of fast-check removes it.
+ * file's and `configureGlobal`'s. Plugins stay, the test's own (`plugins`) and those `installGlobalPlugin` installed: a property
+ * may need its life-cycle ones (`fc.beforeEach`), and no API of fast-check tells them from one that ends the runs early.
  */
 export const UNCUT =
-  'path: undefined, interruptAfterTimeLimit: undefined, skipAllAfterTimeLimit: undefined, ignoreEqualValues: false, skipEqualValues: false, plugins: [], reporter: undefined, asyncReporter: undefined';
+  'path: undefined, interruptAfterTimeLimit: undefined, skipAllAfterTimeLimit: undefined, ignoreEqualValues: false, skipEqualValues: false, reporter: undefined, asyncReporter: undefined';
 /**
  * Type checking off in a rewritten file, past its shebang and its leading comments (jest reads its docblock only at the top):
  * `undefined` cannot be set to an optional parameter under `exactOptionalPropertyTypes`.

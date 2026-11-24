@@ -83,7 +83,9 @@ describe('a rewritten fast-check test runs under the factory settings, whatever 
       // What a setup file or the code under test could set, past the test's own parameters, to end the runs early.
       'fc.configureGlobal({ numRuns: 2, interruptAfterTimeLimit: 1, skipAllAfterTimeLimit: 1, ignoreEqualValues: true, skipEqualValues: true });',
       'const busy = () => { const end = Date.now() + 1; while (Date.now() < end); };',
-      "fc.assert(fc.property(fc.integer(), (n) => { busy(); seen.push(n); }), { numRuns: 3, seed: 7, path: '0:0', plugins: [fc.interruptAfterTimeLimit(1)] });",
+      // A life-cycle plugin of the test stays: the property may need it.
+      'export const before = [];',
+      "fc.assert(fc.property(fc.integer(), (n) => { busy(); seen.push(n); }), { numRuns: 3, seed: 7, path: '0:0', plugins: [fc.beforeEach(() => before.push(1))] });",
       // A reporter that does not throw would hide a failure.
       "export const hidden = (() => { try { fc.assert(fc.property(fc.integer(), () => false), { reporter: () => {} }); return false; } catch { return true; } })();",
     ].join('\n');
@@ -96,7 +98,9 @@ describe('a rewritten fast-check test runs under the factory settings, whatever 
     const [first, second] = [await load('a.mjs'), await load('b.mjs')];
     expect(first).toHaveLength(50);
     expect(second).toEqual(first);
-    expect(((await import(pathToFileURL(join(dir, 'a.mjs')).href)) as { hidden: boolean }).hidden).toBe(true);
+    const loaded = (await import(pathToFileURL(join(dir, 'a.mjs')).href)) as { hidden: boolean; before: number[] };
+    expect(loaded.hidden).toBe(true);
+    expect(loaded.before).toHaveLength(50);
   });
 });
 
