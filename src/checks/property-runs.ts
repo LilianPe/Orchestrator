@@ -39,7 +39,10 @@ const FAST_CHECK = 'fast-check';
  */
 export const UNCUT =
   'path: undefined, interruptAfterTimeLimit: undefined, skipAllAfterTimeLimit: undefined, ignoreEqualValues: false, skipEqualValues: false, plugins: [], reporter: undefined, asyncReporter: undefined';
-/** Type checking off in a rewritten file, under its shebang: `undefined` cannot be set to an optional parameter under `exactOptionalPropertyTypes`. */
+/**
+ * Type checking off in a rewritten file, past its shebang and its leading comments (jest reads its docblock only at the top):
+ * `undefined` cannot be set to an optional parameter under `exactOptionalPropertyTypes`.
+ */
 const NO_CHECK = '// @ts-nocheck\n';
 const PROP_PACKAGES = new Set(['@fast-check/vitest', '@fast-check/jest']);
 /** fast-check's runners: their parameters come second, as those of `test.prop`. */
@@ -113,8 +116,14 @@ export function underFactorySettings(path: string, source: string, at: PropertyS
   // From the end: an edit never moves the positions of those before it.
   const out = edits.sort((x, y) => y.from - x.from).reduce((s, e) => s.slice(0, e.from) + e.text + s.slice(e.to), source);
   if (!edits.length) return { source, calls: 0 };
-  const shebang = /^#![^\n]*\n/.exec(out)?.[0] ?? '';
-  return { source: shebang + NO_CHECK + out.slice(shebang.length), calls: edits.length };
+  const shebang = /^#![^\n]*\n/.exec(out)?.[0].length ?? 0;
+  const last = ts.getLeadingCommentRanges(out, shebang)?.at(-1);
+  if (!last) return { source: out.slice(0, shebang) + NO_CHECK + out.slice(shebang), calls: edits.length };
+  // On a line of its own after the last leading comment, before any code that shares that comment's line.
+  const eol = /^[ \t]*(?:\r?\n|$)/.exec(out.slice(last.end))?.[0];
+  const cut = eol === undefined ? last.end : last.end + eol.length;
+  const lead = eol?.endsWith('\n') ? '' : '\n';
+  return { source: out.slice(0, cut) + lead + NO_CHECK + out.slice(cut), calls: edits.length };
 }
 
 /**

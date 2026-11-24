@@ -41,6 +41,14 @@ describe('the factory settings written into a property test (ORC-261)', () => {
     expect(underFactorySettings('a.test.ts', 'other.assert(x);', at).source).toBe('other.assert(x);');
   });
 
+  it('turns it off past the leading comments, where jest reads its docblock (its environment pragma)', () => {
+    // Split, or vitest reads the pragma of this very file.
+    const docblock = `/**\n * @${'jest'}-environment jsdom\n */\n// a note\n`;
+    const out = underFactorySettings('a.test.ts', `${docblock}import fc from 'fast-check';\nfc.assert(p);`, at).source;
+    expect(out.startsWith(`${docblock}// @ts-nocheck\nimport fc`)).toBe(true);
+    expect(underFactorySettings('a.test.ts', "/* x */ import fc from 'fast-check';\nfc.assert(p);", at).source).toMatch(/^\/\* x \*\/\n\/\/ @ts-nocheck\n import fc/);
+  });
+
   it('leaves alone what is not fast-check: another assert, a shadowing name, a file without it', () => {
     expect(underFactorySettings('a.test.ts', "import { assert } from 'node:assert';\nassert(x);", at).calls).toBe(0);
     expect(underFactorySettings('a.test.ts', "import { test } from 'vitest';\ntest.prop([a]);", at).calls).toBe(0);
