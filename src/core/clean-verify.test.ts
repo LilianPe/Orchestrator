@@ -1684,7 +1684,7 @@ describe('the property tests run again with the factory settings (ORC-261)', () 
   const written = (ran: { command: string }[]) => {
     const files = new Map<string, string>();
     for (const r of ran) {
-      const chunk = /printf %s (\S+) \| base64 -d >> '([^']+)'/.exec(r.command);
+      const chunk = /printf %s (\S*) \| base64 -d >>? '([^']+)'/.exec(r.command);
       if (chunk) files.set(chunk[2]!, (files.get(chunk[2]!) ?? '') + chunk[1]);
     }
     return [...files].map(([path, b64]) => ({ path, content: Buffer.from(b64, 'base64').toString() }));
@@ -1719,7 +1719,7 @@ describe('the property tests run again with the factory settings (ORC-261)', () 
     expect(written(sandboxes.ran)).toEqual([{ path: PROPERTY, content: underFactorySettings(PROPERTY, big, { runs: 1000, seed: res.properties!.seed }).source }]);
   });
 
-  it('a command that passed once its failure was a known flaky test still has its properties run again, in a sandbox of their own', async () => {
+  it('a command that passed once its failure was a known flaky test still has its properties run again', async () => {
     const state = mkdtempSync(join(tmpdir(), 'factory-flaky-'));
     const plan = { head: { 'cart total': ['failed' as const] }, base: { 'cart total': ['passed' as const] } };
     const { repo, sandboxes, req } = setup({ commands: ['node bin/vitest run'], properties: 1, knownFlaky: [{ test: 'src/a.test.ts > cart total', coversFrozen: false }] }, undefined, { 'bin/vitest': fakeVitest(state, plan) });
@@ -1729,7 +1729,7 @@ describe('the property tests run again with the factory settings (ORC-261)', () 
     sandboxes.answer = (command) => (command === line ? { stdout: '', stderr: '', code: 0 } : undefined);
     const res = await runCleanVerify(req);
     expect(res).toMatchObject({ ok: true, failures: [], properties: { files: [PROPERTY], found: false } });
-    expect(sandboxes.ran.find((r) => r.command === line)?.box).toBe('r1-verify-properties');
+    expect(sandboxes.ran.find((r) => r.command === line)?.box).toBe('r1-verify');
   });
 
   it('reruns nothing when a command failed, nor without approved properties', async () => {

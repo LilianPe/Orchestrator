@@ -84,7 +84,6 @@ describe('the rerun of the property tests (ORC-261)', () => {
     const written: Record<string, string> = {};
     const lines: { line: string; env: Record<string, string> }[] = [];
     const deps: RerunDeps = {
-      show: async (p) => files[p],
       write: async (p, content) => void (written[p] = content),
       run: async (line, env) => {
         lines.push({ line, env });
@@ -102,10 +101,12 @@ describe('the rerun of the property tests (ORC-261)', () => {
     'src/orc-1.property-3.test.ts': "it('x', () => {});",
   };
   const paths = Object.keys(files);
+  const sources = new Map(Object.entries(files));
+  const vitest = { line: 'npx vitest run', runner: 'vitest' as const };
 
   it('writes the settled files, runs each language with its command, and says the runs and the seed', async () => {
     const { deps, written, lines } = fake(files);
-    const out = await rerunProperties(paths, { js: 'npx vitest run', py: 'pytest' }, deps, at);
+    const out = await rerunProperties(sources, { js: vitest, py: 'pytest' }, deps, at);
     expect(written['src/orc-1.property-1.test.ts']).toContain(SET);
     expect(written['src/orc-1.property-3.test.ts']).toBeUndefined();
     expect(lines[0]!.line).toBe("npx vitest run 'src/orc-1.property-1.test.ts' 'src/orc-1.property-3.test.ts'");
@@ -117,14 +118,20 @@ describe('the rerun of the property tests (ORC-261)', () => {
 
   it('a red rerun is a failure that names the runs and the seed, and a defect the properties found', async () => {
     const { deps } = fake(files, (line) => (line.includes('vitest') ? 1 : 0));
-    const out = await rerunProperties(paths, { js: 'npx vitest run', py: 'pytest' }, deps, at);
+    const out = await rerunProperties(sources, { js: vitest, py: 'pytest' }, deps, at);
     expect(out.rerun.found).toBe(true);
     expect(out.failures).toEqual([{ command: "npx vitest run 'src/orc-1.property-1.test.ts' 'src/orc-1.property-3.test.ts'", exitCode: 1, output: expect.stringMatching(/^Property tests rerun by the factory: 50 runs, seed 42[^\n]*\n[\s\S]*out$/) }]);
   });
 
+  it('gives jest its files as patterns, escaped', async () => {
+    const { deps, lines } = fake({ 'app/[id]/orc-1.property-1.test.ts': "import fc from 'fast-check';\nfc.assert(p);" });
+    await rerunProperties(new Map([['app/[id]/orc-1.property-1.test.ts', "import fc from 'fast-check';\nfc.assert(p);"]]), { js: { line: 'npx jest', runner: 'jest' } }, deps, at);
+    expect(lines[0]!.line).toBe("npx jest 'app/\\[id\\]/orc-1\\.property-1\\.test\\.ts'");
+  });
+
   it('runs nothing of a language no test command runs, and says so', async () => {
     const { deps, lines } = fake(files);
-    const out = await rerunProperties(paths, { js: 'npx vitest run' }, deps, at);
+    const out = await rerunProperties(sources, { js: vitest }, deps, at);
     expect(lines).toHaveLength(1);
     expect(out.rerun.notRun).toEqual(['tests/test_orc_1_property_2.py']);
   });
