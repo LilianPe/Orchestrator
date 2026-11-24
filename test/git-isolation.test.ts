@@ -26,8 +26,8 @@ describe("the tests' git, apart from the workstation's", () => {
       Object.entries(NO_USER_FILES).map(([key, value]) => `command line:\t${key}=${value}`),
     );
     expect(spawnSync('git', ['config', '--global', 'factory.test', 'written'], { cwd: dir }).status).not.toBe(0);
-    expect(existsSync(NO_GLOBAL_CONFIG)).toBe(false);
-    expect(statSync(dirname(NO_GLOBAL_CONFIG)).isDirectory()).toBe(false);
+    const parent = dirname(NO_GLOBAL_CONFIG);
+    expect({ config: existsSync(NO_GLOBAL_CONFIG), parentDirectory: existsSync(parent) && statSync(parent).isDirectory() }).toEqual({ config: false, parentDirectory: false });
   });
 
   it("reads neither the workstation's ignore nor its attributes file", () => {
