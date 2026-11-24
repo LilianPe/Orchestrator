@@ -142,7 +142,7 @@ def pytest_collection_modifyitems(items):
         test._hypothesis_internal_use_settings = settings(test._hypothesis_internal_use_settings, max_examples=runs, derandomize=False, database=None, phases=tuple(Phase))
         test._hypothesis_internal_use_seed = seed
         test._hypothesis_internal_use_reproduce_failure = None
-        settled.add(os.path.basename(str(item.path)))
+        settled.add(os.path.basename(str(getattr(item, "path", None) or item.fspath)))
     with open(os.environ["FACTORY_PROPERTY_SETTLED"], "w") as out:
         out.write("\\n".join(sorted(settled)))
 `;

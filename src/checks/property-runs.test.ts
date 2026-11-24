@@ -52,6 +52,10 @@ describe('the factory settings written into a property test (ORC-261)', () => {
     expect(HYPOTHESIS_PLUGIN).toContain('for item in items if settings else []:');
   });
 
+  it('names a settled file by the path pytest 7 gives its items, or by the fspath of earlier ones, which have no path', () => {
+    expect(HYPOTHESIS_PLUGIN).toContain('settled.add(os.path.basename(str(getattr(item, "path", None) or item.fspath)))');
+  });
+
   it('draws a seed fast-check takes: a positive 32-bit integer', () => {
     const seed = drawSeed();
     expect(Number.isInteger(seed) && seed > 0 && seed < 2 ** 31).toBe(true);
